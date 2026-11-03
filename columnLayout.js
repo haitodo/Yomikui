@@ -54,21 +54,29 @@
         jsx.jsxs("div", {
           className: "flex min-w-0 items-center justify-between gap-2",
           children: [
-            jsx.jsx("label", {
-              htmlFor: modeId,
+            jsx.jsx("span", {
+              id: modeId,
               className: "shrink-0 text-sm text-foreground",
               children: t("column_settings_column_width"),
             }),
-            jsx.jsxs("select", {
-              id: modeId,
-              value: mode,
-              className: "h-8 min-w-0 rounded-md border border-border bg-background px-2 text-sm text-foreground",
+            jsx.jsx("div", {
+              role: "group",
+              className: "flex shrink-0 overflow-hidden rounded-lg border border-border",
+              "aria-labelledby": modeId,
               "aria-describedby": mode === "auto" ? descriptionId : undefined,
-              onChange: event => onModeChange(event.currentTarget.value),
               children: [
-                jsx.jsx("option", { value: "auto", children: t("column_settings_width_auto") }),
-                jsx.jsx("option", { value: "fixed", children: t("column_settings_width_fixed") }),
-              ],
+                ["auto", "column_settings_width_auto"],
+                ["fixed", "column_settings_width_fixed"],
+              ].map(([value, label]) => jsx.jsx("button", {
+                type: "button",
+                "aria-pressed": mode === value,
+                className: "flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium transition-colors "
+                  + (mode === value
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:bg-muted/50"),
+                onClick: () => { if (mode !== value) onModeChange(value); },
+                children: t(label),
+              }, value)),
             }),
           ],
         }),

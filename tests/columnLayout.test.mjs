@@ -161,10 +161,10 @@ function controls(layout, widthMode = 'fixed') {
     onModeChange: value => modes.push(value),
     Slider: 'Slider', Input: 'Input', jsx: { jsx: element, jsxs: element }, t: key => key,
   });
-  const find = type => {
+  const find = (type, predicate = () => true) => {
     const visit = node => {
       if (!node || typeof node !== 'object') return undefined;
-      if (node.type === type) return node;
+      if (node.type === type && predicate(node)) return node;
       const children = node.props?.children;
       return (Array.isArray(children) ? children : [children]).map(visit).find(Boolean);
     };
@@ -178,14 +178,26 @@ test('automatic mode hides the fixed-width inputs and describes how space is sha
   const { find, modes } = controls(layout, 'auto');
   assert.equal(find('Input'), undefined);
   assert.equal(find('Slider'), undefined);
-  assert.equal(find('select').props['aria-describedby'], find('p').props.id);
-  find('select').props.onChange({ currentTarget: { value: 'fixed' } });
+  const group = find('div', node => node.props.role === 'group');
+  assert.equal(group.props['aria-describedby'], find('p').props.id);
+  assert.equal(group.props['aria-labelledby'], find('span').props.id);
+  const [automatic, fixed] = group.props.children;
+  assert.equal(automatic.props['aria-pressed'], true);
+  assert.equal(fixed.props['aria-pressed'], false);
+  automatic.props.onClick();
+  assert.deepEqual(modes, []);
+  fixed.props.onClick();
   assert.deepEqual(modes, ['fixed']);
 });
 
 test('fixed-width inputs commit on blur, clamp values, and allow cancelling a draft', () => {
   const { layout } = setup();
-  const { find, changes } = controls(layout);
+  const { find, changes, modes } = controls(layout);
+  const [automatic, fixed] = find('div', node => node.props.role === 'group').props.children;
+  assert.equal(automatic.props['aria-pressed'], false);
+  assert.equal(fixed.props['aria-pressed'], true);
+  automatic.props.onClick();
+  assert.deepEqual(modes, ['auto']);
   const input = find('Input').props;
   for (const [value, expected] of [['24', '24'], ['100', '45'], ['3', '20'], ['28.7', '29'], ['', '32'], ['bad', '32']]) {
     const currentTarget = { value };
