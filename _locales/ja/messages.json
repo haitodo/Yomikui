@@ -241,6 +241,36 @@
   "column_settings_hide_grok_in_tweets_desc": {
     "message": "各ツイートのGrokアクションボタンを非表示にします。"
   },
+  "column_settings_show_quote_list": {
+    "message": "引用リツイート一覧ボタンを表示"
+  },
+  "column_settings_show_quote_list_desc": {
+    "message": "各ツイートの下部に引用リツイート一覧（/quotes）を開くボタンを追加します。"
+  },
+  "column_settings_show_retweet_list": {
+    "message": "リツイート一覧ボタンを表示"
+  },
+  "column_settings_show_retweet_list_desc": {
+    "message": "各ツイートの下部にリツイート一覧（/retweets）を開くボタンを追加します。"
+  },
+  "column_settings_hide_views": {
+    "message": "表示（/analytics）を非表示"
+  },
+  "column_settings_hide_views_desc": {
+    "message": "各ツイートの下部の表示回数を非表示にします。"
+  },
+  "column_settings_hide_share": {
+    "message": "共有ボタンを非表示"
+  },
+  "column_settings_hide_share_desc": {
+    "message": "各ツイートの下部の共有ボタンを非表示にします。"
+  },
+  "tweet_action_quote_list": {
+    "message": "引用リツイート一覧"
+  },
+  "tweet_action_retweet_list": {
+    "message": "リツイート一覧"
+  },
   "column_settings_hide_quotes": {
     "message": "引用ツイートを非表示"
   },

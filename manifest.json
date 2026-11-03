@@ -41,6 +41,7 @@
       ],
       "js": [
         "columnLayout.js",
+        "tweetActions.js",
         "contentDeck.js"
       ],
       "run_at": "document_idle"
@@ -54,6 +55,7 @@
       ],
       "js": [
         "frameMaintenance.js",
+        "tweetActions.js",
         "contentIframe.js"
       ],
       "all_frames": true,
@@ -86,6 +88,7 @@
       "resources": [
         "icons/*",
         "mediaInterceptor.js",
+        "tweetActions.js",
         "liveFeedShell.html",
         "liveFeedShell.js"
       ]
