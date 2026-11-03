@@ -245,13 +245,13 @@
     "message": "引用リツイート一覧ボタンを表示"
   },
   "column_settings_show_quote_list_desc": {
-    "message": "各ツイートの下部に引用リツイート一覧（/quotes）を開くボタンを追加します。"
+    "message": "各ツイートの下部に引用リツイート一覧（/quotes）を開くボタンを追加し、1件以上ある場合は件数も表示します。"
   },
   "column_settings_show_retweet_list": {
     "message": "リツイート一覧ボタンを表示"
   },
   "column_settings_show_retweet_list_desc": {
-    "message": "各ツイートの下部にリツイート一覧（/retweets）を開くボタンを追加します。"
+    "message": "各ツイートの下部にリツイート一覧（/retweets）を開くボタンを追加し、1件以上ある場合は件数も表示します。"
   },
   "column_settings_hide_views": {
     "message": "表示（/analytics）を非表示"

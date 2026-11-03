@@ -11,6 +11,8 @@ const deckSource = readFileSync(new URL('../contentDeck.js', import.meta.url), '
 const clone = value => JSON.parse(JSON.stringify(value));
 const keys = ['showQuoteList', 'showRetweetList', 'hideViews', 'hideShare'];
 const allEnabled = Object.fromEntries(keys.map(key => [key, true]));
+const allDisabled = Object.fromEntries(keys.map(key => [key, false]));
+const defaultSettings = { showQuoteList: false, showRetweetList: false, hideViews: true, hideShare: true };
 const element = (type, props, key) => ({ type, props, key });
 const jsx = { jsx: element, jsxs: element, Fragment: 'Fragment' };
 
@@ -86,7 +88,82 @@ test('native links use the main tweet, preserve column navigation, and leave rep
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action="retweets"]').length, 0);
   controller.update({});
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 0);
+  assert.match(document.getElementById('yomikui-tweet-action-styles').textContent, /analytics/);
+  controller.update(allDisabled);
   assert.equal(document.getElementById('yomikui-tweet-action-styles'), null);
+});
+
+test('native text-only tweet counts arrive through the shipped response consumer and update without media', async () => {
+  const { actions, context, document, clock, window } = setup(nativeTweet('101'));
+  actions.updateNative(allEnabled);
+  const bundle = readFileSync(new URL('../contentIframe.js', import.meta.url), 'utf8');
+  const start = bundle.indexOf('function xX(e,t){');
+  const end = bundle.indexOf('var _H=', start);
+  // The existing media extractor returns nothing for a text-only tweet.
+  context.bH = () => [];
+  vm.runInContext(bundle.slice(start, end) + ';globalThis.consume = xX;', context);
+  const payload = (quotes, retweets) => JSON.stringify({ data: { tweetResult: { result: {
+    rest_id: '101', legacy: { id_str: '101', quote_count: quotes, retweet_count: retweets },
+    quoted_status_result: { result: { legacy: { id_str: '999', quote_count: 99, retweet_count: 100 } } },
+  } } } });
+  const counter = kind => document.querySelector(`[data-yomikui-tweet-action="${kind}"] [data-yomikui-action-count]`);
+  assert.equal(counter('quotes'), null);
+  context.consume('TweetDetail', payload(3, 5));
+  await clock.advance(80);
+  assert.equal(counter('quotes').textContent, '3');
+  assert.equal(counter('retweets').textContent, '5');
+  assert.equal(document.querySelector('[data-yomikui-tweet-action="quotes"] a').getAttribute('aria-label'), '引用リツイート一覧 3');
+  context.consume('TweetDetail', payload(3, 5));
+  assert.equal(clock.timers.size, 0, 'unchanged counts must not schedule a DOM update');
+  window.emit('yomikui-frame-column-visibility', { detail: { visible: false } });
+  context.consume('TweetDetail', payload(0, 1));
+  assert.equal(clock.timers.size, 0, 'hidden columns must not schedule updates');
+  window.emit('yomikui-frame-column-visibility', { detail: { visible: true } });
+  assert.equal(counter('quotes'), null);
+  assert.equal(counter('retweets').textContent, '1');
+  assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 2, 'zero counts retain the list buttons');
+});
+
+test('native repost counts follow X text changes and clear cached counts on recycled tweets', async () => {
+  const { actions, document, observers, clock } = setup(nativeTweet('101'));
+  actions.captureResponse({ legacy: { id_str: '101', quote_count: 2, retweet_count: 3 } });
+  const controller = new actions.NativeActionsController();
+  controller.update(allEnabled);
+  const button = document.querySelector('[data-testid="retweet"]');
+  button.innerHTML = '<span data-testid="app-text-transition-container">4</span>';
+  const text = button.firstChild.firstChild;
+  const observer = observers.at(-1);
+  observer.emit([{ type: 'childList', target: button, addedNodes: [button.firstChild] }]);
+  await clock.advance(80);
+  const counter = kind => document.querySelector(`[data-yomikui-tweet-action="${kind}"] [data-yomikui-action-count]`);
+  assert.equal(counter('quotes').textContent, '2');
+  assert.equal(counter('retweets').textContent, '4');
+  text.data = '1.2万';
+  observer.emit([{ type: 'characterData', target: text }]);
+  await clock.advance(80);
+  assert.equal(counter('retweets').textContent, '1.2万');
+  button.firstChild.textContent = '';
+  observer.emit([{ type: 'childList', target: button.firstChild, addedNodes: [] }]);
+  document.querySelector('#views-101 a').setAttribute('href', '/other/status/202/analytics');
+  observer.emit([{ type: 'attributes', target: document.querySelector('#views-101 a') }]);
+  await clock.advance(80);
+  assert.equal(counter('quotes'), null);
+  assert.equal(counter('retweets'), null);
+});
+
+test('count capture handles repost originals and missing/invalid fields while keeping the cache bounded', () => {
+  const { actions } = setup();
+  actions.captureResponse({ tweet: { legacy: { id_str: '100', quote_count: 0, retweet_count: '1,234' },
+    retweeted_status_result: { result: { legacy: { id_str: '101', quote_count: '5', retweet_count: 9 } } },
+  } });
+  assert.deepEqual(clone(actions.getCounts('100')), { quoteCount: 0, repostCount: 1234 });
+  assert.deepEqual(clone(actions.getCounts('101')), { quoteCount: 5, repostCount: 9 });
+  actions.captureResponse({ legacy: { id_str: '101', quote_count: -1, retweet_count: null } });
+  assert.deepEqual(clone(actions.getCounts('101')), { quoteCount: 5, repostCount: 9 });
+  actions.captureResponse(Array.from({ length: 1000 }, (_, index) => ({ id_str: String(index + 1000), quote_count: 1 })));
+  assert.equal(actions.getCounts('100'), undefined);
+  assert.equal(actions.getCounts('101'), undefined);
+  assert.equal(actions.getCounts('1000').quoteCount, 1);
 });
 
 test('mutations handle new tweets, recycled IDs and action-row replacement without duplicate links', async () => {
@@ -177,6 +254,22 @@ test('Live Feed list links navigate inside the column and preserve modified-clic
   assert.equal(actions.ListLinks({ settings: {}, statusPath: '/author/status/123', jsx }).props.children.length, 0);
 });
 
+test('list links show numbers to the right only for known counts of at least one', () => {
+  const { actions } = setup();
+  const render = counts => actions.ListLinks({ settings: allEnabled, statusPath: '/author/status/123', jsx, metaFontPx: 15, ...counts }).props.children;
+  const links = render({ quoteCount: 1, repostCount: 12345 });
+  assert.equal(links[0].props.children[0].type, 'svg');
+  assert.equal(links[0].props.children[1].props.children, '1');
+  assert.equal(links[0].props.children[1].props.style.fontSize, 15);
+  assert.equal(links[1].props.children[1].props.children, '12.3K');
+  for (const value of [undefined, null, 0, '0', -1, NaN, 'unknown', 0.5]) {
+    for (const link of render({ quoteCount: value, repostCount: value })) {
+      assert.equal(link.props.children[1], null);
+    }
+  }
+  assert.equal(render({ quoteCount: 0, repostCount: 2 })[1].props.children[1].props.children, '2');
+});
+
 test('column controls toggle all four settings independently and expose accessible labels', () => {
   const { actions } = setup();
   const changes = [];
@@ -184,15 +277,15 @@ test('column controls toggle all four settings independently and expose accessib
   for (const [index, row] of tree.props.children.entries()) {
     const [label, toggle] = row.props.children;
     assert.equal(toggle.props['aria-label'], label.props.label);
-    assert.equal(toggle.props.checked, index === 0);
+    assert.equal(toggle.props.checked, index !== 1);
     toggle.props.onCheckedChange(index !== 0);
   }
   assert.deepEqual(changes, keys.map((key, index) => ({ [key]: index !== 0 })));
 });
 
 for (const entry of [
-  { file: 'contentIframe.js', component: 'oq', memo: 'SF', hooks: 'dt', state: 'Ho', defaults: 'w4', receive: 'WL', theme: 'YL', poll: 'P1', normalizeHandle: 'nq', date: 'ap', nickname: 'Ac', media: 'Ka', frame: 'iq', thread: 'tF', pointer: 'sp', count: 'op', revenue: 'eq', placeholders: ['GZ', 'wp', 'YZ', 'XZ', 'Ec', 'S4', 'rF'] },
-  { file: 'liveFeedShell.js', component: 'RH', memo: 'b$', hooks: 'et', state: 'Yi', defaults: 'Tm', receive: 'KS', theme: 'jS', poll: 'V6', normalizeHandle: 'OH', date: 'Ed', nickname: 'pl', media: 'Zo', frame: 'CH', thread: 'GS', pointer: 'Dd', count: 'Td', revenue: 'LH', placeholders: ['kH', 'Bd', 'TH', 'EH', 'hl', 'Om', 'YS'] },
+  { file: 'contentIframe.js', component: 'oq', memo: 'SF', hooks: 'dt', state: 'Ho', defaults: 'w4', receive: 'WL', theme: 'YL', poll: 'P1', normalizeHandle: 'nq', date: 'ap', nickname: 'Ac', media: 'Ka', frame: 'iq', thread: 'tF', pointer: 'sp', count: 'op', revenue: 'eq', rawCount: 'fs', countParser: 'aY', afterParser: 'lY', placeholders: ['GZ', 'wp', 'YZ', 'XZ', 'Ec', 'S4', 'rF'] },
+  { file: 'liveFeedShell.js', component: 'RH', memo: 'b$', hooks: 'et', state: 'Yi', defaults: 'Tm', receive: 'KS', theme: 'jS', poll: 'V6', normalizeHandle: 'OH', date: 'Ed', nickname: 'pl', media: 'Zo', frame: 'CH', thread: 'GS', pointer: 'Dd', count: 'Td', revenue: 'LH', rawCount: 'Xl', countParser: 'BU', afterParser: 'jU', placeholders: ['kH', 'Bd', 'TH', 'EH', 'hl', 'Om', 'YS'] },
 ]) {
   test(`${entry.file} applies received preferences to its shipped Live Feed renderer`, () => {
     const { actions, context, window } = setup();
@@ -230,8 +323,12 @@ for (const entry of [
     const end = bundle.indexOf(`,${entry.memo}=${entry.hooks}.default.memo(${entry.component})`, start);
     assert.ok(start > 0 && end > start);
     vm.runInContext(`globalThis.renderTweet = (${bundle.slice(start, end)});`, context);
-    const render = () => context.renderTweet({
-      tweet: { tweetId: '123', authorHandle: '@author', authorName: 'Author', text: 'Tweet', mediaUrls: [], viewCount: 42 },
+    const parserStart = bundle.indexOf(`function ${entry.rawCount}(e){if(e==null)return 0;`);
+    const parserEnd = bundle.indexOf(`function ${entry.afterParser}(`, parserStart);
+    assert.ok(parserStart > 0 && parserEnd > parserStart);
+    vm.runInContext(bundle.slice(parserStart, parserEnd) + `;globalThis.parseCounts = ${entry.countParser};`, context);
+    const render = (counts = { quote_count: 3, retweet_count: 4 }) => context.renderTweet({
+      tweet: { tweetId: '123', authorHandle: '@author', authorName: 'Author', text: 'Tweet', mediaUrls: [], viewCount: 42, ...context.parseCounts(counts) },
       theme: { fonts: { textPx: 15, metaPx: 13, lineHeightPx: 20 } },
       settings: context.readSettings(), onOpenTweet() {},
     });
@@ -243,12 +340,17 @@ for (const entry of [
     const enabledTree = nodes(render());
     const links = enabledTree.find(node => node.type === actions.ListLinks);
     assert.equal(actions.ListLinks(links.props).props.children.filter(Boolean).length, 2);
+    assert.deepEqual(Array.from(actions.ListLinks(links.props).props.children, link => link.props.children[1].props.children), ['3', '4']);
+    const zeroTree = nodes(render({ quote_count: 0, retweet_count: 0 }));
+    assert.ok(actions.ListLinks(zeroTree.find(node => node.type === actions.ListLinks).props).props.children.every(link => link.props.children[1] === null));
     assert.equal(enabledTree.some(node => node.props?.title === '42 Views'), false);
     context.receive({});
+    assert.equal(nodes(render()).some(node => node.props?.title === '42 Views'), false, 'views are hidden by default');
+    context.receive(allDisabled);
     const disabledTree = nodes(render());
     assert.equal(disabledTree.some(node => node.props?.title === '42 Views'), true);
     assert.equal(actions.ListLinks(disabledTree.find(node => node.type === actions.ListLinks).props).props.children.length, 0);
-    assert.equal(notifications, 2);
+    assert.equal(notifications, 3);
   });
 }
 
@@ -278,9 +380,10 @@ test('legacy column defaults and persisted workspace settings survive schema val
   const legacy = { ...column };
   for (const key of keys) delete legacy[key];
   for (const key of keys) {
-    assert.equal(column[key], false);
-    assert.equal(schema.parse(legacy)[key], false);
-    assert.equal(schema.parse({ ...legacy, [key]: 'invalid' })[key], false);
+    assert.equal(column[key], defaultSettings[key]);
+    assert.equal(schema.parse(legacy)[key], defaultSettings[key]);
+    assert.equal(schema.parse({ ...legacy, [key]: 'invalid' })[key], defaultSettings[key]);
+    assert.equal(schema.parse({ ...legacy, [key]: false })[key], false, 'explicit saved settings must be preserved');
   }
   const workspace = { id: 'workspace', name: 'workspace', columns: [column], createdAt: 0, updatedAt: 0 };
   store.setState({ activeWorkspaceId: workspace.id, columns: [column], workspaces: [workspace] });
