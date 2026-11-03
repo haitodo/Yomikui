@@ -1,0 +1,1033 @@
+{
+  "add_column_menu_custom_url": {
+    "message": "カスタムURL"
+  },
+  "add_column_menu_custom_url_placeholder": {
+    "message": "X/Twitter リンク (x.com / twitter.com) を貼り付けます"
+  },
+  "add_column_menu_invalid_url": {
+    "message": "x.com / twitter.com リンクのみが許可されます。"
+  },
+  "add_column_menu_list": {
+    "message": "リスト"
+  },
+  "add_column_menu_live_feed_search": {
+    "message": "Live Feed 検索"
+  },
+  "add_column_menu_live_feed_search_placeholder": {
+    "message": "例: ねこ, #ハッシュタグ, from:ユーザー名"
+  },
+  "add_column_menu_live_feed_search_query": {
+    "message": "検索クエリ"
+  },
+  "add_column_menu_profile_page": {
+    "message": "プロフィールページ"
+  },
+  "add_column_menu_profile_placeholder": {
+    "message": "@ユーザー名"
+  },
+  "add_column_menu_profile_url": {
+    "message": "ユーザー名"
+  },
+  "add_column_menu_title": {
+    "message": "列の追加"
+  },
+  "appDescription": {
+    "message": "X (Twitter) をカスタマイズ可能な複数列のダッシュボードに変えます。タイムライン、通知、検索、フィードを並べて監視します。",
+    "description": "Short extension description shown in Chrome Web Store."
+  },
+  "appName": {
+    "message": "Yomikui",
+    "description": "Extension name shown in Chrome Web Store and Extensions page."
+  },
+  "app_add_home_timeline": {
+    "message": "ホームタイムラインを追加"
+  },
+  "app_close_media": {
+    "message": "閉じる"
+  },
+  "app_loading_media": {
+    "message": "画像を読み込み中…"
+  },
+  "app_location_rate_limit": {
+    "message": "地域情報の取得制限中です。15分後に再開します。"
+  },
+  "app_next_media": {
+    "message": "次へ"
+  },
+  "app_no_columns": {
+    "message": "まだ列はありません。まずは最初の列を追加してください。"
+  },
+  "app_prev_media": {
+    "message": "前へ"
+  },
+  "app_show_sidebar": {
+    "message": "サイドバーを表示"
+  },
+  "app_sleeping_subtitle": {
+    "message": "このタブに切り替えて起動してください"
+  },
+  "app_sleeping_title": {
+    "message": "Yomikui は眠っています"
+  },
+  "column_auto_reload_active": {
+    "message": "自動更新が有効です"
+  },
+  "column_auto_reload_hold_1_minute": {
+    "message": "1分"
+  },
+  "column_auto_reload_hold_label": {
+    "message": "更新を保留する時間"
+  },
+  "column_auto_reload_hold_minutes": {
+    "message": "$1$分",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "5"
+      }
+    }
+  },
+  "column_auto_reload_hold_seconds": {
+    "message": "$1$秒",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "30"
+      }
+    }
+  },
+  "column_auto_reload_in": {
+    "message": "$1$",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "4:32"
+      }
+    }
+  },
+  "column_auto_reload_paused": {
+    "message": "更新待機中 — このカラムに未送信のテキストまたは最近の操作があります"
+  },
+  "column_auto_reload_resume": {
+    "message": "クリックで自動更新を再開"
+  },
+  "column_close": {
+    "message": "列を閉じる"
+  },
+  "column_drag_to_reorder": {
+    "message": "ドラッグして列を並べ替えます"
+  },
+  "column_duplicate": {
+    "message": "列を複製"
+  },
+  "column_go_back": {
+    "message": "戻る"
+  },
+  "column_high_tweet_load": {
+    "message": "ツイート件数が多いため負荷が高くなっています ($1$)。動作を軽快に保つには列を更新してください。",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "212"
+      }
+    }
+  },
+  "column_live_feed_return_tooltip": {
+    "message": "ライブフィードに戻るには、戻るか更新をクリックしてください。"
+  },
+  "column_perf_degraded": {
+    "message": "長時間の利用により動作が重くなる可能性があります。列の再読み込みを推奨します。"
+  },
+  "column_refresh": {
+    "message": "リフレッシュ"
+  },
+  "column_scroll_to_reactivate": {
+    "message": "スクロールして更新を再開"
+  },
+  "column_scroll_to_top": {
+    "message": "一番上までスクロール"
+  },
+  "column_settings_account_country": {
+    "message": "アカウントの国を表示"
+  },
+  "column_settings_account_country_desc": {
+    "message": "Xの「アカウントについて」から取得した国旗と国名を表示します（ローカルにキャッシュされ、全列で共有）。"
+  },
+  "column_settings_active_count": {
+    "message": "$1$件有効",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "column_settings_always_show_original_language": {
+    "message": "常に原文を表示"
+  },
+  "column_settings_always_show_original_language_desc": {
+    "message": "自動翻訳されたツイートの「原文を表示」を自動でクリックして表示します。"
+  },
+  "column_settings_appearance": {
+    "message": "外観"
+  },
+  "column_settings_auto_expand_text": {
+    "message": "ツイートのテキストを自動展開する"
+  },
+  "column_settings_auto_expand_text_desc": {
+    "message": "長文ツイートの「もっと見る」を自動でクリックして全文を展開します。"
+  },
+  "column_settings_auto_reload": {
+    "message": "オートリロード"
+  },
+  "column_settings_auto_reload_enabled": {
+    "message": "有効"
+  },
+  "column_settings_btn": {
+    "message": "設定"
+  },
+  "column_settings_color_aria": {
+    "message": "列の色 $1$",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "#ff0000"
+      }
+    }
+  },
+  "column_settings_color_short": {
+    "message": "色"
+  },
+  "column_settings_column_color": {
+    "message": "列の色"
+  },
+  "column_settings_column_width": {
+    "message": "列幅"
+  },
+  "column_settings_cover_blue_verified": {
+    "message": "認証バッジ付きツイートを隠す"
+  },
+  "column_settings_cover_blue_verified_desc": {
+    "message": "この列で有料の青バッジ認証ツイートを隠し、「表示」ボタンを押すまでマスクします。"
+  },
+  "column_settings_cover_blue_verified_show": {
+    "message": "表示"
+  },
+  "column_settings_custom_url": {
+    "message": "カスタムURL"
+  },
+  "column_settings_feed": {
+    "message": "フィードと更新"
+  },
+  "column_settings_general": {
+    "message": "一般"
+  },
+  "column_settings_hide_banner": {
+    "message": "バナーを非表示にする"
+  },
+  "column_settings_hide_grok_in_tweets": {
+    "message": "ツイート内のGrokを非表示"
+  },
+  "column_settings_hide_grok_in_tweets_desc": {
+    "message": "各ツイートのGrokアクションボタンを非表示にします。"
+  },
+  "column_settings_hide_quotes": {
+    "message": "引用ツイートを非表示"
+  },
+  "column_settings_hide_quotes_desc": {
+    "message": "他の投稿を引用しているツイートを非表示にします（Live Feed 専用）。"
+  },
+  "column_settings_hide_retweets": {
+    "message": "リポストを非表示"
+  },
+  "column_settings_hide_retweets_desc": {
+    "message": "この列のリポスト（リツイート）を非表示にします。Live Feed では取得時に除外されます。"
+  },
+  "column_settings_hide_top_bar": {
+    "message": "トップバーを非表示"
+  },
+  "column_settings_highlight_column": {
+    "message": "列をハイライト"
+  },
+  "column_settings_highlight_tweet_background": {
+    "message": "ツイートの背景色を変更"
+  },
+  "column_settings_highlight_tweet_background_desc": {
+    "message": "ツイート行の背景を列のアクセントカラーで薄く着色します（この列のディムモードより優先）。"
+  },
+  "column_settings_icon": {
+    "message": "列アイコン"
+  },
+  "column_settings_icon_short": {
+    "message": "アイコン"
+  },
+  "column_settings_interval_sec": {
+    "message": "間隔(秒)"
+  },
+  "column_settings_media_only": {
+    "message": "メディア付きのみ表示"
+  },
+  "column_settings_media_only_desc": {
+    "message": "画像・動画・GIFを含むツイートのみ表示します。Live Feed では取得時にメディアなしのツイートが除外されます。"
+  },
+  "column_settings_media_size": {
+    "message": "メディアサイズ"
+  },
+  "column_settings_media_size_default": {
+    "message": "標準"
+  },
+  "column_settings_media_size_large": {
+    "message": "大"
+  },
+  "column_settings_media_size_small": {
+    "message": "小"
+  },
+  "column_settings_one_click_block": {
+    "message": "ツイートのワンクリックブロック"
+  },
+  "column_settings_one_click_block_desc": {
+    "message": "ツイートの「その他」メニュー横にワンクリックブロックボタンを追加します。"
+  },
+  "column_settings_remember_last_page": {
+    "message": "最後に開いていたページを記憶"
+  },
+  "column_settings_remember_last_page_desc": {
+    "message": "更新や再読み込み後も、この列で最後に開いていたページを復元します。"
+  },
+  "column_settings_screenshot": {
+    "message": "ツイートのスクリーンショット保存ボタン"
+  },
+  "column_settings_screenshot_desc": {
+    "message": "[その他] メニューの横にスクリーンショット保存ボタンを追加します。"
+  },
+  "column_settings_show_revenue": {
+    "message": "推定ツイート収益を表示"
+  },
+  "column_settings_text_only": {
+    "message": "テキストのみ表示"
+  },
+  "column_settings_text_only_desc": {
+    "message": "画像・動画・GIFを含まないテキストのみのツイートを表示します（「メディア付きのみ」と併用不可・Live Feed 専用）。"
+  },
+  "column_settings_title": {
+    "message": "タイトル"
+  },
+  "column_settings_tools": {
+    "message": "ツール"
+  },
+  "column_settings_tweet_display": {
+    "message": "ツイート表示"
+  },
+  "column_settings_visibility": {
+    "message": "表示設定"
+  },
+  "column_suspended": {
+    "message": "一時停止中"
+  },
+  "column_timeline_tooltip": {
+    "message": "ツイートをクリックして操作できます。ツイート詳細ページを表示した後にタイムラインに戻るには、ヘッダーの「戻る」または「更新」ボタンを押します。"
+  },
+  "column_type_bookmarks": {
+    "message": "ブックマーク"
+  },
+  "column_type_chat": {
+    "message": "チャット (DM)"
+  },
+  "column_type_customUrl": {
+    "message": "カスタムURL (X / Twitter)"
+  },
+  "column_type_explore": {
+    "message": "話題を検索 (トレンド)"
+  },
+  "column_type_following": {
+    "message": "フォロー中 – 最新 (時系列)"
+  },
+  "column_type_grok": {
+    "message": "Grok"
+  },
+  "column_type_home": {
+    "message": "ホーム"
+  },
+  "column_type_notifications": {
+    "message": "通知"
+  },
+  "column_type_post": {
+    "message": "ポスト"
+  },
+  "column_type_search": {
+    "message": "検索"
+  },
+  "column_type_timeline": {
+    "message": "タイムライン履歴"
+  },
+  "common_add": {
+    "message": "追加"
+  },
+  "common_cancel": {
+    "message": "キャンセル"
+  },
+  "common_close": {
+    "message": "閉じる"
+  },
+  "common_delete": {
+    "message": "削除"
+  },
+  "common_delete_label": {
+    "message": "ラベルの削除"
+  },
+  "common_dismiss_notification": {
+    "message": "通知を閉じる"
+  },
+  "common_edit_label": {
+    "message": "ラベルを編集する"
+  },
+  "common_min": {
+    "message": "分"
+  },
+  "common_rem": {
+    "message": "rem"
+  },
+  "common_save": {
+    "message": "保存"
+  },
+  "common_sec": {
+    "message": "秒"
+  },
+  "common_set": {
+    "message": "設定"
+  },
+  "deck_description": {
+    "message": "X (Twitter) 用の最新の TweetDeck のようなマルチカラム エクスペリエンス。タイムライン、リストなどを 1 つのビューで管理します。",
+    "description": "SEO meta description used on the deck page."
+  },
+  "deck_h1": {
+    "message": "Yomikui — X の複数列タイムライン (Twitter)",
+    "description": "Hidden H1 / accessible page title for the deck UI."
+  },
+  "download_toast_complete": {
+    "message": "ダウンロード完了"
+  },
+  "download_toast_downloading": {
+    "message": "ダウンロード中…"
+  },
+  "download_toast_failed": {
+    "message": "ダウンロードに失敗しました"
+  },
+  "download_toast_files": {
+    "message": "$1$ ファイル",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "4"
+      }
+    }
+  },
+  "download_toast_retry": {
+    "message": "再試行"
+  },
+  "label_editor_bg_color_aria": {
+    "message": "背景色 $1$",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "#1d4ed8"
+      }
+    }
+  },
+  "label_editor_color": {
+    "message": "色"
+  },
+  "label_editor_display_name": {
+    "message": "表示名"
+  },
+  "label_editor_display_name_bg": {
+    "message": "表示名の背景"
+  },
+  "label_editor_label_color_aria": {
+    "message": "ラベルの色 $1$",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "#1d4ed8"
+      }
+    }
+  },
+  "label_editor_label_text_placeholder": {
+    "message": "ラベルのテキスト..."
+  },
+  "label_editor_labels": {
+    "message": "ラベル"
+  },
+  "label_editor_opacity": {
+    "message": "不透明度"
+  },
+  "label_editor_preview": {
+    "message": "プレビュー"
+  },
+  "label_editor_title": {
+    "message": "アカウントラベルの編集"
+  },
+  "label_manager_count_many": {
+    "message": "$1$ ラベル付きアカウント",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "label_manager_count_one": {
+    "message": "$1$ ラベル付きアカウント",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "1"
+      }
+    }
+  },
+  "label_manager_empty": {
+    "message": "ラベルの付いたアカウントはまだありません。"
+  },
+  "label_manager_empty_hint": {
+    "message": "ユーザー名の横にある + ボタンをクリックしてラベルを追加します。"
+  },
+  "label_manager_no_match": {
+    "message": "検索に一致するアカウントはありません。"
+  },
+  "label_manager_search_placeholder": {
+    "message": "ユーザー名またはラベルで検索..."
+  },
+  "label_manager_title": {
+    "message": "ラベルの管理"
+  },
+  "language_ja": {
+    "message": "日本語"
+  },
+  "language_label": {
+    "message": "言語"
+  },
+  "live_feed_error_poll": {
+    "message": "ツイートを読み込めませんでした。Twitterがレート制限を行っているか、更新中である可能性があります。"
+  },
+  "live_feed_replying_to": {
+    "message": "$1$さんへの返信",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "@jack"
+      }
+    }
+  },
+  "live_feed_retry_btn": {
+    "message": "再試行"
+  },
+  "login_checking": {
+    "message": "確認中..."
+  },
+  "login_desc": {
+    "message": "Yomikui にはアクティブな X (Twitter) セッションが必要です。このブラウザで X にログインしてから戻ってください。"
+  },
+  "login_go_to_x": {
+    "message": "Xのログイン画面を開く"
+  },
+  "login_im_logged_in": {
+    "message": "ログイン完了（再確認する）"
+  },
+  "login_title": {
+    "message": "X（Twitter）にログインしてください"
+  },
+  "login_warning": {
+    "message": "まだログインしていません。まずX（Twitter）にログインしてください。"
+  },
+  "nickname_editor_display_name": {
+    "message": "表示名"
+  },
+  "nickname_editor_nickname_label": {
+    "message": "ニックネーム"
+  },
+  "nickname_editor_nickname_placeholder": {
+    "message": "ニックネームを入力..."
+  },
+  "nickname_editor_preview": {
+    "message": "プレビュー"
+  },
+  "nickname_editor_title": {
+    "message": "ニックネームを編集"
+  },
+  "nickname_manager_count_many": {
+    "message": "$1$ アカウント",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "nickname_manager_count_one": {
+    "message": "$1$ アカウント",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "1"
+      }
+    }
+  },
+  "nickname_manager_empty": {
+    "message": "ニックネームはまだありません"
+  },
+  "nickname_manager_empty_hint": {
+    "message": "ツイートの表示名横の ✏️ ボタンをクリック"
+  },
+  "nickname_manager_no_match": {
+    "message": "一致するニックネームがありません"
+  },
+  "nickname_manager_search_placeholder": {
+    "message": "ユーザー名またはニックネームで検索..."
+  },
+  "nickname_manager_title": {
+    "message": "ニックネームを管理"
+  },
+  "release_1_1_0_1": {
+    "message": "右クリックして列に追加 — X/Twitterのリンクをコンテキストメニューから列として直接追加"
+  },
+  "release_1_1_0_10": {
+    "message": "新しい列タイプ — Grok とチャット（DM）を新しい列タイプとして追加"
+  },
+  "release_1_1_0_11": {
+    "message": "ツイート収益ビュー — ツイート収益をツイート上で直接表示します"
+  },
+  "release_1_1_0_12": {
+    "message": "ツイートテキストの自動展開 — 列ごとに有効にして、切り詰められたツイートの「もっと見る」を自動的に開きます"
+  },
+  "release_1_1_0_2": {
+    "message": "ワンクリックブロック — ツイート行から直接アカウントをブロック（直後なら元に戻すことも可能）。列設定でオン/オフを切り替えられます。"
+  },
+  "release_1_1_0_3": {
+    "message": "メディアのダウンロード — 画像やビデオをツイートから直接ダウンロードします"
+  },
+  "release_1_1_0_4": {
+    "message": "アプリ内通知 — 表示位置（四隅）、表示時間、ポーリング間隔を設定し、Xの新しい通知をトースト形式で受け取れます"
+  },
+  "release_1_1_0_5": {
+    "message": "アカウント ラベル — カスタム ラベルと色を任意のアカウントに追加します"
+  },
+  "release_1_1_0_6": {
+    "message": "列の色 - 並べ替えた後でも列の色を維持します。"
+  },
+  "release_1_1_0_7": {
+    "message": "カラーピッカー — 各列のアクセントカラーを手動で選択します"
+  },
+  "release_1_1_0_8": {
+    "message": "列の複製 — ワンクリックで任意の列を複製します"
+  },
+  "release_1_1_0_9": {
+    "message": "ドラッグ アンド ドロップの改善 — 列をよりスムーズに並べ替えます"
+  },
+  "release_1_1_1_1": {
+    "message": "アカウントの所在国バッジ — ツイートのユーザー名横に国名と国旗を表示"
+  },
+  "release_1_1_1_2": {
+    "message": "所在国のスマートキャッシュ — 国旗バッジ情報をローカルキャッシュし、Xのレート制限を回避しながら高速に読み込み"
+  },
+  "release_1_1_1_3": {
+    "message": "レート制限セーフティモード — Xのレート制限を検知した場合、地域情報の取得を自動で一時停止し制限解除後に再開"
+  },
+  "release_1_1_2_1": {
+    "message": "バックアップと復元 - すべての設定、列レイアウトをエクスポートおよびインポートし、デバイス間で転送します。"
+  },
+  "release_1_1_2_2": {
+    "message": "ライト/ダークテーマのサポート"
+  },
+  "release_1_1_2_3": {
+    "message": "ツイートのスクリーンショット — ツイート行から直接スクリーンショットを撮影し、PNG画像としてダウンロード"
+  },
+  "release_1_1_2_4": {
+    "message": "タイムライン履歴列 — スクロールして過ぎたツイートのローカル履歴を保存する専用の列を追加して、後で再び見つけられるようにします。"
+  },
+  "release_1_2_0_1": {
+    "message": "ワークスペース — 名前付き列レイアウトを保存し、サイドバーから切り替えられます。"
+  },
+  "release_1_2_0_2": {
+    "message": "列アイコン — 列設定で列ごとに絵文字アイコンを設定し、サイドバーでフィードを一目で識別。"
+  },
+  "release_1_2_0_3": {
+    "message": "列カラー選択 — サイドバーとヘッダーのアクセント用に、パレットと精密ピッカーを備えた選択UIを刷新。"
+  },
+  "release_1_2_0_4": {
+    "message": "認証バッジ付きツイートのマスク — 列ごとに有料の青バッジ認証ツイートを「表示」ボタンで確認するまでマスク"
+  },
+  "release_1_3_0_1": {
+    "message": "最後のページを記憶 — 列ごとに、更新や再読み込み後も最後に開いていたページに戻ります。"
+  },
+  "release_1_3_0_2": {
+    "message": "ワークスペースクイックアクセス — サイドバーにワークスペースアイコンを表示し、ワンクリックで切り替え。ワークスペースメニューでオン/オフ。"
+  },
+  "release_1_3_0_3": {
+    "message": "列をハイライト — 列ごとに枠とヘッダーを列の色で強調。列設定でオン/オフ。"
+  },
+  "release_1_3_0_4": {
+    "message": "ブックマーク列 — 「列を追加」から保存した投稿専用の列を追加できます。"
+  },
+  "release_1_3_0_5": {
+    "message": "アカウントのニックネーム — ツイートの表示名を任意のニックネームに変更。設定でオン、またはツイートの ✏️ から編集。"
+  },
+  "release_1_3_0_6": {
+    "message": "ツイート内のGrokを非表示 — カラムごとに各ツイートのGrokアクションボタンを非表示。列設定で切り替え。"
+  },
+  "release_1_3_0_7": {
+    "message": "常に原文を表示 — カラムごとに自動翻訳されたツイートの原文を自動表示。列設定で切り替え。"
+  },
+  "release_1_4_0_2": {
+    "message": "アカウントを切り替える — 設定に移動しました"
+  },
+  "release_1_4_0_3": {
+    "message": "ディムモード — 列とデッキ向けのやわらかいダークテーマ（ライト→ダーク→ディム）"
+  },
+  "release_1_5_0_1": {
+    "message": "自動更新 — 列で操作中または未送信のテキストがある間は一時停止、下書きを守ります"
+  },
+  "release_1_5_0_10": {
+    "message": "ツイート背景のハイライト — 列のハイライトが有効な場合、X列およびLive Feedのツイート背景を列のアクセントカラーで薄く着色"
+  },
+  "release_1_5_0_11": {
+    "message": "Live Feed検索 — 列を追加から検索クエリを入力し、Latest結果を軽量なLive Feed列でストリーミング"
+  },
+  "release_1_5_0_2": {
+    "message": "手動ホールド — 緑の自動更新アイコンをクリックし、1〜30分を選択して更新を一時停止"
+  },
+  "release_1_5_0_3": {
+    "message": "いつでも再開 — 琥珀色の一時停止アイコンをクリックして自動更新を再開"
+  },
+  "release_1_5_0_4": {
+    "message": "メディアサイズ — 列ごとにツイートの写真・動画を小・標準・大から選択（列設定）"
+  },
+  "release_1_5_0_5": {
+    "message": "狭い列でより快適なUI — 最小幅でもツイートヘッダー、列ツールバー、アクションボタンがすっきり"
+  },
+  "release_1_5_0_6": {
+    "message": "列の設定 — 折りたたみセクションに整理され、メニューがすっきり"
+  },
+  "release_1_5_0_7": {
+    "message": "リポストを非表示 — Live Feed列でリポストされたツイートをフィルター可能"
+  },
+  "release_1_5_0_8": {
+    "message": "メディアのみ — Live Feedで写真・動画・GIF付きツイートのみ表示"
+  },
+  "release_1_5_0_9": {
+    "message": "引用を非表示 — Live Feedで他の投稿を引用したツイートを非表示に可能"
+  },
+  "release_1_5_1_1": {
+    "message": "Live Feedスレッド — 自己返信スレッドがXと同じように1枚のカードに縦に表示され、会話全体をすぐに読めます"
+  },
+  "release_1_5_1_2": {
+    "message": "全画面メディアギャラリー — ツイートに複数の画像がある場合、ビューアで左右矢印（またはキーボード）で切り替えられます"
+  },
+  "release_1_5_1_3": {
+    "message": "ダウンロード進捗トースト — 画像や動画の保存時にアプリ内で実際の進捗・成功・失敗を確認できます（ブラウザのダウンロードバーが非表示のときに特に便利）"
+  },
+  "settings_scroll_to_bottom": {
+    "message": "一番下までスクロール"
+  },
+  "sidebar_account_labels": {
+    "message": "アカウントラベル"
+  },
+  "sidebar_account_nicknames": {
+    "message": "アカウントのニックネーム"
+  },
+  "sidebar_add_column": {
+    "message": "列の追加"
+  },
+  "sidebar_api_usage": {
+    "message": "API 使用率: $1$%",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "42"
+      }
+    }
+  },
+  "sidebar_autoplay_recommended": {
+    "message": "パフォーマンスを向上させるために有効にしておくことが推奨されます。"
+  },
+  "sidebar_backup_restore": {
+    "message": "バックアップと復元"
+  },
+  "sidebar_custom_text_size": {
+    "message": "カスタムテキストサイズ"
+  },
+  "sidebar_desktop_notifications": {
+    "message": "デスクトップ通知"
+  },
+  "sidebar_disable_autoplay": {
+    "message": "自動再生を無効にする"
+  },
+  "sidebar_display_duration": {
+    "message": "表示時間"
+  },
+  "sidebar_export": {
+    "message": "エクスポート"
+  },
+  "sidebar_export_failed": {
+    "message": "バックアップのエクスポートに失敗しました。"
+  },
+  "sidebar_full_screen_image_viewer": {
+    "message": "全画面画像ビューア"
+  },
+  "sidebar_hide_sidebar": {
+    "message": "サイドバーを非表示"
+  },
+  "sidebar_image_viewer_live_feed_note": {
+    "message": "ライブフィードのカラムでは常に有効です。"
+  },
+  "sidebar_import": {
+    "message": "インポート"
+  },
+  "sidebar_import_failed": {
+    "message": "バックアップのインポートに失敗しました。有効なYomikuiバックアップファイルであることを確認してください。"
+  },
+  "sidebar_import_success": {
+    "message": "バックアップが正常にインポートされました。Yomikuiを再読み込みします。"
+  },
+  "sidebar_manage": {
+    "message": "管理"
+  },
+  "sidebar_poll_interval": {
+    "message": "ポーリング間隔"
+  },
+  "sidebar_position": {
+    "message": "表示位置"
+  },
+  "sidebar_position_bottom_left": {
+    "message": "左下"
+  },
+  "sidebar_position_bottom_right": {
+    "message": "右下"
+  },
+  "sidebar_position_top_left": {
+    "message": "左上"
+  },
+  "sidebar_position_top_right": {
+    "message": "右上"
+  },
+  "sidebar_saved_tweet_count": {
+    "message": "保存されたツイート数"
+  },
+  "sidebar_saved_tweet_count_range": {
+    "message": "最小 $1$、最大 $2$",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "1"
+      },
+      "2": {
+        "content": "$2",
+        "example": "1000"
+      }
+    }
+  },
+  "sidebar_saved_tweet_high_warning": {
+    "message": "値を高くすると、メモリ使用量が増加する可能性があります。"
+  },
+  "sidebar_settings": {
+    "message": "設定"
+  },
+  "sidebar_size_px": {
+    "message": "サイズ (px)"
+  },
+  "sidebar_sleep_when_inactive": {
+    "message": "非アクティブ時にスリープ"
+  },
+  "sidebar_switch_account": {
+    "message": "アカウントを切り替える"
+  },
+  "sidebar_switch_account_hint_has_timeline": {
+    "message": "アカウントを切り替えるには、タイムライン履歴カラムを削除してください。"
+  },
+  "sidebar_switch_account_hint_live_feed": {
+    "message": "アカウントを切り替えるには、最初のカラムのライブフィードを無効にしてください。"
+  },
+  "sidebar_switch_account_hint_no_columns": {
+    "message": "アカウントを切り替えるには、少なくとも1つのカラムを追加してください。"
+  },
+  "sidebar_switch_account_hint_not_iframe": {
+    "message": "アカウントを切り替えるには、最初のカラムがX/Twitterカラム（タイムライン履歴ではない）である必要があります。"
+  },
+  "sidebar_timeline_history": {
+    "message": "タイムライン履歴"
+  },
+  "sidebar_toggle_dark_mode": {
+    "message": "ダークモードに切り替え"
+  },
+  "sidebar_toggle_dim_mode": {
+    "message": "ディムモードに切り替え"
+  },
+  "sidebar_toggle_light_mode": {
+    "message": "ライトモードに切り替え"
+  },
+  "sidebar_zero_disabled": {
+    "message": "0 = 無効"
+  },
+  "toast_days_ago": {
+    "message": "$1$日前",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "2"
+      }
+    }
+  },
+  "toast_hours_ago": {
+    "message": "$1$時間前",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "toast_just_now": {
+    "message": "たった今"
+  },
+  "toast_minutes_ago": {
+    "message": "$1$分前",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "5"
+      }
+    }
+  },
+  "whats_new_got_it": {
+    "message": "わかりました"
+  },
+  "whats_new_title": {
+    "message": "新機能"
+  },
+  "workspaces_add": {
+    "message": "新しいワークスペース"
+  },
+  "workspaces_cancel": {
+    "message": "キャンセル"
+  },
+  "workspaces_create": {
+    "message": "作成"
+  },
+  "workspaces_default_name": {
+    "message": "マイワークスペース"
+  },
+  "workspaces_delete": {
+    "message": "削除"
+  },
+  "workspaces_delete_confirm_body": {
+    "message": "$WORKSPACE_NAME$ とそのすべての列が削除されます。元に戻せません。",
+    "placeholders": {
+      "WORKSPACE_NAME": {
+        "content": "$1",
+        "example": "News"
+      }
+    }
+  },
+  "workspaces_delete_confirm_title": {
+    "message": "ワークスペースを削除しますか？"
+  },
+  "workspaces_duplicate": {
+    "message": "複製"
+  },
+  "workspaces_last_cannot_delete": {
+    "message": "ワークスペースは1つ以上必要です"
+  },
+  "workspaces_manage": {
+    "message": "ワークスペースを管理"
+  },
+  "workspaces_name_placeholder": {
+    "message": "ワークスペース名"
+  },
+  "workspaces_quick_access": {
+    "message": "クイックアクセス"
+  },
+  "workspaces_remove_icon": {
+    "message": "アイコンを削除"
+  },
+  "workspaces_rename": {
+    "message": "名前を変更"
+  },
+  "workspaces_save_current_hint": {
+    "message": "現在の列のコピーを保存します。"
+  },
+  "workspaces_section_label": {
+    "message": "ワークスペース"
+  },
+  "workspaces_set_icon": {
+    "message": "アイコンを設定"
+  },
+  "workspaces_switch_tooltip": {
+    "message": "$WORKSPACE_NAME$ に切り替え",
+    "placeholders": {
+      "WORKSPACE_NAME": {
+        "content": "$1",
+        "example": "News"
+      }
+    }
+  },
+  "live_feed_poll_card_votes": {
+    "message": "$1$票",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "live_feed_poll_card_votes_one": {
+    "message": "1票"
+  },
+  "live_feed_poll_card_final": {
+    "message": "最終結果"
+  },
+  "live_feed_poll_card_days_left": {
+    "message": "残り$1$日",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "live_feed_poll_card_hours_left": {
+    "message": "残り$1$時間",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "live_feed_poll_card_minutes_left": {
+    "message": "残り$1$分",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "live_feed_poll_card_ending_soon": {
+    "message": "まもなく終了"
+  },
+  "live_feed_poll_card_vote_failed": {
+    "message": "投票に失敗しました"
+  },
+  "column_settings_live_feed": {
+    "message": "ライブフィード"
+  },
+  "column_settings_live_feed_desc": {
+    "message": "新着ツイートを自動ストリーミング表示します（TweetDeck風）。Xのiframeの代わりにYomikui独自のタイムラインUIを使用します。"
+  },
+  "column_settings_live_feed_required": {
+    "message": "この設定を変更するにはライブフィードを無効にしてください"
+  },
+  "release_1_4_0_1": {
+    "message": "ライブフィード: カラムごとに新着ツイートを自動取得するTweetDeck風ストリーミング機能"
+  }
+}

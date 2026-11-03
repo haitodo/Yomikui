@@ -1,0 +1,279 @@
+# =============================================================================
+# Yomikui - .gitignore
+# 誤コミット防止: 秘密鍵 / 個人情報 / 認証情報 / メディア / ビルド成果物 / キャッシュ
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. 秘匿情報・署名鍵・秘密鍵・認証トークン (Secrets, Private Keys & Tokens)
+#    ※最重要: 拡張機能の秘密鍵(key.pem)やAPIキー、秘密証明書をGitに絶対に含めない
+# -----------------------------------------------------------------------------
+# 拡張機能の秘密鍵 & 各種暗号鍵
+key.pem
+*.pem
+*.key
+*.priv
+*.cert
+*.crt
+*.pfx
+*.p12
+*.pkcs12
+*.p8
+*.der
+*.pub
+*.keystore
+*.jks
+*.asc
+*.gpg
+*.sig
+
+# SSH 秘密鍵・公開鍵
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+
+# 秘密情報フォルダー & 認証クレデンシャル
+keys/
+secrets/
+secret/
+credentials/
+*credentials*.json
+*secret*.json
+client_secret*.json
+service-account*.json
+firebase-adminsdk*.json
+
+# 認証トークン & 外部サービス設定
+auth*.json
+*token*.json
+*token*.txt
+.netrc
+.aws/
+.azure/
+.gcloud/
+cws-token*.json
+chrome-webstore*.json
+edge-addons*.json
+
+# -----------------------------------------------------------------------------
+# 2. 個人情報・ブラウザプロファイル・セッション情報 (Personal Data & Browser Profiles)
+#    ※ブラウザ拡張機能のデバッグ時に生成されるCookie、履歴、アカウント情報の流出防止
+# -----------------------------------------------------------------------------
+# Chromium / Edge / Firefox デバッグプロファイル & ユーザーデータ
+user-data/
+userData/
+.user-data/
+browser-data/
+.browser-data/
+chrome-profile/
+edge-profile/
+firefox-profile/
+profile/
+profiles/
+puppeteer-profile/
+playwright-profile/
+.playwright/
+
+# 保存された Cookie・セッション・ログインストレージ
+storageState*.json
+cookies*.json
+session*.json
+*-session*.json
+x-session*.json
+twitter-session*.json
+
+# -----------------------------------------------------------------------------
+# 3. 環境変数 & ローカル設定 (Environment & Local Configurations)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.local
+*.local.*
+local.config.*
+config.local.*
+
+# パッケージマネージャーのローカル設定 (個人トークン混入防止)
+.npmrc
+.pnpmrc.local
+
+# -----------------------------------------------------------------------------
+# 4. パッケージマネージャー & 依存関係 (Dependencies)
+#    ※プロジェクト方針: Node.js は pnpm、Python は uv のみ使用
+# -----------------------------------------------------------------------------
+# Node.js 依存関係
+node_modules/
+.pnpm-store/
+# 他ツールの誤操作防止（npm / yarn / bun のロックファイル混入防止）
+package-lock.json
+yarn.lock
+.yarn/
+bun.lockb
+bun.lock
+
+# Python 仮想環境 & キャッシュ (uv 以外のツール生成物・キャッシュも防止)
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+poetry.lock
+Pipfile.lock
+
+# -----------------------------------------------------------------------------
+# 5. ビルド成果物・配布アーカイブ (Production Builds & Release Archives)
+# -----------------------------------------------------------------------------
+dist/
+release/
+build/
+out/
+dist.crx
+*.crx
+*.xpi
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.bz2
+*.xz
+.tmp-store-pkg/
+web-ext-artifacts/
+
+# -----------------------------------------------------------------------------
+# 6. X (Twitter) 取得メディア & ダウンロードファイル (Media & User Downloads)
+#    ※拡張機能がダウンロードしたツイート画像・動画や大容量ファイルの混入防止
+# -----------------------------------------------------------------------------
+# ダウンロード先フォルダー
+XMedia/
+downloads/
+download/
+media/
+captures/
+screenshots/
+recordings/
+dump/
+dumps/
+tweet_data/
+timeline_data/
+
+# 動画・音声ファイル全般
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.flac
+*.ogg
+
+# -----------------------------------------------------------------------------
+# 7. テスト結果・カバレッジ・キャッシュ・ログ (Test & Runtime Artifacts)
+# -----------------------------------------------------------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.cpuprofile
+*.heapsnapshot
+
+# テスト・ビルドキャッシュ
+*.tsbuildinfo
+.tsbuildinfo
+coverage/
+*.lcov
+.nyc_output/
+.vitest/
+.vitest-cache/
+.eslintcache
+playwright-report/
+test-results/
+test-output/
+test-artifacts/
+.parcel-cache/
+.turbo/
+
+# -----------------------------------------------------------------------------
+# 8. エディタ・IDE 設定 & AI アシスタントキャッシュ (Editors & AI Tools)
+# -----------------------------------------------------------------------------
+# VS Code (共通設定 extensions.json / settings.json 以外のワークスペースやローカル設定を除外)
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.code-workspace
+.history/
+
+# JetBrains / Visual Studio
+.idea/
+.vs/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+
+# AI コーディングアシスタント & エディタ
+.cursor/
+.windsurf/
+.chat/
+.copilot/
+.gemini/
+.claude/
+.continue/
+.aider*
+.zed/
+
+# -----------------------------------------------------------------------------
+# 9. OS 生成メタデータ & 一時ファイル (OS & Temporary Files)
+# -----------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# 一時ファイル・バックアップファイル全般
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+*.patch
+*.diff
+temp/
+tmp/
+.temp/
+.tmp/

@@ -1,0 +1,104 @@
+{
+  "name": "__MSG_appName__",
+  "version": "0.1.0",
+  "manifest_version": 3,
+  "default_locale": "ja",
+  "description": "__MSG_appDescription__",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "64": "icons/icon64.png",
+    "128": "icons/icon128.png",
+    "256": "icons/icon256.png"
+  },
+  "permissions": [
+    "storage",
+    "webRequest",
+    "declarativeNetRequest",
+    "contextMenus",
+    "downloads"
+  ],
+  "host_permissions": [
+    "*://twitter.com/*",
+    "*://*.twitter.com/*",
+    "*://x.com/*",
+    "*://*.x.com/*",
+    "*://api.x.com/*",
+    "*://*.twimg.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://twitter.com/*",
+        "https://*.twitter.com/*",
+        "https://x.com/*",
+        "https://*.x.com/*"
+      ],
+      "js": [
+        "contentDeck.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://twitter.com/*",
+        "https://*.twitter.com/*",
+        "https://x.com/*",
+        "https://*.x.com/*"
+      ],
+      "js": [
+        "frameMaintenance.js",
+        "contentIframe.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://twitter.com/*",
+        "https://*.twitter.com/*",
+        "https://x.com/*",
+        "https://*.x.com/*"
+      ],
+      "js": [
+        "xTransactionBridge.js",
+        "mediaInterceptor.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "https://twitter.com/*",
+        "https://*.twitter.com/*",
+        "https://x.com/*",
+        "https://*.x.com/*"
+      ],
+      "resources": [
+        "icons/*",
+        "mediaInterceptor.js",
+        "liveFeedShell.html",
+        "liveFeedShell.js"
+      ]
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "64": "icons/icon64.png",
+      "128": "icons/icon128.png",
+      "256": "icons/icon256.png"
+    }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlWdkSYlJK75N8cIaYtTjEjdTKi8iQ16f2Q++Rd6lzRCWC2fKSIhhVa+dDCXA6+rRyWG9kx6L8OLwZmd2M6zMKuL3HxspUrM9Q1nqSd9qrXoz9e2V5totvjKxE/a9sSFtLS+lqpCP+s5Cu8bWrLKqRLBAO9/T1w4M2mONdkmI7ab0+W++f/XrKuVH3EGN4xBjoB+tIUKmPpprsOXHjytWcM8O5ONChGABsCDyOEQcQy15nPJRNHwA/PGi7UIzGveu1VejJBQT+RKeLi3bFcbCrX6RAJ4aVDQUk32rqfiRLlBXM539g38fLnU7zVd8c+8UIUxbBOiiPCrzLZO2C6GEYQIDAQAB"
+}
