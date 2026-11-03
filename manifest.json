@@ -40,6 +40,7 @@
         "https://*.x.com/*"
       ],
       "js": [
+        "columnLayout.js",
         "contentDeck.js"
       ],
       "run_at": "document_idle"

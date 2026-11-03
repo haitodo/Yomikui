@@ -205,6 +205,15 @@
   "column_settings_column_width": {
     "message": "列幅"
   },
+  "column_settings_width_auto": {
+    "message": "自動で均等"
+  },
+  "column_settings_width_auto_desc": {
+    "message": "固定幅の列を除いた残りの幅を均等に使います。最小幅は20remで、収まらない場合は横スクロールできます。"
+  },
+  "column_settings_width_fixed": {
+    "message": "固定幅"
+  },
   "column_settings_cover_blue_verified": {
     "message": "認証バッジ付きツイートを隠す"
   },
@@ -933,6 +942,12 @@
   },
   "workspaces_duplicate": {
     "message": "複製"
+  },
+  "workspaces_equalize_columns": {
+    "message": "すべての列を均等にする"
+  },
+  "workspaces_equalize_columns_desc": {
+    "message": "このワークスペースの全列を自動幅に切り替えます。以前の固定幅は保持されます。"
   },
   "workspaces_last_cannot_delete": {
     "message": "ワークスペースは1つ以上必要です"
