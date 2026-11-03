@@ -42,6 +42,7 @@
       "js": [
         "columnLayout.js",
         "tweetActions.js",
+        "homeRefresh.js",
         "contentDeck.js"
       ],
       "run_at": "document_idle"
@@ -56,6 +57,7 @@
       "js": [
         "frameMaintenance.js",
         "tweetActions.js",
+        "homeRefresh.js",
         "contentIframe.js"
       ],
       "all_frames": true,
