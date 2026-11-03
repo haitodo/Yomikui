@@ -7,6 +7,7 @@ import { parseHTML } from 'linkedom';
 import { Clock, Events, settle } from './helpers.mjs';
 
 const source = readFileSync(new URL('../homeRefresh.js', import.meta.url), 'utf8');
+const scrollSource = readFileSync(new URL('../homeScroll.js', import.meta.url), 'utf8');
 const P = 'yomikui-home-refresh-';
 const clone = value => JSON.parse(JSON.stringify(value));
 const tweet = id => `<article data-testid="tweet"><a href="/author/status/${id}"><time>Now</time></a></article>`;
@@ -46,6 +47,7 @@ function setup(html = home()) {
     crypto: { randomUUID }, URL,
     fetch() { throw new Error('Native home refresh must not call an API'); },
   });
+  vm.runInContext(scrollSource, context);
   vm.runInContext(source, context);
   const settings = { columnType: 'home', isLiveFeedColumn: false };
   const scroller = { scrollTop: 800 };
@@ -78,6 +80,7 @@ test('a CSS-hidden selected recommendation tab refreshes once without exposing t
   assert.equal(env.document.querySelector('#tabs > div').style.display, 'none');
   assert.equal((await refresher.refresh()).reason, 'cooldown');
   assert.equal(clicks, 1);
+  await env.clock.advance(1400);
   assert.equal(env.observers.filter(observer => observer.connected).length, 0);
   assert.equal(env.clock.timers.size, 0);
 });
@@ -186,6 +189,7 @@ test('tabs that render after frame startup are awaited and all observation is bo
   await settle();
   await env.clock.advance(280);
   assert.equal((await pending).status, 'updated');
+  await env.clock.advance(1400);
   assert.equal(env.clock.timers.size, 0);
   const missing = setup(home({ loading: true }));
   const waiting = await beginNative(missing);

@@ -58,6 +58,25 @@ test('legacy and invalid width modes retain the existing fixed width', () => {
   assert.equal(layout.getColumnStyle({ width: null }).width, '32rem');
 });
 
+test('Home refresh position defaults to standard and survives saving, duplication and reload', async () => {
+  const { columnSchema, store, clock, loadWorkspaces } = setup();
+  const column = store.getState().columns[0];
+  assert.equal(column.homeRefreshPosition, 'top');
+  const { homeRefreshPosition, ...legacy } = column;
+  for (const value of [legacy, { ...legacy, homeRefreshPosition: null }, { ...legacy, homeRefreshPosition: 'invalid' }]) {
+    assert.equal(columnSchema.parse(value).homeRefreshPosition, 'top');
+  }
+  store.getState().updateColumn(column.id, { homeRefreshPosition: 'preserve' });
+  store.getState().duplicateColumn(column.id);
+  assert.equal(store.getState().columns[1].homeRefreshPosition, 'preserve');
+  assert.equal(store.getState().columns[2].homeRefreshPosition, 'top');
+  await clock.advance(280);
+  const loaded = (await loadWorkspaces()).workspaces[0].columns;
+  assert.equal(loaded[0].homeRefreshPosition, 'preserve');
+  assert.equal(loaded[1].homeRefreshPosition, 'preserve');
+  assert.equal(loaded[2].homeRefreshPosition, 'top');
+});
+
 test('automatic widths use equal flex bases and preserve the minimum width', () => {
   const { layout } = setup();
   const first = clone(layout.getColumnStyle({ widthMode: 'auto', width: 24 }));

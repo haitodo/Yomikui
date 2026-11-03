@@ -42,6 +42,7 @@
       "js": [
         "columnLayout.js",
         "tweetActions.js",
+        "homeScroll.js",
         "homeRefresh.js",
         "contentDeck.js"
       ],
@@ -57,6 +58,7 @@
       "js": [
         "frameMaintenance.js",
         "tweetActions.js",
+        "homeScroll.js",
         "homeRefresh.js",
         "contentIframe.js"
       ],

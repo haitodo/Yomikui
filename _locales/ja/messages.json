@@ -1074,5 +1074,20 @@
   },
   "release_1_4_0_1": {
     "message": "ライブフィード: カラムごとに新着ツイートを自動取得するTweetDeck風ストリーミング機能"
+  },
+  "column_settings_home_refresh_position": {
+    "message": "おすすめの新着読み込み後の表示位置"
+  },
+  "column_settings_home_refresh_top": {
+    "message": "新着の先頭を表示（標準）"
+  },
+  "column_settings_home_refresh_preserve": {
+    "message": "既存投稿の位置を保持"
+  },
+  "column_settings_home_refresh_top_desc": {
+    "message": "新着を読み込んだら先頭に移動し、下へスクロールして読みます。"
+  },
+  "column_settings_home_refresh_preserve_desc": {
+    "message": "読んでいた投稿の位置を保ち、新着は上へスクロールして読みます。"
   }
 }

@@ -120,13 +120,8 @@
   }
 
   function newPostsButton() {
-    const pattern = /^(?:show\s+(?:[\d,.]+\s+)?(?:new\s+)?(?:posts?|tweets?)|[\d,]+\s*件の(?:新しい)?(?:ポスト|ツイート)(?:を)?表示|(?:新しい|新着の?)(?:ポスト|ツイート)(?:を)?表示)$/i;
-    return [...primaryColumn()?.querySelectorAll('button, [role="button"]') ?? []].find(button => {
-      if (button.closest('article, [role="dialog"], [role="tab"]') || button.disabled ||
-          button.getAttribute('aria-disabled') === 'true' || button.closest('[hidden], [aria-hidden="true"]')) return false;
-      const name = (button.getAttribute('aria-label') || button.textContent).normalize('NFKC').trim();
-      return pattern.test(name);
-    });
+    return [...primaryColumn()?.querySelectorAll('button, [role="button"]') ?? []]
+      .find(globalThis.YomikuiHomeScroll.isNewPostsButton);
   }
 
   function tweetSignature() {
@@ -142,6 +137,7 @@
     constructor({ getSettings, getScroller }) {
       this.getSettings = getSettings;
       this.getScroller = getScroller;
+      this.positions = new globalThis.YomikuiHomeScroll.Tracker({ getSettings, getScroller });
       this.lastAction = -Infinity;
     }
 
@@ -160,37 +156,49 @@
 
       // CSS-hidden tab bars remain in the native DOM and can receive click().
       // Do not switch to Following and back, or retry a click without evidence.
-      const scroller = this.getScroller();
-      if (scroller) scroller.scrollTop = 0;
-      else window.scrollTo({ top: 0, behavior: 'instant' });
-      await delay(200, signal);
-      reason = unavailableReason(this.getSettings);
-      if (reason) return { status: 'skipped', reason };
-      const { forYou, selected } = selectedHomeTab();
-      if (!forYou || selected !== forYou || !forYou.isConnected || forYou.getAttribute('aria-disabled') === 'true') {
-        return { status: 'skipped', reason: 'unavailable' };
-      }
-      const banner = newPostsButton();
-      const before = tweetSignature();
-      const method = banner ? 'new-posts' : 'tab';
-      this.lastAction = Date.now();
-      (banner ?? forYou).click();
-      const changed = await observeUntil(() => {
+      const position = this.positions.begin(signal);
+      let updated = false;
+      try {
+        const scroller = this.getScroller();
+        if (scroller) scroller.scrollTop = 0;
+        else window.scrollTo({ top: 0, behavior: 'instant' });
+        await delay(200, signal);
         reason = unavailableReason(this.getSettings);
-        if (reason) return { reason };
-        const signature = tweetSignature();
-        return signature && signature !== before ? { changed: true } : null;
-      }, 5000, signal);
-      if (changed?.reason) return { status: 'requested', method, reason: changed.reason };
-      // A click may return the same posts. Never equate no DOM change with
-      // "no new posts", and never claim a successful fetch based on click alone.
-      return { status: changed ? 'updated' : 'requested', method };
+        if (reason) return { status: 'skipped', reason };
+        const { forYou, selected } = selectedHomeTab();
+        if (!forYou || selected !== forYou || !forYou.isConnected || forYou.getAttribute('aria-disabled') === 'true') {
+          return { status: 'skipped', reason: 'unavailable' };
+        }
+        const banner = newPostsButton();
+        const before = tweetSignature();
+        const method = banner ? 'new-posts' : 'tab';
+        this.lastAction = Date.now();
+        this.positions.request(position);
+        this.positions.invoking = true;
+        try { globalThis.YomikuiHomeScroll.clickWithHeaderLayout(banner ?? forYou); }
+        finally { this.positions.invoking = false; }
+        const changed = await observeUntil(() => {
+          reason = unavailableReason(this.getSettings);
+          if (reason) return { reason };
+          const signature = tweetSignature();
+          return signature && signature !== before ? { changed: true } : null;
+        }, 5000, signal);
+        if (changed?.reason) return { status: 'requested', method, reason: changed.reason };
+        // A click may return the same posts. Never equate no DOM change with
+        // "no new posts", and never claim a successful fetch based on click alone.
+        updated = !!changed;
+        return { status: changed ? 'updated' : 'requested', method };
+      } finally {
+        if (signal?.aborted) this.positions.cancel(position);
+        else if (!updated) this.positions.finish(position);
+      }
     }
   }
 
   function installFrame(options) {
     if (window.self === window.top) return null;
     const refresher = new NativeRefresher(options);
+    const disposePositions = refresher.positions.install();
     const completed = new Map();
     let active = null;
     const send = (type, requestId, value = {}) => {
@@ -227,13 +235,14 @@
         send(RESULT, job.id, result);
       });
     };
-    const cancel = () => active?.abort.abort();
+    const cancel = () => { active?.abort.abort(); refresher.positions.cancel(); };
     const onVisibility = () => { if (document.hidden) cancel(); };
     window.addEventListener('message', onMessage);
     window.addEventListener('pagehide', cancel);
     document.addEventListener('visibilitychange', onVisibility);
     return { dispose() {
       cancel();
+      disposePositions();
       window.removeEventListener('message', onMessage);
       window.removeEventListener('pagehide', cancel);
       document.removeEventListener('visibilitychange', onVisibility);
