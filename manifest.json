@@ -41,6 +41,7 @@
       ],
       "js": [
         "columnLayout.js",
+        "columnNavigation.js",
         "tweetActions.js",
         "homeScroll.js",
         "floatingControls.js",
@@ -58,6 +59,7 @@
       ],
       "js": [
         "frameMaintenance.js",
+        "columnNavigation.js",
         "tweetActions.js",
         "homeScroll.js",
         "homeRefresh.js",
