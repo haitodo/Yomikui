@@ -105,9 +105,25 @@ test('returning to the top after reading jumps directly without clicking X contr
   assert.equal(env.scroller.scrollTop, 0);
   assert.deepEqual(moves, [{ top: 0, behavior: 'instant' }]);
   assert.equal(toTop().status, 'edge');
-  assert.equal(moves.length, 1, 'returning again at the top does not issue another scroll');
+  assert.deepEqual(moves.at(-1), { top: 0, behavior: 'instant' });
   assert.equal(cancelled, 2, 'remaining refresh correction is cancelled even at the top');
   assert.equal(clicks, 0);
+});
+
+test('returning to the top cancels a smooth step before its first frame is painted', () => {
+  const env = readingSetup();
+  env.scroller.scrollTop = 0;
+  let pending = null;
+  env.scroller.scrollTo = ({ top, behavior }) => {
+    if (behavior === 'smooth') pending = () => { env.scroller.scrollTop = top; };
+    else { pending = null; env.scroller.scrollTop = top; }
+  };
+  assert.equal(env.navigate().status, 'moved');
+  assert.equal(env.scroller.scrollTop, 0);
+  assert.equal(typeof pending, 'function');
+  assert.equal(env.navigate(-1, 'top').status, 'edge');
+  assert.equal(pending, null);
+  assert.equal(env.scroller.scrollTop, 0);
 });
 
 test('reading remains available on Following and does not click any X controls', () => {

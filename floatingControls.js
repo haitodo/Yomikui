@@ -292,25 +292,38 @@
 
   const STYLE_MARKER = '/* yomikui-floating-controls */';
   const CSS = `
-    .yomikui-floating-panel{position:fixed;right:20px;bottom:24px;z-index:800;width:286px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;border:1px solid var(--border);border-radius:13px;background:var(--card);color:var(--foreground);box-shadow:0 5px 20px #0003;font-size:13px}
+    .yomikui-floating-panel{position:fixed;right:20px;bottom:24px;z-index:800;width:248px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--popover);color:var(--popover-foreground);box-shadow:0 4px 16px #00000024,0 1px 3px #00000012;font-size:12px;line-height:1.4}
     .yomikui-floating-panel *{box-sizing:border-box}
-    .yomikui-floating-panel .yf-header{display:flex;position:sticky;top:0;z-index:1;background:var(--card);border-bottom:1px solid var(--border)}
-    .yomikui-floating-panel button{display:flex;align-items:center;justify-content:center;gap:6px;min-height:38px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--secondary);color:var(--foreground);font:inherit;cursor:pointer;touch-action:manipulation}
-    .yomikui-floating-panel button:disabled{opacity:.5;cursor:default}
+    .yomikui-floating-panel svg{flex-shrink:0}
+    .yomikui-floating-panel .yf-header{display:flex;align-items:center;gap:2px;position:sticky;top:0;z-index:1;padding:4px 4px 0;background:var(--popover)}
+    .yomikui-floating-panel button{display:flex;align-items:center;justify-content:center;gap:4px;min-width:0;min-height:30px;padding:5px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;white-space:nowrap;cursor:pointer;touch-action:manipulation;transition:background-color .15s,color .15s}
+    .yomikui-floating-panel button:not(:disabled):hover{background:var(--accent);color:var(--accent-foreground)}
+    .yomikui-floating-panel button:disabled{opacity:.4;cursor:default}
     .yomikui-floating-panel button:focus-visible,.yomikui-floating-panel select:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
-    .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;border:0;border-radius:0;background:transparent;padding:10px 11px;cursor:grab;touch-action:none;user-select:none}
-    .yomikui-floating-panel .yf-collapse{width:40px;border:0;border-radius:0;background:transparent}
-    .yomikui-floating-panel .yf-body{padding:12px}
-    .yomikui-floating-panel .yf-fields{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:10px;margin-bottom:10px}
-    .yomikui-floating-panel label{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:12px;color:var(--muted-foreground)}
-    .yomikui-floating-panel select{width:100%;min-width:0;padding:7px 4px;border:1px solid var(--border);border-radius:7px;background:var(--background);color:var(--foreground);font:inherit}
-    .yomikui-floating-panel .yf-summary{font-size:12px;color:var(--muted-foreground);margin-bottom:9px;overflow-wrap:anywhere}
-    .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-    .yomikui-floating-panel .yf-down{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
-    .yomikui-floating-panel .yf-refresh-area{border-top:1px solid var(--border);margin-top:12px;padding-top:12px}
-    .yomikui-floating-panel .yf-refresh{width:100%;background:var(--card)}
-    .yomikui-floating-panel .yf-status{margin-top:9px;font-size:12px;color:var(--muted-foreground);overflow-wrap:anywhere}
-    @media(pointer:coarse){.yomikui-floating-panel button{min-height:44px}.yomikui-floating-panel .yf-collapse{width:44px}.yomikui-floating-panel .yf-fields{grid-template-columns:1fr}.yomikui-floating-panel select{font-size:16px}}
+    .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;gap:6px;min-height:24px;padding:4px 5px;color:var(--muted-foreground);cursor:grab;touch-action:none;user-select:none}
+    .yomikui-floating-panel .yf-title{flex-shrink:0;font-size:11px;font-weight:600;color:var(--foreground)}
+    .yomikui-floating-panel .yf-collapse{width:24px;min-height:24px;padding:4px;color:var(--muted-foreground)}
+    .yomikui-floating-panel .yf-body{padding:8px}
+    .yomikui-floating-panel .yf-fields{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:6px;margin-bottom:8px}
+    .yomikui-floating-panel label{position:relative;min-width:0}
+    .yomikui-floating-panel .yf-sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+    .yomikui-floating-panel select{appearance:none;width:100%;min-width:0;height:28px;padding:0 23px 0 8px;border:1px solid transparent;border-radius:6px;background:var(--secondary);color:var(--secondary-foreground);font:inherit;font-size:11px;text-overflow:ellipsis;cursor:pointer;transition:border-color .15s}
+    .yomikui-floating-panel select:not(:disabled):hover{border-color:var(--border)}
+    .yomikui-floating-panel select:disabled{opacity:.5;cursor:default}
+    .yomikui-floating-panel option{background:var(--popover);color:var(--popover-foreground)}
+    .yomikui-floating-panel label>svg{position:absolute;right:7px;top:50%;width:12px;height:12px;transform:translateY(-50%);color:var(--muted-foreground);pointer-events:none}
+    .yomikui-floating-panel .yf-summary{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400;color:var(--muted-foreground)}
+    .yomikui-floating-panel .yf-actions{display:flex;align-items:stretch;gap:6px}
+    .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));flex:1;min-width:0;gap:2px;padding:2px;border-radius:8px;background:var(--secondary)}
+    .yomikui-floating-panel .yf-down{background:var(--primary);color:var(--primary-foreground)}
+    .yomikui-floating-panel .yf-down:not(:disabled):hover{background:color-mix(in oklab,var(--primary) 88%,var(--foreground));color:var(--primary-foreground)}
+    .yomikui-floating-panel .yf-refresh-area{display:flex;align-items:center;padding-left:6px;border-left:1px solid var(--border)}
+    .yomikui-floating-panel .yf-refresh{width:32px;min-height:32px;color:var(--muted-foreground)}
+    .yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:yomikui-floating-spin 1s linear infinite}
+    .yomikui-floating-panel .yf-status{margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:16px;color:var(--muted-foreground)}
+    @keyframes yomikui-floating-spin{to{transform:rotate(360deg)}}
+    @media(pointer:coarse){.yomikui-floating-panel button{min-height:44px}.yomikui-floating-panel .yf-collapse,.yomikui-floating-panel .yf-refresh{width:44px}.yomikui-floating-panel select{height:36px;font-size:12px}}
+    @media(prefers-reduced-motion:reduce){.yomikui-floating-panel button,.yomikui-floating-panel select{transition:none}.yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:none}}
   `.replaceAll('.yomikui-floating-panel', '#yomikui-root .yomikui-floating-panel');
 
   function installStyles() {
@@ -329,6 +342,7 @@
     const [prefs, setPrefs] = React.useState(preferences);
     const [target, setTarget] = React.useState('all');
     const [visible, setVisible] = React.useState(() => new Set());
+    const [lastAction, setLastAction] = React.useState('reading');
     const prefsRef = React.useRef(prefs), dirty = React.useRef(false);
     const panelRef = React.useRef(null), handleRef = React.useRef(null), positionRef = React.useRef(null);
     const eligible = columns.filter(readable);
@@ -387,7 +401,7 @@
     const selected = target === 'all' ? '表示中すべて' : columns.find(column => column.id === target)?.title || '選択した列';
     const selectionVisible = target === 'all' ? visibleColumns.length > 0 : visibleColumns.some(column => column.id === target);
     const icon = name => jsx.jsx('svg', {
-      width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2,
+      width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75,
       strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
       children: jsx.jsx('path', { d: {
         top: 'M5 3h14M12 21V7m-6 6 6-6 6 6', up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
@@ -398,38 +412,45 @@
     const details = reading.results.map(result => `${result.title || '列'}: ${
       result.status === 'moved' ? '移動操作済み' : result.status === 'edge' ? '端に到達' : REASONS[result.reason] || '応答未確認'
     }`).join('\n');
+    const showRefresh = busy || (lastAction === 'refresh' && !reading.busy);
+    const noSelection = !selectionVisible && !busy;
+    const statusText = noSelection ? '画面内に閲覧対象の列がありません' : showRefresh ? refreshText : reading.message;
+    const statusDetails = noSelection ? statusText : showRefresh ? refreshDetails || refreshText : details || reading.message;
+    const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
       ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル',
       children: [
         jsx.jsxs('div', { className: 'yf-header', children: [
-          jsx.jsxs('button', { ref: handleRef, type: 'button', className: 'yf-handle', title: 'ドラッグして移動（矢印キーでも移動）', 'aria-label': '閲覧・更新パネルを移動。矢印キーでも移動できます', children: [icon('grip'), '閲覧・更新'] }),
+          jsx.jsxs('button', { ref: handleRef, type: 'button', className: 'yf-handle', title: 'ドラッグして移動（矢印キーでも移動）', 'aria-label': '閲覧・更新パネルを移動。矢印キーでも移動できます', children: [
+            icon('grip'), jsx.jsx('span', { className: 'yf-title', children: '閲覧・更新' }),
+            prefs.collapsed && jsx.jsx('span', { className: 'yf-summary', title: `${selected} · ${prefs.mode === 'page' ? '画面ごと' : '投稿ごと'}`, children: `${target === 'all' ? `表示中${visibleColumns.length}列` : selected} · ${prefs.mode === 'page' ? '画面' : '投稿'}` }),
+          ] }),
           jsx.jsx('button', { type: 'button', className: 'yf-collapse', 'aria-label': prefs.collapsed ? '設定を展開する' : '設定を折りたたむ', 'aria-expanded': !prefs.collapsed, 'aria-controls': 'yomikui-reading-settings', onClick: () => updatePrefs({ collapsed: !prefs.collapsed }), children: icon(prefs.collapsed ? 'down' : 'up') }),
         ] }),
         jsx.jsxs('div', { className: 'yf-body', children: [
           jsx.jsxs('div', { id: 'yomikui-reading-settings', className: 'yf-fields', hidden: prefs.collapsed, style: prefs.collapsed ? { display: 'none' } : undefined, children: [
-            jsx.jsxs('label', { children: ['閲覧する列', jsx.jsxs('select', { value: target, disabled: busy || reading.busy, onChange: event => setTarget(event.target.value), children: [
+            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '閲覧する列' }), jsx.jsxs('select', { 'aria-label': '閲覧する列', title: '閲覧する列', value: target, disabled: busy || reading.busy, onChange: event => setTarget(event.target.value), children: [
               jsx.jsx('option', { value: 'all', children: '表示中すべて' }),
               ...eligible.map((column, index) => jsx.jsx('option', { value: column.id, disabled: !visible.has(column.id), children: `${index + 1}. ${column.title || '列'}${visible.has(column.id) ? '' : '（画面外）'}` }, column.id)),
-            ] })] }),
-            jsx.jsxs('label', { children: ['移動', jsx.jsxs('select', { value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.target.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] })] }),
+            ] }), icon('down')] }),
+            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '移動方式' }), jsx.jsxs('select', { 'aria-label': '移動方式', title: '移動方式', value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.target.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] }), icon('down')] }),
           ] }),
-          prefs.collapsed && jsx.jsx('div', { className: 'yf-summary', children: `${selected} · ${prefs.mode === 'page' ? '画面ごと' : '投稿ごと'}` }),
-          jsx.jsxs('div', { className: 'yf-steps', children: [
-            jsx.jsxs('button', {
+          jsx.jsxs('div', { className: 'yf-actions', children: [
+            jsx.jsxs('div', { className: 'yf-steps', children: [jsx.jsxs('button', {
               type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
-              title: '一覧の先頭へ戻る', onClick: () => onNavigate({ target, mode: 'top' }), children: [icon('top'), '先頭へ'],
+              'aria-label': '先頭へ', title: '一覧の先頭へ戻る', onClick: () => navigate({ target, mode: 'top' }), children: [icon('top'), '先頭'],
             }),
             ...[-1, 1].map(direction => jsx.jsxs('button', {
               type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
-              onClick: () => onNavigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
+              title: `${prefs.mode === 'page' ? '画面の約8割' : '投稿ごと'}に${direction === 1 ? '下' : '上'}へ移動`,
+              onClick: () => navigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
             }, direction)),
+            ] }),
+            canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
+              jsx.jsx('button', { type: 'button', className: 'yf-refresh', disabled: busy || reading.busy || view.phase === 'cooldown' || view.phase === 'cancelled', 'aria-label': 'ホームを一括更新', 'aria-busy': busy, title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}ホームを一括更新：閲覧する列の選択にかかわらず、ホーム列全体を順番に更新します`, onClick: () => { setLastAction('refresh'); onRefresh(); }, children: icon('refresh') }),
+            }),
           ] }),
-          !selectionVisible && jsx.jsx('div', { className: 'yf-status', children: '画面内に閲覧対象の列がありません' }),
-          reading.message && jsx.jsx('div', { className: 'yf-status', role: 'status', 'aria-live': 'polite', title: details, children: reading.message }),
-          canRefresh && jsx.jsxs('div', { className: 'yf-refresh-area', children: [
-            jsx.jsxs('button', { type: 'button', className: 'yf-refresh', disabled: busy || reading.busy || view.phase === 'cooldown' || view.phase === 'cancelled', 'aria-busy': busy, title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}閲覧する列の選択にかかわらず、ホーム列全体を順番に更新します`, onClick: onRefresh, children: [icon('refresh'), busy ? `更新中 ${view.done}/${view.total}列` : 'ホームを一括更新'] }),
-            refreshText && jsx.jsx('div', { id: 'yomikui-home-refresh-status', className: 'yf-status', role: 'status', 'aria-live': 'polite', title: refreshDetails, children: refreshText }),
-          ] }),
+          statusText && jsx.jsx('div', { id: 'yomikui-home-refresh-status', className: 'yf-status', role: 'status', 'aria-live': 'polite', title: statusDetails, children: statusText }),
         ] }),
       ],
     });

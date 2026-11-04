@@ -102,13 +102,15 @@
     next = Math.max(0, Math.min(limit, next));
     if (!Number.isFinite(next)) return { status: 'skipped', reason: 'unavailable' };
     beforeMove?.();
-    if (Math.abs(next - top) < 1) return { status: 'edge' };
+    const atEdge = Math.abs(next - top) < 1;
+    // An instant top request must also cancel a smooth step that has not painted yet.
+    if (atEdge && mode !== 'top') return { status: 'edge' };
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     const options = { top: next, behavior: mode === 'top' || reduced ? 'instant' : 'smooth' };
     if (scroller?.scrollTo) scroller.scrollTo(options);
     else if (scroller && !rootScroller) scroller.scrollTop = next;
     else window.scrollTo(options);
-    return { status: 'moved' };
+    return { status: atEdge ? 'edge' : 'moved' };
   }
 
   class Tracker {

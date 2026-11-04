@@ -274,8 +274,11 @@ test('panel preferences persist locally in order and normalize invalid values', 
   assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post' });
 });
 
-function panelTree(env, { collapsed = false, phase = 'idle', reading = false, target = 'all', mode = 'post', onNavigate = () => {} } = {}) {
-  const states = [env.api.preferences({ collapsed, mode }), target, new Set(['one'])];
+function panelTree(env, {
+  collapsed = false, phase = 'idle', reading = false, target = 'all', mode = 'post', lastAction = 'reading',
+  readingMessage = '', refreshText = '', onNavigate = () => {}, onRefresh = () => {},
+} = {}) {
+  const states = [env.api.preferences({ collapsed, mode }), target, new Set(['one']), lastAction];
   const react = {
     useState: () => [states.shift(), () => {}], useRef: current => ({ current }), useCallback: fn => fn,
     useEffect() {}, useLayoutEffect() {},
@@ -284,8 +287,8 @@ function panelTree(env, { collapsed = false, phase = 'idle', reading = false, ta
   const tree = env.api.Panel({
     React: react, jsx: { jsx: element, jsxs: element },
     columns: [{ id: 'one', type: 'home', title: 'Home' }],
-    view: { phase, done: 0, total: 1 }, reading: { busy: reading, results: [], message: '' },
-    canRefresh: true, onRefresh() {}, onNavigate,
+    view: { phase, done: 0, total: 1 }, reading: { busy: reading, results: [], message: readingMessage },
+    canRefresh: true, refreshText, onRefresh, onNavigate,
   });
   const nodes = [];
   const visit = node => {
@@ -300,14 +303,31 @@ function panelTree(env, { collapsed = false, phase = 'idle', reading = false, ta
 test('collapsed controls retain top, step actions and the separate all-home refresh', () => {
   const env = setup();
   const actions = [];
-  const nodes = panelTree(env, { collapsed: true, target: 'one', mode: 'page', onNavigate: action => actions.push(clone(action)) });
+  let refreshed = 0;
+  const nodes = panelTree(env, { collapsed: true, target: 'one', mode: 'page', onNavigate: action => actions.push(clone(action)), onRefresh: () => refreshed++ });
   const byClass = name => nodes.find(node => node.props?.className === name);
   assert.equal(byClass('yf-fields').props.hidden, true);
   for (const name of ['yf-top', 'yf-up', 'yf-down', 'yf-refresh']) assert.equal(byClass(name).props.disabled, false);
   byClass('yf-top').props.onClick();
   byClass('yf-down').props.onClick();
   assert.deepEqual(actions, [{ target: 'one', mode: 'top' }, { target: 'one', direction: 1, mode: 'page' }]);
+  assert.equal(byClass('yf-refresh').props['aria-label'], 'ホームを一括更新', 'the icon-only refresh keeps an accessible name');
+  byClass('yf-refresh').props.onClick();
+  assert.equal(refreshed, 1);
   assert.match(byClass('yf-refresh').props.title, /ホーム列全体/);
+});
+
+test('one status line shows the latest operation and keeps full results available as a tooltip', () => {
+  const env = setup();
+  const refresh = panelTree(env, { lastAction: 'refresh', phase: 'cooldown', readingMessage: '移動 1列', refreshText: '表示更新 1列' });
+  const refreshed = refresh.filter(node => node.props?.role === 'status');
+  assert.equal(refreshed.length, 1);
+  assert.equal(refreshed[0].props.children, '表示更新 1列');
+  assert.equal(refreshed[0].props.title, '表示更新 1列');
+  const moving = panelTree(env, { lastAction: 'refresh', reading: true, readingMessage: '1列を移動中', refreshText: '表示更新 1列' });
+  const moved = moving.filter(node => node.props?.role === 'status');
+  assert.equal(moved.length, 1);
+  assert.equal(moved[0].props.children, '1列を移動中');
 });
 
 test('reading controls are disabled while refreshing; refresh cooldown still permits reading', () => {
