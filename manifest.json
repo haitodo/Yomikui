@@ -43,6 +43,7 @@
         "columnLayout.js",
         "tweetActions.js",
         "homeScroll.js",
+        "floatingControls.js",
         "homeRefresh.js",
         "contentDeck.js"
       ],

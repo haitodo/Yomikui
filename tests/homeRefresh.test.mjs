@@ -256,6 +256,69 @@ test('the frame protocol validates sender, origin, column and target, and dedupl
   assert.equal(env.clock.timers.size, 0);
 });
 
+function readingFrameSetup() {
+  const env = setup();
+  env.window.innerHeight = 600;
+  Object.assign(env.scroller, {
+    clientHeight: 600, scrollHeight: 2200, getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+    scrollTo({ top }) { this.scrollTop = top; },
+  });
+  const post = env.document.querySelector('article');
+  post.getBoundingClientRect = () => ({ top: 1000 - env.scroller.scrollTop, height: 180, bottom: 1180 - env.scroller.scrollTop });
+  const installed = env.api.installFrame(env.options);
+  env.send = (data, event = {}) => env.window.emit('message', {
+    source: env.window.parent, origin: 'https://x.com', data: { columnId: 'column1', requestId: 'read1', ...data }, ...event,
+  });
+  return { ...env, installed };
+}
+
+test('native reading validates commands and deduplicates repeated steps', () => {
+  const env = readingFrameSetup();
+  const data = { type: P + 'navigate', direction: 1, mode: 'post' };
+  env.send(data, { source: {} });
+  env.send(data, { origin: 'https://evil.example' });
+  env.send({ ...data, columnId: 'another' });
+  env.send({ ...data, direction: 10 });
+  env.send({ ...data, mode: 'automatic' });
+  assert.equal(env.scroller.scrollTop, 800);
+  assert.equal(env.messages.length, 0);
+  env.send(data);
+  assert.equal(env.scroller.scrollTop, 1000);
+  assert.equal(env.messages.at(-1).data.status, 'moved');
+  env.send(data);
+  assert.equal(env.scroller.scrollTop, 1000);
+  env.installed.dispose();
+  assert.equal(env.clock.timers.size, 0);
+});
+
+test('offscreen native frames reject reading commands', () => {
+  const env = readingFrameSetup();
+  env.send({ type: 'yomikui-column-visibility', visible: false });
+  env.send({ type: P + 'navigate', direction: 1, mode: 'post' });
+  assert.equal(env.messages.at(-1).data.reason, 'hidden');
+  assert.equal(env.scroller.scrollTop, 800);
+  env.installed.dispose();
+});
+
+test('reading cannot interrupt a native refresh but cancels its remaining scroll correction afterwards', async () => {
+  const env = readingFrameSetup();
+  env.document.getElementById('recommended').addEventListener('click', () => {
+    env.document.querySelector('article a').setAttribute('href', '/author/status/202');
+  });
+  env.send({ type: P + 'request', target: 'recommended', requestId: 'refresh1' });
+  env.send({ type: P + 'navigate', direction: 1, mode: 'post', requestId: 'too-early' });
+  assert.equal(env.messages.at(-1).data.reason, 'busy');
+  await settle();
+  await env.clock.advance(200);
+  assert.equal(env.messages.at(-1).data.status, 'updated');
+  env.send({ type: P + 'navigate', direction: 1, mode: 'page' });
+  assert.equal(env.scroller.scrollTop, 480);
+  await env.clock.advance(6500);
+  assert.equal(env.scroller.scrollTop, 480, 'the refresh tracker must not snap a reading action back to the top');
+  env.installed.dispose();
+  assert.equal(env.clock.timers.size, 0);
+});
+
 function batchSetup({ columns, quiet, late } = {}) {
   const env = setup();
   const state = {

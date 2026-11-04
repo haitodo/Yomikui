@@ -38,6 +38,97 @@ async function prepend(env) {
   await env.clock.advance(0);
 }
 
+function readingSetup() {
+  const env = setup();
+  env.document.hidden = false;
+  Object.assign(env.scroller, {
+    clientHeight: 600, scrollHeight: 2000,
+    getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+    scrollTo({ top }) { this.scrollTop = top; },
+  });
+  env.navigate = (direction = 1, mode = 'post', beforeMove) => env.api.navigate({
+    getSettings: () => env.settings, getScroller: () => env.scroller, direction, mode, beforeMove,
+  });
+  return env;
+}
+
+test('reading steps align a post and go back to a partially read post before its predecessor', () => {
+  const env = readingSetup();
+  assert.equal(env.navigate().status, 'moved');
+  assert.equal(env.scroller.scrollTop, 300);
+  env.scroller.scrollTop = 350;
+  env.navigate(-1);
+  assert.equal(env.scroller.scrollTop, 300);
+  env.navigate(-1);
+  assert.equal(env.scroller.scrollTop, 100);
+});
+
+test('reading a tall post uses overlapping screenfuls in both directions', () => {
+  const env = readingSetup();
+  env.document.querySelector('[data-y="300"]').setAttribute('data-y', '1400');
+  env.navigate();
+  assert.equal(env.scroller.scrollTop, 580);
+  env.navigate();
+  assert.equal(env.scroller.scrollTop, 1060);
+  env.navigate(-1);
+  assert.equal(env.scroller.scrollTop, 580);
+  assert.ok(env.scroller.scrollTop > 100);
+});
+
+test('page reading uses the visible scroller height, accounts for offsets, and clamps at edges', () => {
+  const env = readingSetup();
+  env.scroller.getBoundingClientRect = () => ({ top: 50, bottom: 650 });
+  env.navigate(1, 'page');
+  assert.equal(env.scroller.scrollTop, 540, '550 visible pixels advance by 80%');
+  env.scroller.scrollTop = 1390;
+  env.navigate(1, 'page');
+  assert.equal(env.scroller.scrollTop, 1400);
+  assert.equal(env.navigate(1, 'page').status, 'edge');
+  env.scroller.scrollTop = 10;
+  env.navigate(-1, 'page');
+  assert.equal(env.scroller.scrollTop, 0);
+});
+
+test('reading remains available on Following and does not click any X controls', () => {
+  const env = readingSetup();
+  env.settings.columnType = 'following';
+  env.document.querySelector('[role="tab"]').textContent = 'フォロー中';
+  let clicks = 0;
+  env.document.addEventListener('click', () => clicks++);
+  let cancelled = 0;
+  assert.equal(env.navigate(1, 'post', () => cancelled++).status, 'moved');
+  assert.equal(cancelled, 1);
+  assert.equal(clicks, 0);
+});
+
+test('reading skips unavailable, modal, composing and non-native pages without moving', () => {
+  const variants = [
+    env => { env.document.hidden = true; },
+    env => { env.document.body.innerHTML += '<div role="dialog"></div>'; },
+    env => { env.document.body.innerHTML += '<div data-testid="tweetTextarea_0" contenteditable="true">draft</div>'; },
+    env => { env.document.body.innerHTML += '<div data-testid="attachments"><img></div>'; },
+    env => { env.settings.isLiveFeedColumn = true; },
+    env => { env.settings.isTimelineColumn = true; },
+    env => { env.window.location.pathname = '/someone/status/123'; },
+    env => { env.document.querySelector('[data-testid="primaryColumn"]').innerHTML = ''; },
+  ];
+  for (const change of variants) {
+    const env = readingSetup();
+    change(env);
+    assert.equal(env.navigate().status, 'skipped');
+    assert.equal(env.scroller.scrollTop, 100);
+  }
+});
+
+test('virtualized lists with no preceding rendered anchor scroll back one screenful', () => {
+  const env = readingSetup();
+  env.scroller.scrollTop = 1000;
+  env.document.querySelector('[data-y="100"]').setAttribute('data-y', '1300');
+  env.document.querySelector('[data-y="300"]').setAttribute('data-y', '1500');
+  env.navigate(-1);
+  assert.equal(env.scroller.scrollTop, 520);
+});
+
 test('standard mode returns to the newest post after insertion and late X scroll corrections', async () => {
   const env = setup();
   env.tracker.request(env.tracker.begin());

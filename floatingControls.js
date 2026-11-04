@@ -1,0 +1,433 @@
+// Dashboard-only UI and reading requests. Timeline refreshes remain sequential.
+(() => {
+  if (globalThis.YomikuiFloatingControls) return;
+  const PREFIX = 'yomikui-home-refresh-';
+  const STORAGE_KEY = 'yomikui_floating_controls_v1';
+  const trusted = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
+  const clamp = value => Math.max(0, Math.min(1, value));
+  const readable = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
+  const REASONS = {
+    hidden: '画面外・非表示', draft: '投稿を入力中', dialog: 'ダイアログを表示中',
+    busy: '更新を処理中', 'not-timeline': '投稿一覧以外を表示中', unavailable: '投稿一覧を確認できませんでした',
+    timeout: '列の応答を確認できませんでした', cancelled: '操作を中止しました', error: '移動操作に失敗しました',
+  };
+
+  function preferences(value) {
+    return {
+      x: Number.isFinite(value?.x) ? clamp(value.x) : 1,
+      y: Number.isFinite(value?.y) ? clamp(value.y) : 1,
+      collapsed: value?.collapsed === true,
+      mode: value?.mode === 'page' ? 'page' : 'post',
+    };
+  }
+
+  async function loadPreferences() {
+    try { return preferences((await chrome.storage.local.get(STORAGE_KEY))[STORAGE_KEY]); }
+    catch { return preferences(); }
+  }
+
+  let saving = Promise.resolve();
+  function savePreferences(value) {
+    const next = preferences(value);
+    saving = saving.then(async () => {
+      try { await chrome.storage.local.set({ [STORAGE_KEY]: next }); } catch {}
+    });
+    return saving;
+  }
+
+  // The rack's existing observer includes a 200px preload margin. Reading must
+  // use the actual visible area instead, and must never mount an offscreen frame.
+  function visibleColumnIds() {
+    const rack = document.querySelector('.rd-rack');
+    if (!rack) return new Set();
+    const rect = rack.getBoundingClientRect();
+    const left = Math.max(0, rect.left), right = Math.min(window.innerWidth, rect.right);
+    const top = Math.max(0, rect.top), bottom = Math.min(window.innerHeight, rect.bottom);
+    if (right <= left || bottom <= top) return new Set();
+    return new Set([...rack.querySelectorAll('[data-column-id]')].filter(element => {
+      const bounds = element.getBoundingClientRect();
+      // Fractional column widths can leave a subpixel sliver of the next column.
+      return Math.min(bounds.right, right) - Math.max(bounds.left, left) >= 1 &&
+        Math.min(bounds.bottom, bottom) - Math.max(bounds.top, top) >= 1;
+    }).map(element => element.getAttribute('data-column-id')));
+  }
+
+  class ReadingController {
+    constructor({ getState, getFrame, getVisibleIds = visibleColumnIds, onChange }) {
+      Object.assign(this, { getState, getFrame, getVisibleIds, onChange });
+      this.pending = new Map();
+      this.active = null;
+      this.receive = this.receive.bind(this);
+      this.onVisibility = () => { if (document.hidden) this.cancel(); };
+      this.onPageHide = () => this.cancel();
+      window.addEventListener('message', this.receive);
+      window.addEventListener('pagehide', this.onPageHide);
+      document.addEventListener('visibilitychange', this.onVisibility);
+    }
+
+    receive(event) {
+      const data = event.data;
+      const pending = this.pending.get(data?.requestId);
+      if (!pending || data.type !== PREFIX + 'navigated' || data.columnId !== pending.columnId ||
+          event.source !== pending.frame || event.origin !== pending.origin || !trusted(event.origin) ||
+          !['moved', 'edge', 'skipped', 'failed'].includes(data.status)) return;
+      pending.finish({ status: data.status, reason: data.reason });
+    }
+
+    request(column, frame, direction, mode) {
+      return new Promise(resolve => {
+        const id = crypto.randomUUID();
+        const pending = { columnId: column.id, frame: frame.window, origin: frame.origin };
+        pending.finish = result => {
+          if (!this.pending.delete(id)) return;
+          clearTimeout(pending.timer);
+          resolve({ columnId: column.id, title: column.title, ...result });
+        };
+        this.pending.set(id, pending);
+        pending.timer = setTimeout(() => pending.finish({ status: 'failed', reason: 'timeout' }), 1200);
+        try { frame.window.postMessage({ type: PREFIX + 'navigate', requestId: id, columnId: column.id, direction, mode }, frame.origin); }
+        catch { pending.finish({ status: 'failed', reason: 'error' }); }
+      });
+    }
+
+    async move({ target = 'all', direction, mode }) {
+      if (this.disposed || this.active || document.hidden || (direction !== 1 && direction !== -1) || !['post', 'page'].includes(mode)) return;
+      const state = this.getState();
+      const visible = this.getVisibleIds();
+      const columns = state.columns.filter(column => readable(column) && visible.has(column.id) && (target === 'all' || target === column.id));
+      if (!columns.length) {
+        this.onChange({ busy: false, results: [], message: '画面内に閲覧対象の列がありません' });
+        return;
+      }
+      const job = { workspaceId: state.activeWorkspaceId, cancelled: false };
+      this.active = job;
+      const started = Date.now();
+      this.onChange({ busy: true, results: [], message: `${columns.length}列を移動中` });
+      let results = [];
+      try {
+        results = await Promise.all(columns.map(column => {
+          if (job.cancelled) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'cancelled' };
+          const frame = this.getFrame(column.id);
+          if (state.columnComposing?.[column.id]) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'draft' };
+          if (!frame?.window || !trusted(frame.origin)) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'unavailable' };
+          state.markColumnActivity?.(column.id);
+          return this.request(column, frame, direction, mode);
+        }));
+        // Bound rapid clicks without queuing steps or running a repeat timer.
+        const remaining = 300 - (Date.now() - started);
+        if (remaining > 0 && !job.cancelled) await new Promise(resolve => {
+          job.release = resolve;
+          job.timer = setTimeout(resolve, remaining);
+        });
+      } catch {
+        for (const pending of this.pending.values()) pending.finish({ status: 'failed', reason: 'error' });
+        results = [{ status: 'failed', reason: 'error' }];
+      } finally {
+        clearTimeout(job.timer);
+        this.active = null;
+        if (!this.disposed) this.onChange({ busy: false, results, message: job.cancelled ? '閲覧操作を中止しました' : readingSummary(results) });
+      }
+    }
+
+    syncState() {
+      if (!this.active) return;
+      const state = this.getState();
+      if (state.activeWorkspaceId !== this.active.workspaceId) { this.cancel(); return; }
+      for (const pending of this.pending.values()) {
+        if (!state.columns.some(column => column.id === pending.columnId && readable(column))) pending.finish({ status: 'skipped', reason: 'cancelled' });
+      }
+    }
+
+    cancel() {
+      if (!this.active) return;
+      this.active.cancelled = true;
+      for (const pending of this.pending.values()) pending.finish({ status: 'skipped', reason: 'cancelled' });
+      this.active.release?.();
+    }
+
+    dispose() {
+      this.disposed = true;
+      this.cancel();
+      window.removeEventListener('message', this.receive);
+      window.removeEventListener('pagehide', this.onPageHide);
+      document.removeEventListener('visibilitychange', this.onVisibility);
+    }
+  }
+
+  function readingSummary(results) {
+    const count = status => results.filter(result => result.status === status).length;
+    return [
+      count('moved') && `移動 ${count('moved')}列`,
+      count('edge') && `端に到達 ${count('edge')}列`,
+      count('skipped') && `スキップ ${count('skipped')}列`,
+      count('failed') && `応答未確認 ${count('failed')}列`,
+    ].filter(Boolean).join(' ／ ');
+  }
+
+  // Imperative position updates avoid rerendering React or saving storage on
+  // every pointer move. The transparent shield keeps iframe content inert.
+  class PanelPosition {
+    constructor({ panel, handle, position, onCommit }) {
+      Object.assign(this, { panel, handle, onCommit });
+      this.position = preferences(position);
+      this.listeners = [];
+      const listen = (target, type, callback, options) => {
+        target?.addEventListener(type, callback, options);
+        this.listeners.push(() => target?.removeEventListener(type, callback, options));
+      };
+      listen(handle, 'pointerdown', event => this.start(event));
+      listen(handle, 'pointermove', event => this.move(event));
+      listen(handle, 'pointerup', event => this.end(event));
+      listen(handle, 'pointercancel', event => this.end(event, true));
+      listen(handle, 'lostpointercapture', event => this.end(event, true));
+      listen(handle, 'keydown', event => this.key(event));
+      listen(window, 'resize', () => this.place());
+      listen(window.visualViewport, 'resize', () => this.place());
+      listen(window.visualViewport, 'scroll', () => this.place());
+      listen(window, 'pagehide', () => this.end(null, true));
+      listen(document, 'visibilitychange', () => { if (document.hidden) this.end(null, true); });
+      if (typeof ResizeObserver !== 'undefined') {
+        this.observer = new ResizeObserver(() => this.place());
+        this.observer.observe(panel);
+      }
+      this.place();
+    }
+
+    bounds() {
+      const viewport = window.visualViewport;
+      const width = viewport?.width ?? window.innerWidth, height = viewport?.height ?? window.innerHeight;
+      return {
+        left: (viewport?.offsetLeft ?? 0) + 8,
+        top: (viewport?.offsetTop ?? 0) + 8,
+        x: Math.max(0, width - this.panel.offsetWidth - 16),
+        y: Math.max(0, height - this.panel.offsetHeight - 16),
+        scaleX: Math.max(1, width - 16), scaleY: Math.max(1, height - 16),
+      };
+    }
+
+    coordinates(bounds = this.bounds()) {
+      return {
+        left: bounds.left + Math.min(bounds.x, bounds.scaleX * this.position.x),
+        top: bounds.top + Math.min(bounds.y, bounds.scaleY * this.position.y),
+      };
+    }
+
+    place() {
+      this.panel.style.maxWidth = `${Math.max(0, (window.visualViewport?.width ?? window.innerWidth) - 16)}px`;
+      this.panel.style.maxHeight = `${Math.max(0, (window.visualViewport?.height ?? window.innerHeight) - 16)}px`;
+      const point = this.coordinates();
+      this.panel.style.left = `${point.left}px`;
+      this.panel.style.top = `${point.top}px`;
+      this.panel.style.right = 'auto';
+      this.panel.style.bottom = 'auto';
+    }
+
+    setPosition(position) {
+      if (!this.drag) { this.position = preferences(position); this.place(); }
+    }
+
+    placeAt(left, top) {
+      const bounds = this.bounds();
+      // Coordinates use the viewport, so changing status text or folding the
+      // settings does not shift an interior header. A value of 1 anchors an edge.
+      if (bounds.x) this.position.x = left >= bounds.left + bounds.x - 1 ? 1 : clamp((left - bounds.left) / bounds.scaleX);
+      if (bounds.y) this.position.y = top >= bounds.top + bounds.y - 1 ? 1 : clamp((top - bounds.top) / bounds.scaleY);
+      this.place();
+    }
+
+    start(event) {
+      if (event.button !== 0 || this.drag) return;
+      event.preventDefault();
+      this.handle.focus({ preventScroll: true });
+      const point = this.coordinates();
+      this.drag = {
+        id: event.pointerId, clientX: event.clientX, clientY: event.clientY,
+        left: point.left, top: point.top,
+        previous: { ...this.position }, moved: false,
+      };
+      this.shield = document.createElement('div');
+      Object.assign(this.shield.style, { position: 'fixed', inset: '0', zIndex: '799', cursor: 'grabbing', touchAction: 'none' });
+      this.shield.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(this.shield);
+      this.handle.style.cursor = 'grabbing';
+      try { this.handle.setPointerCapture(event.pointerId); } catch { this.end(null, true); }
+    }
+
+    move(event) {
+      if (!this.drag || this.drag.id !== event.pointerId) return;
+      const dx = event.clientX - this.drag.clientX, dy = event.clientY - this.drag.clientY;
+      if (!this.drag.moved && Math.hypot(dx, dy) < 4) return;
+      this.drag.moved = true;
+      this.placeAt(this.drag.left + dx, this.drag.top + dy);
+    }
+
+    end(event, cancelled = false) {
+      if (!this.drag || (event && event.pointerId !== undefined && event.pointerId !== this.drag.id)) return;
+      const drag = this.drag;
+      this.drag = null;
+      this.shield?.remove();
+      this.shield = null;
+      this.handle.style.cursor = 'grab';
+      if (cancelled) { this.position = drag.previous; this.place(); }
+      try { this.handle.releasePointerCapture(drag.id); } catch {}
+      if (!cancelled && drag.moved) this.onCommit({ x: this.position.x, y: this.position.y });
+    }
+
+    key(event) {
+      if (event.key === 'Escape' && this.drag) { event.preventDefault(); this.end(null, true); return; }
+      const delta = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[event.key];
+      if (!delta || this.drag) return;
+      event.preventDefault();
+      const point = this.coordinates(), step = event.shiftKey ? 40 : 10;
+      this.placeAt(point.left + delta[0] * step, point.top + delta[1] * step);
+      this.onCommit({ x: this.position.x, y: this.position.y });
+    }
+
+    dispose() {
+      this.end(null, true);
+      this.observer?.disconnect();
+      this.listeners.forEach(remove => remove());
+    }
+  }
+
+  const STYLE_MARKER = '/* yomikui-floating-controls */';
+  const CSS = `
+    .yomikui-floating-panel{position:fixed;right:20px;bottom:24px;z-index:800;width:286px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;border:1px solid var(--border);border-radius:13px;background:var(--card);color:var(--foreground);box-shadow:0 5px 20px #0003;font-size:13px}
+    .yomikui-floating-panel *{box-sizing:border-box}
+    .yomikui-floating-panel .yf-header{display:flex;position:sticky;top:0;z-index:1;background:var(--card);border-bottom:1px solid var(--border)}
+    .yomikui-floating-panel button{display:flex;align-items:center;justify-content:center;gap:6px;min-height:38px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--secondary);color:var(--foreground);font:inherit;cursor:pointer;touch-action:manipulation}
+    .yomikui-floating-panel button:disabled{opacity:.5;cursor:default}
+    .yomikui-floating-panel button:focus-visible,.yomikui-floating-panel select:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
+    .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;border:0;border-radius:0;background:transparent;padding:10px 11px;cursor:grab;touch-action:none;user-select:none}
+    .yomikui-floating-panel .yf-collapse{width:40px;border:0;border-radius:0;background:transparent}
+    .yomikui-floating-panel .yf-body{padding:12px}
+    .yomikui-floating-panel .yf-fields{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:10px;margin-bottom:10px}
+    .yomikui-floating-panel label{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:12px;color:var(--muted-foreground)}
+    .yomikui-floating-panel select{width:100%;min-width:0;padding:7px 4px;border:1px solid var(--border);border-radius:7px;background:var(--background);color:var(--foreground);font:inherit}
+    .yomikui-floating-panel .yf-summary{font-size:12px;color:var(--muted-foreground);margin-bottom:9px;overflow-wrap:anywhere}
+    .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .yomikui-floating-panel .yf-down{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+    .yomikui-floating-panel .yf-refresh-area{border-top:1px solid var(--border);margin-top:12px;padding-top:12px}
+    .yomikui-floating-panel .yf-refresh{width:100%;background:var(--card)}
+    .yomikui-floating-panel .yf-status{margin-top:9px;font-size:12px;color:var(--muted-foreground);overflow-wrap:anywhere}
+    @media(pointer:coarse){.yomikui-floating-panel button{min-height:44px}.yomikui-floating-panel .yf-collapse{width:44px}.yomikui-floating-panel .yf-fields{grid-template-columns:1fr}.yomikui-floating-panel select{font-size:16px}}
+  `.replaceAll('.yomikui-floating-panel', '#yomikui-root .yomikui-floating-panel');
+
+  function installStyles() {
+    // The dashboard removes every other stylesheet on head mutations. Extend
+    // its protected sheet instead of rendering a separate React <style> node.
+    // The root prefix also takes precedence over the dashboard's margin reset.
+    const style = document.getElementById('yomikui-styles');
+    if (!style) return false;
+    if (!style.textContent.includes(STYLE_MARKER)) {
+      style.appendChild(document.createTextNode(`\n${STYLE_MARKER}\n${CSS}`));
+    }
+    return true;
+  }
+
+  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onNavigate }) {
+    const [prefs, setPrefs] = React.useState(preferences);
+    const [target, setTarget] = React.useState('all');
+    const [visible, setVisible] = React.useState(() => new Set());
+    const prefsRef = React.useRef(prefs), dirty = React.useRef(false);
+    const panelRef = React.useRef(null), handleRef = React.useRef(null), positionRef = React.useRef(null);
+    const eligible = columns.filter(readable);
+    const available = eligible.length > 0 || canRefresh;
+    const useLayoutEffect = React.useLayoutEffect ?? React.useEffect;
+    const updatePrefs = React.useCallback(patch => {
+      dirty.current = true;
+      const next = preferences({ ...prefsRef.current, ...patch });
+      prefsRef.current = next;
+      setPrefs(next);
+      savePreferences(next);
+    }, []);
+    React.useEffect(() => {
+      let mounted = true;
+      loadPreferences().then(value => {
+        if (mounted && !dirty.current) { prefsRef.current = value; setPrefs(value); }
+      });
+      return () => { mounted = false; };
+    }, []);
+    useLayoutEffect(() => {
+      if (hidden || !available || !panelRef.current || !handleRef.current) return;
+      installStyles();
+      const position = new PanelPosition({ panel: panelRef.current, handle: handleRef.current, position: prefsRef.current, onCommit: updatePrefs });
+      positionRef.current = position;
+      return () => { position.dispose(); positionRef.current = null; };
+    }, [hidden, available, updatePrefs]);
+    useLayoutEffect(() => { positionRef.current?.setPosition(prefs); }, [prefs]);
+    React.useEffect(() => {
+      if (target !== 'all' && !columns.some(column => column.id === target && readable(column))) setTarget('all');
+    }, [columns, target]);
+    React.useEffect(() => {
+      if (hidden || !available) return;
+      let scheduled = null;
+      const update = () => {
+        scheduled = null;
+        const ids = visibleColumnIds();
+        setVisible(previous => previous.size === ids.size && [...previous].every(id => ids.has(id)) ? previous : ids);
+      };
+      const schedule = () => { if (scheduled === null) scheduled = requestAnimationFrame(update); };
+      const rack = document.querySelector('.rd-rack');
+      update();
+      rack?.addEventListener('scroll', schedule, { passive: true });
+      window.addEventListener('resize', schedule);
+      const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null;
+      if (rack) observer?.observe(rack);
+      return () => {
+        rack?.removeEventListener('scroll', schedule);
+        window.removeEventListener('resize', schedule);
+        observer?.disconnect();
+        if (scheduled !== null) cancelAnimationFrame(scheduled);
+      };
+    }, [hidden, available, columns]);
+    if (hidden || !available) return null;
+    const busy = view.phase === 'running';
+    const visibleColumns = eligible.filter(column => visible.has(column.id));
+    const selected = target === 'all' ? '表示中すべて' : columns.find(column => column.id === target)?.title || '選択した列';
+    const selectionVisible = target === 'all' ? visibleColumns.length > 0 : visibleColumns.some(column => column.id === target);
+    const icon = name => jsx.jsx('svg', {
+      width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2,
+      strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
+      children: jsx.jsx('path', { d: {
+        up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
+        grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
+        refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 17.9 17',
+      }[name] }),
+    });
+    const details = reading.results.map(result => `${result.title || '列'}: ${
+      result.status === 'moved' ? '移動操作済み' : result.status === 'edge' ? '端に到達' : REASONS[result.reason] || '応答未確認'
+    }`).join('\n');
+    return jsx.jsxs('section', {
+      ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル',
+      children: [
+        jsx.jsxs('div', { className: 'yf-header', children: [
+          jsx.jsxs('button', { ref: handleRef, type: 'button', className: 'yf-handle', title: 'ドラッグして移動（矢印キーでも移動）', 'aria-label': '閲覧・更新パネルを移動。矢印キーでも移動できます', children: [icon('grip'), '閲覧・更新'] }),
+          jsx.jsx('button', { type: 'button', className: 'yf-collapse', 'aria-label': prefs.collapsed ? '設定を展開する' : '設定を折りたたむ', 'aria-expanded': !prefs.collapsed, 'aria-controls': 'yomikui-reading-settings', onClick: () => updatePrefs({ collapsed: !prefs.collapsed }), children: icon(prefs.collapsed ? 'down' : 'up') }),
+        ] }),
+        jsx.jsxs('div', { className: 'yf-body', children: [
+          jsx.jsxs('div', { id: 'yomikui-reading-settings', className: 'yf-fields', hidden: prefs.collapsed, style: prefs.collapsed ? { display: 'none' } : undefined, children: [
+            jsx.jsxs('label', { children: ['閲覧する列', jsx.jsxs('select', { value: target, disabled: busy || reading.busy, onChange: event => setTarget(event.target.value), children: [
+              jsx.jsx('option', { value: 'all', children: '表示中すべて' }),
+              ...eligible.map((column, index) => jsx.jsx('option', { value: column.id, disabled: !visible.has(column.id), children: `${index + 1}. ${column.title || '列'}${visible.has(column.id) ? '' : '（画面外）'}` }, column.id)),
+            ] })] }),
+            jsx.jsxs('label', { children: ['移動', jsx.jsxs('select', { value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.target.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] })] }),
+          ] }),
+          prefs.collapsed && jsx.jsx('div', { className: 'yf-summary', children: `${selected} · ${prefs.mode === 'page' ? '画面ごと' : '投稿ごと'}` }),
+          jsx.jsxs('div', { className: 'yf-steps', children: [-1, 1].map(direction => jsx.jsxs('button', {
+            type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
+            onClick: () => onNavigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
+          }, direction)) }),
+          !selectionVisible && jsx.jsx('div', { className: 'yf-status', children: '画面内に閲覧対象の列がありません' }),
+          reading.message && jsx.jsx('div', { className: 'yf-status', role: 'status', 'aria-live': 'polite', title: details, children: reading.message }),
+          canRefresh && jsx.jsxs('div', { className: 'yf-refresh-area', children: [
+            jsx.jsxs('button', { type: 'button', className: 'yf-refresh', disabled: busy || reading.busy || view.phase === 'cooldown' || view.phase === 'cancelled', 'aria-busy': busy, title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}閲覧する列の選択にかかわらず、ホーム列全体を順番に更新します`, onClick: onRefresh, children: [icon('refresh'), busy ? `更新中 ${view.done}/${view.total}列` : 'ホームを一括更新'] }),
+            refreshText && jsx.jsx('div', { id: 'yomikui-home-refresh-status', className: 'yf-status', role: 'status', 'aria-live': 'polite', title: refreshDetails, children: refreshText }),
+          ] }),
+        ] }),
+      ],
+    });
+  }
+
+  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, visibleColumnIds, preferences, loadPreferences, savePreferences, readingSummary, installStyles });
+})();

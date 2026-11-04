@@ -7,6 +7,8 @@
     (tab?.getAttribute('aria-label') || tab?.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase(),
   );
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
+  const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'customUrl']);
+  const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
   const articles = () => [...primary()?.querySelectorAll('article[data-testid="tweet"]') ?? []];
   const tweetId = article => (article.querySelector('time')?.closest('a[href*="/status/"]') ??
     article.querySelector('a[href*="/status/"]'))?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1];
@@ -47,6 +49,64 @@
         else element.setAttribute('style', style);
       }
     }
+  }
+
+  // One explicit reading action, using only the existing rendered timeline.
+  // Keep a screenful of a long post readable before advancing to the next one.
+  function navigate({ getSettings, getScroller, direction, mode, beforeMove }) {
+    if ((direction !== 1 && direction !== -1) || !['post', 'page'].includes(mode)) {
+      return { status: 'skipped', reason: 'unavailable' };
+    }
+    const settings = getSettings();
+    if (!isReadableColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) ||
+        settings?.isTimelineColumn || /\/status\/\d+|^\/(?:compose|messages)(?:\/|$)|^\/i\/(?:chat|grok)(?:\/|$)/.test(window.location.pathname)) {
+      return { status: 'skipped', reason: 'not-timeline' };
+    }
+    if (document.hidden) return { status: 'skipped', reason: 'hidden' };
+    if (document.querySelector('[role="dialog"]')) return { status: 'skipped', reason: 'dialog' };
+    for (const editor of document.querySelectorAll(
+      '[data-testid^="tweetTextarea_"][contenteditable="true"], textarea[data-testid^="tweetTextarea_"]',
+    )) {
+      if ((editor.tagName === 'TEXTAREA' ? editor.value : editor.textContent)?.trim()) return { status: 'skipped', reason: 'draft' };
+    }
+    for (const attachment of document.querySelectorAll('[data-testid="attachments"]')) {
+      if (!attachment.closest('article') && attachment.querySelector('img, video, [data-testid="removeMedia"], [data-testid="removeMediaButton"]')) {
+        return { status: 'skipped', reason: 'draft' };
+      }
+    }
+    const scroller = getScroller();
+    const rootScroller = !scroller || scroller === document.scrollingElement ||
+      scroller === document.documentElement || scroller === document.body;
+    const rect = rootScroller ? null : scroller.getBoundingClientRect();
+    const height = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
+    const posts = articles().filter(article => article.getBoundingClientRect().height > 0);
+    if (!posts.length || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
+    const top = scroller?.scrollTop ?? window.scrollY ?? 0;
+    const viewportTop = rootScroller ? 0 : Math.max(0, rect.top);
+    const stride = height * .8;
+    const extent = scroller?.scrollHeight ?? document.documentElement.scrollHeight;
+    const limit = Math.max(0, extent - (rootScroller ? window.innerHeight : scroller.clientHeight));
+    let next = top + direction * stride;
+    if (mode === 'post') {
+      const anchors = posts.map(post => top + post.getBoundingClientRect().top - viewportTop).sort((a, b) => a - b);
+      if (direction > 0) {
+        const anchor = anchors.find(value => value > top + 4);
+        if (anchor !== undefined) next = Math.min(next, anchor);
+      } else {
+        const anchor = anchors.filter(value => value < top - 4).at(-1);
+        next = anchor === undefined ? Math.max(0, next) : Math.max(next, anchor);
+      }
+    }
+    next = Math.max(0, Math.min(limit, next));
+    if (!Number.isFinite(next)) return { status: 'skipped', reason: 'unavailable' };
+    beforeMove?.();
+    if (Math.abs(next - top) < 1) return { status: 'edge' };
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const options = { top: next, behavior: reduced ? 'instant' : 'smooth' };
+    if (scroller?.scrollTo) scroller.scrollTo(options);
+    else if (scroller && !rootScroller) scroller.scrollTop = next;
+    else window.scrollTo(options);
+    return { status: 'moved' };
   }
 
   class Tracker {
@@ -193,5 +253,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, navigate });
 })();

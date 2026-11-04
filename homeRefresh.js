@@ -8,6 +8,8 @@
   const REQUEST = PREFIX + 'request';
   const RESULT = PREFIX + 'result';
   const CANCEL = PREFIX + 'cancel';
+  const NAVIGATE = PREFIX + 'navigate';
+  const NAVIGATED = PREFIX + 'navigated';
   const COOLDOWN = 5000;
   const FRAME_TIMEOUT = 12000;
   const REQUEST_TIMEOUT = 11000;
@@ -200,7 +202,9 @@
     const refresher = new NativeRefresher(options);
     const disposePositions = refresher.positions.install();
     const completed = new Map();
+    const navigated = new Map();
     let active = null;
+    let visible = true;
     const send = (type, requestId, value = {}) => {
       const origin = options.getOrigin();
       if (trustedOrigin(origin)) window.parent.postMessage({
@@ -209,9 +213,23 @@
     };
     const onMessage = event => {
       const data = event.data;
-      if (event.source !== window.parent || event.origin !== options.getOrigin() || !trustedOrigin(event.origin) ||
-          !data || data.columnId !== options.getColumnId() || typeof data.requestId !== 'string' ||
+      if (event.source !== window.parent || event.origin !== options.getOrigin() || !trustedOrigin(event.origin) || !data) return;
+      if (data.type === 'yomikui-column-visibility') { visible = data.visible === true; return; }
+      if (data.columnId !== options.getColumnId() || typeof data.requestId !== 'string' ||
           data.requestId.length < 1 || data.requestId.length > 100) return;
+      if (data.type === NAVIGATE) {
+        if ((data.direction !== 1 && data.direction !== -1) || !['post', 'page'].includes(data.mode)) return;
+        if (navigated.has(data.requestId)) { send(NAVIGATED, data.requestId, navigated.get(data.requestId)); return; }
+        let result;
+        try {
+          result = active ? { status: 'skipped', reason: 'busy' } : !visible ? { status: 'skipped', reason: 'hidden' } :
+            globalThis.YomikuiHomeScroll.navigate({ ...options, direction: data.direction, mode: data.mode, beforeMove: () => refresher.positions.cancel() });
+        } catch { result = { status: 'failed', reason: 'error' }; }
+        navigated.set(data.requestId, result);
+        if (navigated.size > 32) navigated.delete(navigated.keys().next().value);
+        send(NAVIGATED, data.requestId, result);
+        return;
+      }
       if (data.type === PROBE) { send(READY, data.requestId); return; }
       if (data.type === CANCEL) {
         if (active?.id === data.requestId) active.abort.abort();
@@ -436,46 +454,33 @@
 
   function FloatingControl({ React, jsx, store, columns, frames, origins, onMountChange, hidden }) {
     const [view, setView] = React.useState({ phase: 'idle', results: [], total: 0, done: 0 });
+    const [reading, setReading] = React.useState({ busy: false, results: [], message: '' });
     const controller = React.useRef(null);
+    const reader = React.useRef(null);
     React.useEffect(() => {
+      const getFrame = id => {
+        const frame = frames.current.get(id);
+        return frame ? { window: frame, origin: origins.current.get(id) ?? window.location.origin } : null;
+      };
       const batch = new BatchRefresher({
         getState: store.getState,
-        getFrame: id => {
-          const frame = frames.current.get(id);
-          return frame ? { window: frame, origin: origins.current.get(id) ?? window.location.origin } : null;
-        },
+        getFrame,
         setMounted: onMountChange, onChange: setView,
       });
+      const navigation = new globalThis.YomikuiFloatingControls.ReadingController({ getState: store.getState, getFrame, onChange: setReading });
       controller.current = batch;
-      const unsubscribe = store.subscribe(() => batch.syncState());
-      return () => { unsubscribe(); batch.dispose(); controller.current = null; };
+      reader.current = navigation;
+      const unsubscribe = store.subscribe(() => { batch.syncState(); navigation.syncState(); });
+      return () => { unsubscribe(); batch.dispose(); navigation.dispose(); controller.current = null; reader.current = null; };
     }, [store, frames, origins, onMountChange]);
-    React.useEffect(() => { if (hidden) controller.current?.cancel(); }, [hidden]);
-    if (hidden || !columns.some(isHomeColumn)) return null;
-    const busy = view.phase === 'running';
-    const disabled = busy || view.phase === 'cooldown' || view.phase === 'cancelled';
-    const text = summary(view);
-    const label = busy ? 'おすすめを一括更新中' : 'ホームのおすすめを一括更新';
+    React.useEffect(() => { if (hidden) { controller.current?.cancel(); reader.current?.cancel(); } }, [hidden]);
     const details = view.results.map(result => `${result.title || 'ホーム'}: ${
       result.status === 'updated' ? '投稿一覧の更新を確認' : result.status === 'requested' ? '更新操作済み・表示変化未確認' : REASONS[result.reason] || '応答未確認'
     }`).join('\n');
-    return jsx.jsxs('div', {
-      'data-yomikui-home-refresh': '',
-      style: { position: 'fixed', right: 20, bottom: 24, zIndex: 800, display: 'flex', alignItems: 'flex-end', gap: 10, maxWidth: 'calc(100vw - 40px)', pointerEvents: 'none' },
-      children: [text && jsx.jsx('div', {
-        id: 'yomikui-home-refresh-status', role: 'status', 'aria-live': 'polite', title: details,
-        style: { maxWidth: 320, padding: '9px 12px', borderRadius: 12, fontSize: 12, color: 'var(--foreground)', background: 'var(--card)', border: '1px solid var(--border)', boxShadow: '0 4px 18px #0003', pointerEvents: 'auto' },
-        children: text,
-      }), jsx.jsx('button', {
-        type: 'button', disabled, 'aria-label': label, 'aria-busy': busy,
-        'aria-describedby': text ? 'yomikui-home-refresh-status' : undefined,
-        title: `${label}${disabled && !busy ? '（次の更新まで少しお待ちください）' : ''}${details ? '\n' + details : ''}`,
-        onClick: () => controller.current?.run(),
-        style: { width: 52, height: 52, flexShrink: 0, display: 'grid', placeItems: 'center', border: '1px solid var(--border)', borderRadius: '50%', color: 'var(--primary-foreground)', background: 'var(--primary)', boxShadow: '0 4px 18px #0005', cursor: disabled ? 'wait' : 'pointer', opacity: disabled ? 0.65 : 1, pointerEvents: 'auto' },
-        children: jsx.jsxs('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true, className: busy ? 'animate-spin' : undefined,
-          children: [jsx.jsx('path', { d: 'M20 7v5h-5M4 17v-5h5' }), jsx.jsx('path', { d: 'M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 17.9 17' })],
-        }),
-      })],
+    return jsx.jsx(globalThis.YomikuiFloatingControls.Panel, {
+      React, jsx, columns, view, reading, hidden, canRefresh: columns.some(isHomeColumn), refreshText: summary(view), refreshDetails: details,
+      onRefresh: () => { if (!reader.current?.active) controller.current?.run(); },
+      onNavigate: action => { if (!controller.current?.active) reader.current?.move(action); },
     });
   }
 
