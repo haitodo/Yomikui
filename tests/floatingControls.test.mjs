@@ -448,23 +448,24 @@ test('a dragged header stays in place when folding or status text changes the pa
 
 test('panel preferences persist locally in order and normalize invalid values', async () => {
   const env = setup();
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, collapsed: false, mode: 'post', transparency: 0 });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, collapsed: false, mode: 'post', color: 'bluegray', transparency: 0 });
   env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, collapsed: true, mode: 'page' };
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, collapsed: true, mode: 'page', transparency: 0 }, 'older preferences retain the position and mode');
-  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', transparency: 110 });
-  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', transparency: 35 });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, collapsed: true, mode: 'page', color: 'bluegray', transparency: 0 }, 'older preferences retain the position and mode');
+  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', color: 'invalid', transparency: 110 });
+  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', color: 'lavender', transparency: 35 });
   await Promise.all([first, last]);
-  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, collapsed: true, mode: 'page', transparency: 80 });
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post', transparency: 35 });
+  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, collapsed: true, mode: 'page', color: 'bluegray', transparency: 80 });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post', color: 'lavender', transparency: 35 });
   for (const transparency of [-20, NaN, Infinity, '60']) assert.equal(env.api.preferences({ transparency }).transparency, 0);
+  for (const color of ['invalid', '__proto__', 'toString', '#123456', null]) assert.equal(env.api.preferences({ color }).color, 'bluegray');
 });
 
 function panelTree(env, {
   collapsed = false, phase = 'idle', reading = false, target = 'all', mode = 'post', lastAction = 'reading',
-  readingMessage = '', refreshText = '', transparency = 0, onNavigate = () => {}, onRefresh = () => {},
+  readingMessage = '', refreshText = '', color = 'bluegray', transparency = 0, onNavigate = () => {}, onRefresh = () => {},
   kinds = { one: 'recommended' }, workspaceId = 'workspace', selectedWorkspaceId = workspaceId, ready = true,
 } = {}) {
-  const states = [env.api.preferences({ collapsed, mode, transparency }), { workspaceId: selectedWorkspaceId, target, ready }, new Set(['one']), lastAction];
+  const states = [env.api.preferences({ collapsed, mode, color, transparency }), { workspaceId: selectedWorkspaceId, target, ready }, new Set(['one']), lastAction];
   const react = {
     useState: () => [states.shift(), () => {}], useRef: current => ({ current }), useCallback: fn => fn,
     useEffect() {}, useLayoutEffect() {},
@@ -516,9 +517,15 @@ test('group counts stay visible when folded; empty groups and a restoring worksp
   assert.equal(switching.find(node => node.type === 'select' && node.props['aria-label'] === '閲覧する列').props.disabled, true);
 });
 
-test('changing transparency saves it with the current mode and preserves it when folding', async () => {
+test('background color and transparency are saved independently and preserved with the mode when folding', async () => {
   const env = setup();
-  const nodes = panelTree(env, { mode: 'page', transparency: 35 });
+  const nodes = panelTree(env, { mode: 'page', color: 'sage', transparency: 35 });
+  const color = nodes.find(node => node.type === 'select' && node.props['aria-label'] === '背景色');
+  assert.equal(color.props.value, 'sage');
+  color.props.onChange({ currentTarget: { value: 'gray' } });
+  await settle();
+  assert.equal(env.saved.yomikui_floating_controls_v1.color, 'gray');
+  assert.equal(env.saved.yomikui_floating_controls_v1.transparency, 35);
   const slider = nodes.find(node => node.type === 'input' && node.props.type === 'range');
   assert.equal(slider.props['aria-label'], '背景の透明度');
   slider.props.onChange({ currentTarget: { value: '60' } });
@@ -529,6 +536,7 @@ test('changing transparency saves it with the current mode and preserves it when
   await settle();
   const saved = await env.api.loadPreferences();
   assert.equal(saved.transparency, 60);
+  assert.equal(saved.color, 'gray');
   assert.equal(saved.collapsed, true);
 });
 

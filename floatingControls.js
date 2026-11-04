@@ -5,6 +5,7 @@
   const STORAGE_KEY = 'yomikui_floating_controls_v1';
   const TARGETS_KEY = 'yomikui_reading_targets_v1';
   const GROUPS = Object.freeze({ recommended: 'おすすめ', following: 'フォロー中', search: '検索結果' });
+  const COLORS = Object.freeze({ bluegray: 'ブルーグレー', lavender: 'ラベンダー', sage: 'セージ', gray: 'グレー', theme: 'テーマに合わせる' });
   const trusted = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
   const clamp = value => Math.max(0, Math.min(1, value));
   const readable = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
@@ -47,6 +48,7 @@
       y: Number.isFinite(value?.y) ? clamp(value.y) : 1,
       collapsed: value?.collapsed === true,
       mode: value?.mode === 'page' ? 'page' : 'post',
+      color: Object.hasOwn(COLORS, value?.color) ? value.color : 'bluegray',
       transparency: Number.isFinite(value?.transparency) ? Math.max(0, Math.min(80, Math.round(value.transparency / 5) * 5)) : 0,
     };
   }
@@ -451,40 +453,44 @@
 
   const STYLE_MARKER = '/* yomikui-floating-controls */';
   const CSS = `
-    .yomikui-floating-panel{position:fixed;right:20px;bottom:24px;z-index:800;width:248px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;border:1px solid var(--border);border-radius:var(--radius);--yf-panel-background:color-mix(in oklab,var(--popover) var(--yf-surface-opacity,100%),transparent);--yf-control-background:color-mix(in oklab,var(--secondary) var(--yf-surface-opacity,100%),transparent);background:var(--yf-panel-background);color:var(--popover-foreground);box-shadow:0 4px 16px #00000024,0 1px 3px #00000012;font-size:12px;line-height:1.4}
+    #yomikui-root{--yf-bluegray:#2c3e52;--yf-lavender:#45364f;--yf-sage:#2f453b;--yf-gray:#3a3b45}
+    #yomikui-root[data-theme="dim"]{--yf-bluegray:#30475b;--yf-lavender:#453c56;--yf-sage:#344d46;--yf-gray:#3a424b}
+    #yomikui-root[data-theme="light"]{--yf-bluegray:#e5eef8;--yf-lavender:#eee5f7;--yf-sage:#e1f0e8;--yf-gray:#e9eaef}
+    .yomikui-floating-panel{position:fixed;right:20px;bottom:24px;z-index:800;width:248px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;border:1px solid color-mix(in oklab,var(--popover-foreground) 20%,transparent);border-radius:var(--radius);--yf-panel-background:color-mix(in oklab,var(--yf-surface-base) var(--yf-surface-opacity,100%),transparent);--yf-control-background:color-mix(in oklab,color-mix(in oklab,var(--yf-surface-base) 94%,var(--popover-foreground)) var(--yf-surface-opacity,100%),transparent);--yf-muted-foreground:color-mix(in oklab,var(--popover-foreground) 75%,var(--yf-surface-base));background:var(--yf-panel-background);color:var(--popover-foreground);box-shadow:0 6px 24px #00000033,0 1px 4px #0000001f;font-size:12px;line-height:1.4}
     .yomikui-floating-panel *{box-sizing:border-box}
     .yomikui-floating-panel svg{flex-shrink:0}
     .yomikui-floating-panel .yf-header{display:flex;align-items:center;gap:2px;position:sticky;top:0;z-index:1;padding:4px 4px 0;background:var(--yf-panel-background)}
     .yomikui-floating-panel button{display:flex;align-items:center;justify-content:center;gap:4px;min-width:0;min-height:30px;padding:5px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;white-space:nowrap;cursor:pointer;touch-action:manipulation;transition:background-color .15s,color .15s}
-    .yomikui-floating-panel button:not(:disabled):hover{background:color-mix(in oklab,var(--accent) var(--yf-surface-opacity,100%),transparent);color:var(--accent-foreground)}
+    .yomikui-floating-panel button:not(:disabled):hover{background:color-mix(in oklab,var(--popover-foreground) 10%,transparent);color:var(--popover-foreground)}
+    .yomikui-floating-panel button:not(:disabled):active{background:color-mix(in oklab,var(--popover-foreground) 16%,transparent)}
     .yomikui-floating-panel button:disabled{opacity:.4;cursor:default}
     .yomikui-floating-panel button:focus-visible,.yomikui-floating-panel select:focus-visible,.yomikui-floating-panel input:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
-    .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;gap:6px;min-height:24px;padding:4px 5px;color:var(--muted-foreground);cursor:grab;touch-action:none;user-select:none}
+    .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;gap:6px;min-height:24px;padding:4px 5px;color:var(--yf-muted-foreground);cursor:grab;touch-action:none;user-select:none}
     .yomikui-floating-panel .yf-title{flex-shrink:0;font-size:11px;font-weight:600;color:var(--foreground)}
-    .yomikui-floating-panel .yf-collapse{width:24px;min-height:24px;padding:4px;color:var(--muted-foreground)}
+    .yomikui-floating-panel .yf-collapse{width:24px;min-height:24px;padding:4px;color:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-body{padding:8px}
     .yomikui-floating-panel .yf-fields{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:6px;margin-bottom:8px}
     .yomikui-floating-panel label{position:relative;min-width:0}
     .yomikui-floating-panel .yf-sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-    .yomikui-floating-panel select{appearance:none;width:100%;min-width:0;height:28px;padding:0 23px 0 8px;border:1px solid transparent;border-radius:6px;background:var(--yf-control-background);color:var(--secondary-foreground);font:inherit;font-size:11px;text-overflow:ellipsis;cursor:pointer;transition:border-color .15s}
+    .yomikui-floating-panel select{appearance:none;width:100%;min-width:0;height:28px;padding:0 23px 0 8px;border:1px solid transparent;border-radius:6px;background:var(--yf-control-background);color:var(--popover-foreground);font:inherit;font-size:11px;text-overflow:ellipsis;cursor:pointer;transition:border-color .15s}
     .yomikui-floating-panel select:not(:disabled):hover{border-color:var(--border)}
     .yomikui-floating-panel select:disabled{opacity:.5;cursor:default}
     .yomikui-floating-panel option{background:var(--popover);color:var(--popover-foreground)}
-    .yomikui-floating-panel label>svg{position:absolute;right:7px;top:50%;width:12px;height:12px;transform:translateY(-50%);color:var(--muted-foreground);pointer-events:none}
-    .yomikui-floating-panel .yf-transparency{grid-column:1 / -1;display:flex;align-items:center;gap:8px;font-size:10px;color:var(--muted-foreground)}
+    .yomikui-floating-panel label>svg,.yomikui-floating-panel .yf-color-select>svg{position:absolute;right:7px;top:50%;width:12px;height:12px;transform:translateY(-50%);color:var(--yf-muted-foreground);pointer-events:none}
+    .yomikui-floating-panel .yf-color{grid-column:1 / -1;display:flex;align-items:center;gap:8px;font-size:10px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-color-select{position:relative;flex:1;min-width:0}
+    .yomikui-floating-panel .yf-transparency{grid-column:1 / -1;display:flex;align-items:center;gap:8px;font-size:10px;color:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-transparency input{appearance:none;flex:1;min-width:0;height:20px;padding:0;background:transparent;cursor:pointer}
-    .yomikui-floating-panel .yf-transparency input::-webkit-slider-runnable-track{height:3px;border-radius:3px;background:color-mix(in oklab,var(--muted-foreground) 35%,transparent)}
-    .yomikui-floating-panel .yf-transparency input::-webkit-slider-thumb{appearance:none;width:12px;height:12px;margin-top:-4.5px;border-radius:50%;background:var(--primary)}
+    .yomikui-floating-panel .yf-transparency input::-webkit-slider-runnable-track{height:3px;border-radius:3px;background:color-mix(in oklab,var(--yf-muted-foreground) 35%,transparent)}
+    .yomikui-floating-panel .yf-transparency input::-webkit-slider-thumb{appearance:none;width:12px;height:12px;margin-top:-4.5px;border-radius:50%;background:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-transparency-value{width:3.5ch;text-align:right;font-variant-numeric:tabular-nums}
-    .yomikui-floating-panel .yf-summary{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400;color:var(--muted-foreground)}
+    .yomikui-floating-panel .yf-summary{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400;color:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-actions{display:flex;align-items:stretch;gap:6px}
     .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));flex:1;min-width:0;gap:2px;padding:2px;border-radius:8px;background:var(--yf-control-background)}
-    .yomikui-floating-panel .yf-down{background:var(--primary);color:var(--primary-foreground)}
-    .yomikui-floating-panel .yf-down:not(:disabled):hover{background:color-mix(in oklab,var(--primary) 88%,var(--foreground));color:var(--primary-foreground)}
     .yomikui-floating-panel .yf-refresh-area{display:flex;align-items:center;padding-left:6px;border-left:1px solid var(--border)}
-    .yomikui-floating-panel .yf-refresh{width:32px;min-height:32px;color:var(--muted-foreground)}
+    .yomikui-floating-panel .yf-refresh{width:32px;min-height:32px;color:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:yomikui-floating-spin 1s linear infinite}
-    .yomikui-floating-panel .yf-status{margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:16px;color:var(--muted-foreground)}
+    .yomikui-floating-panel .yf-status{margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:16px;color:var(--yf-muted-foreground)}
     @keyframes yomikui-floating-spin{to{transform:rotate(360deg)}}
     @media(pointer:coarse){.yomikui-floating-panel button{min-height:44px}.yomikui-floating-panel .yf-collapse,.yomikui-floating-panel .yf-refresh{width:44px}.yomikui-floating-panel select{height:36px;font-size:12px}.yomikui-floating-panel .yf-transparency input{height:28px}}
     @media(prefers-reduced-motion:reduce){.yomikui-floating-panel button,.yomikui-floating-panel select{transition:none}.yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:none}}
@@ -600,7 +606,7 @@
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
       ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
-      style: { '--yf-surface-opacity': `${100 - prefs.transparency}%` },
+      style: { '--yf-surface-base': prefs.color === 'theme' ? 'var(--popover)' : `var(--yf-${prefs.color})`, '--yf-surface-opacity': `${100 - prefs.transparency}%` },
       children: [
         jsx.jsxs('div', { className: 'yf-header', children: [
           jsx.jsxs('button', { ref: handleRef, type: 'button', className: 'yf-handle', title: 'ドラッグして移動（矢印キーでも移動）', 'aria-label': '閲覧・更新パネルを移動。矢印キーでも移動できます', children: [
@@ -623,6 +629,14 @@
               ] }),
             ] }), icon('down')] }),
             jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '移動方式' }), jsx.jsxs('select', { 'aria-label': '移動方式', title: '移動方式', value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.target.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] }), icon('down')] }),
+            jsx.jsxs('label', { className: 'yf-color', htmlFor: 'yomikui-panel-color', children: [
+              jsx.jsx('span', { children: '背景色' }),
+              jsx.jsxs('span', { className: 'yf-color-select', children: [
+                jsx.jsxs('select', { id: 'yomikui-panel-color', 'aria-label': '背景色', value: prefs.color, onChange: event => updatePrefs({ color: event.currentTarget.value }), children:
+                  Object.entries(COLORS).map(([value, title]) => jsx.jsx('option', { value, children: title }, value)),
+                }), icon('down'),
+              ] }),
+            ] }),
             jsx.jsxs('label', { className: 'yf-transparency', htmlFor: 'yomikui-panel-transparency', title: '背景の透明度（0%で不透明）', children: [
               jsx.jsx('span', { children: '透明度' }),
               jsx.jsx('input', { id: 'yomikui-panel-transparency', type: 'range', min: 0, max: 80, step: 5, value: prefs.transparency, 'aria-label': '背景の透明度', 'aria-valuetext': `${prefs.transparency}%`, onChange: event => updatePrefs({ transparency: Number(event.currentTarget.value) }) }),
