@@ -62,7 +62,6 @@
     return {
       x: Number.isFinite(value?.x) ? clamp(value.x) : 1,
       y: Number.isFinite(value?.y) ? clamp(value.y) : 1,
-      collapsed: value?.collapsed === true,
       mode: value?.mode === 'page' ? 'page' : 'post',
       hideEmpty: value?.hideEmpty !== false,
       color: Object.hasOwn(COLORS, value?.color) ? value.color : 'bluegray',
@@ -488,7 +487,7 @@
     .yomikui-floating-panel button:focus-visible,.yomikui-floating-panel select:focus-visible,.yomikui-floating-panel input:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
     .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;gap:6px;min-height:24px;padding:4px 5px;color:var(--yf-muted-foreground);cursor:grab;touch-action:none;user-select:none}
     .yomikui-floating-panel .yf-title{flex-shrink:0;font-size:11px;font-weight:600;color:var(--foreground)}
-    .yomikui-floating-panel .yf-collapse,.yomikui-floating-panel .yf-settings-toggle{width:24px;min-height:24px;padding:4px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-settings-toggle{width:24px;min-height:24px;padding:4px;color:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-body{padding:4px 8px 8px}
     .yomikui-floating-panel [hidden]{display:none!important}
     .yomikui-floating-panel .yf-choice-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px;margin-bottom:4px}
@@ -502,7 +501,6 @@
     .yomikui-floating-panel button[aria-pressed="true"]:not(:disabled):hover{background:var(--popover-foreground);color:var(--popover)}
     .yomikui-floating-panel .yf-mark{width:12px;flex-shrink:0;text-align:center}
     .yomikui-floating-panel .yf-count{margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums}
-    .yomikui-floating-panel.yf-compact .yf-target{min-height:28px;padding-block:3px}
     .yomikui-floating-panel .yf-fields{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
     .yomikui-floating-panel label{position:relative;min-width:0}
     .yomikui-floating-panel .yf-sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -525,7 +523,7 @@
     .yomikui-floating-panel .yf-refresh{width:76px;min-height:32px;background:var(--yf-control-background)}
     .yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:yomikui-floating-spin 1s linear infinite}
     @keyframes yomikui-floating-spin{to{transform:rotate(360deg)}}
-    @media(pointer:coarse){.yomikui-floating-panel button,.yomikui-floating-panel .yf-target,.yomikui-floating-panel.yf-compact .yf-target,.yomikui-floating-panel .yf-selection-mode button,.yomikui-floating-panel .yf-hide-empty{min-height:44px}.yomikui-floating-panel .yf-collapse,.yomikui-floating-panel .yf-settings-toggle{width:44px;min-height:44px}.yomikui-floating-panel .yf-refresh{min-height:44px}.yomikui-floating-panel select{height:44px;font-size:16px}.yomikui-floating-panel .yf-transparency input{height:28px}}
+    @media(pointer:coarse){.yomikui-floating-panel button,.yomikui-floating-panel .yf-target,.yomikui-floating-panel .yf-selection-mode button,.yomikui-floating-panel .yf-hide-empty{min-height:44px}.yomikui-floating-panel .yf-settings-toggle{width:44px;min-height:44px}.yomikui-floating-panel .yf-refresh{min-height:44px}.yomikui-floating-panel select{height:44px;font-size:16px}.yomikui-floating-panel .yf-transparency input{height:28px}}
     @media(prefers-reduced-motion:reduce){.yomikui-floating-panel button,.yomikui-floating-panel select{transition:none}.yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:none}}
   `.replaceAll('.yomikui-floating-panel', '#yomikui-root .yomikui-floating-panel');
 
@@ -656,7 +654,7 @@
     const refreshLabel = busy ? onCancelRefresh ? '中止' : '更新中' : lastAction === 'refresh' && ['cooldown', 'cancelled'].includes(view.phase) ? feedback : '更新';
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
-      ref: panelRef, className: `yomikui-floating-panel${prefs.collapsed ? ' yf-compact' : ''}`, 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
+      ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
       style: { '--yf-surface-base': prefs.color === 'theme' ? 'var(--popover)' : `var(--yf-${prefs.color})`, '--yf-surface-opacity': `${100 - prefs.transparency}%` },
       children: [
         jsx.jsxs('div', { className: 'yf-header', children: [
@@ -664,7 +662,6 @@
             icon('grip'), jsx.jsx('span', { className: 'yf-title', children: '閲覧・更新' }),
           ] }),
           jsx.jsx('button', { type: 'button', className: 'yf-settings-toggle', 'aria-label': 'パネル設定', 'aria-expanded': settingsOpen, 'aria-controls': 'yomikui-reading-settings', onClick: () => setSettingsOpen(!settingsOpen), children: icon('settings') }),
-          jsx.jsx('button', { type: 'button', className: 'yf-collapse', 'aria-label': 'コンパクト表示', 'aria-pressed': prefs.collapsed, onClick: () => { updatePrefs({ collapsed: !prefs.collapsed }); setSettingsOpen(false); }, children: icon(prefs.collapsed ? 'down' : 'up') }),
         ] }),
         jsx.jsxs('div', { className: 'yf-body', children: [
           jsx.jsxs('div', { className: 'yf-choice-row', children: [
@@ -705,7 +702,7 @@
                 type: 'button', className: 'yf-refresh',
                 disabled: busy ? !onCancelRefresh : reading.busy || !targetReady || refreshCount === 0 || view.phase === 'cooldown' || view.phase === 'cancelled',
                 'aria-label': busy ? '更新を中止する' : '選択中の列を更新', 'aria-busy': busy,
-                title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を先頭へ戻してから順番に更新します。おすすめ・フォロー中は新着読み込み、検索結果・話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします。検索語・タブ・絞り込み条件を維持します` : '選択範囲内に更新対象の列がありません'}`,
+                title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を先頭へ戻してから順番に更新します。おすすめ・フォロー中は新着読み込み、累計200件以上の警告がある列と検索結果・話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします。検索語・タブ・絞り込み条件を維持します` : '選択範囲内に更新対象の列がありません'}`,
                 onClick: () => { if (busy) onCancelRefresh?.(); else { setLastAction('refresh'); onRefresh({ target }); } }, children: [icon('refresh'), refreshLabel],
               }),
             }),

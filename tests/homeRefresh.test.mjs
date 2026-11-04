@@ -359,6 +359,107 @@ const explore = (tab = 'news', { loading = false } = {}) => `<main data-testid="
   ${loading ? '<div role="progressbar"></div>' : '<div data-testid="cellInnerDiv"><a href="/i/trending/123">A trend or news story</a></div>'}
 </main>`;
 const reloadKey = 'yomikui_page_refresh_v1:column1';
+function homeFrameSetup(kind = 'recommended', options = {}) {
+  const env = setup(home({ selected: kind, ...options }), options);
+  env.tweetCount = options.count ?? 200;
+  env.options.getTweetCount = () => env.tweetCount;
+  env.send = (data, event = {}) => env.window.emit('message', {
+    source: env.window.parent, origin: 'https://x.com', data: {
+      type: P + 'request', columnId: 'column1', requestId: 'reload1', target: kind, ...data,
+    }, ...event,
+  });
+  return env;
+}
+
+for (const kind of ['recommended', 'following']) {
+  test(`${kind} uses the reported cumulative count to switch from native update to one full reload at 200`, async () => {
+    for (const count of [199, 200, 260]) {
+      const env = homeFrameSetup(kind, { count, banner: '20件のポスト表示' });
+      let clicks = 0;
+      env.document.getElementById('new-posts').addEventListener('click', () => {
+        clicks++;
+        env.document.getElementById('tweets').innerHTML = tweet('202');
+      });
+      const installed = env.api.installFrame(env.options);
+      env.send({}, { source: {} });
+      env.send({}, { origin: 'https://untrusted.example' });
+      assert.equal(env.clock.timers.size, 0);
+      env.send(); env.send();
+      await settle();
+      await env.clock.advance(199);
+      assert.equal(env.reloads.length, 0);
+      assert.equal(clicks, 0);
+      await env.clock.advance(1);
+      if (count < 200) {
+        assert.equal(env.messages.at(-1).data.status, 'updated');
+        assert.equal(clicks, 1);
+        assert.equal(env.reloads.length, 0);
+        assert.equal(env.storage.size, 0);
+      } else {
+        assert.equal(env.messages.at(-1).data.type, P + 'reloading');
+        assert.equal(env.reloads.length, 1);
+        assert.equal(env.reloads[0].pathname, '/home');
+        assert.equal(JSON.parse(env.storage.get(reloadKey)).kind, kind);
+        assert.equal(clicks, 0, 'a full reload must not also load new posts');
+      }
+      installed.dispose();
+      assert.equal(env.clock.timers.size, 0);
+    }
+  });
+
+  test(`${kind} full reload waits for the original tab and content without replaying the reload`, async () => {
+    const env = homeFrameSetup(kind);
+    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind, path: '/home', origin: 'https://x.com', started: 0 }));
+    env.document.body.innerHTML = home({ selected: kind === 'following' ? 'recommended' : 'following' });
+    const installed = env.api.installFrame(env.options);
+    env.send({ type: P + 'describe' });
+    env.send();
+    await settle();
+    assert.equal(env.messages.at(-1).data.kind, null, 'a temporary default tab must not change the batch target');
+    assert.ok(!env.messages.some(message => message.data.type === P + 'result'));
+    env.document.getElementById('tabs').innerHTML = tabs(kind);
+    env.document.getElementById('tweets').innerHTML = '';
+    await settle(); await env.clock.advance(80);
+    assert.ok(!env.messages.some(message => message.data.type === P + 'result'), 'the tab alone cannot confirm the reload');
+    env.document.getElementById('tweets').innerHTML = tweet('303');
+    await settle(); await env.clock.advance(80);
+    assert.equal(env.messages.at(-1).data.status, 'reloaded');
+    assert.equal(env.messages.at(-2).data.kind, kind, 'publish the restored context before the result');
+    assert.equal(env.scroller.scrollTop, 0);
+    assert.equal(env.storage.has(reloadKey), false);
+    env.send();
+    assert.equal(env.messages.at(-1).data.status, 'reloaded');
+    assert.equal(env.reloads.length, 0);
+    installed.dispose();
+    assert.equal(env.clock.timers.size, 0);
+    assert.ok(env.observers.every(observer => !observer.connected));
+  });
+}
+
+test('heavy Home columns still refuse drafts, dialogs, hidden or changed targets, blocked scrolling, storage failure and cancellation', async () => {
+  for (const [reason, change] of [
+    ['draft', env => env.document.body.insertAdjacentHTML('beforeend', '<textarea data-testid="tweetTextarea_0">A draft</textarea>')],
+    ['dialog', env => env.document.body.insertAdjacentHTML('beforeend', '<div role="dialog"></div>')],
+    ['hidden', env => env.send({ type: 'yomikui-column-visibility', visible: false })],
+    ['target-changed', env => { env.document.getElementById('tabs').innerHTML = tabs('following'); }],
+    ['scroll-top', env => { env.scroller.scrollTo = () => {}; }],
+    ['reload-unavailable', env => { env.window.sessionStorage.setItem = () => { throw new Error('Storage disabled'); }; }],
+    ['cancelled', () => {}],
+  ]) {
+    const env = homeFrameSetup();
+    const installed = env.api.installFrame(env.options);
+    change(env);
+    env.send();
+    if (reason === 'cancelled') env.send({ type: P + 'cancel' });
+    await env.clock.advance(1200);
+    assert.equal(env.messages.at(-1).data.reason, reason);
+    assert.equal(env.reloads.length, 0);
+    assert.equal(env.storage.size, 0);
+    installed.dispose();
+    assert.equal(env.clock.timers.size, 0);
+  }
+});
+
 function exploreSetup(tab = 'news', options = {}) {
   const env = setup(explore(tab, options), { ...options, path: `/explore/tabs/${tab}` });
   env.settings.columnType = 'explore';
@@ -1052,9 +1153,9 @@ test('one batch dispatches each visible current page to its own refresh strategy
   env.batch.dispose();
 });
 
-for (const kind of ['explore', 'search']) {
+for (const kind of ['explore', 'search', 'recommended', 'following']) {
   test(`${kind} reload tolerates its unloading context but waits for a trusted completion before advancing`, async () => {
-    const env = batchSetup({ columns: [{ id: 'news', type: kind }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
+    const env = batchSetup({ columns: [{ id: 'news', type: 'home' }, { id: 'home', type: 'home' }], currentKinds: { news: kind }, quiet: (id, type) => id === 'news' && type === P + 'request' });
     const run = env.batch.run({ target: 'all' });
     const request = env.messages.find(message => message.type === P + 'request');
     const emit = (type, status, changes = {}) => env.window.emit('message', {
@@ -1083,7 +1184,7 @@ for (const kind of ['explore', 'search']) {
 
   for (const change of ['offscreen', 'page', 'frame', 'workspace']) {
     test(`${kind} reload is cancelled on ${change} without replaying it`, async () => {
-      const env = batchSetup({ columns: [{ id: 'news', type: kind }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
+      const env = batchSetup({ columns: [{ id: 'news', type: 'home' }, { id: 'home', type: 'home' }], currentKinds: { news: kind }, quiet: (id, type) => id === 'news' && type === P + 'request' });
       const run = env.batch.run();
       const request = env.messages.find(message => message.type === P + 'request');
       env.window.emit('message', { source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + 'reloading' } });
@@ -1344,11 +1445,26 @@ test('the shipped native initializer installs the refresher with the actual colu
   const start = bundle.indexOf('function startNativeHomeRefresh()');
   const end = bundle.indexOf('function EO(', start);
   assert.ok(start > 0 && end > start);
-  Object.assign(env.context, { je: env.settings, _Q: () => env.scroller, Uh: 'https://x.com', ln: 'column1' });
+  Object.assign(env.context, { je: env.settings, _Q: () => env.scroller, Uh: 'https://x.com', ln: 'column1', frameMaintenance: { count: 200 }, ru: null });
   vm.runInContext(bundle.slice(start, end) + 'startNativeHomeRefresh();', env.context);
   env.window.emit('message', { source: env.window.parent, origin: 'https://x.com', data: { type: P + 'probe', columnId: 'column1', requestId: 'probe' } });
   assert.equal(env.messages.at(-1).data.type, P + 'ready');
   assert.match(bundle, /HO\(\),startFrameMaintenance\(\),startNativeHomeRefresh\(\)/);
+});
+
+test('the shipped initializer reads the live maintenance count instead of the mounted tweet elements', async () => {
+  const env = setup();
+  const bundle = readFileSync(new URL('../contentIframe.js', import.meta.url), 'utf8');
+  const start = bundle.indexOf('function startNativeHomeRefresh()');
+  const end = bundle.indexOf('function EO(', start);
+  const maintenance = { count: 199 };
+  Object.assign(env.context, { je: env.settings, _Q: () => env.scroller, Uh: 'https://x.com', ln: 'column1', frameMaintenance: maintenance, ru: null });
+  vm.runInContext(bundle.slice(start, end) + 'startNativeHomeRefresh();', env.context);
+  maintenance.count = 200;
+  env.window.emit('message', { source: env.window.parent, origin: 'https://x.com', data: { type: P + 'request', columnId: 'column1', requestId: 'reload1', target: 'recommended' } });
+  await env.clock.advance(200);
+  assert.equal(env.reloads.length, 1);
+  assert.equal(env.messages.at(-1).data.type, P + 'reloading');
 });
 
 test('the helper is loaded before each bundle and is safe to load twice in the top frame', () => {

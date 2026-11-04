@@ -39,10 +39,15 @@
   const refreshable = kind => globalThis.YomikuiHomeScroll.isRefreshableKind(kind);
   const readingKind = getSettings => globalThis.YomikuiHomeScroll.readingKind(getSettings);
   const currentPath = () => window.location.pathname + (window.location.search || '');
-  const reloadable = kind => kind === 'search' || kind === 'explore';
+  const homeKind = kind => kind === 'recommended' || kind === 'following';
+  const reloadable = kind => refreshable(kind);
+  const reloadByDefault = kind => kind === 'search' || kind === 'explore';
   const reloadKind = path => typeof path !== 'string' ? null :
     /^\/search\/?(?:\?|$)/.test(path) ? 'search' :
     /^\/explore(?:\/tabs\/[\w-]+)?\/?(?:\?|$)/.test(path) ? 'explore' : null;
+  const reloadPathMatches = (kind, path) => homeKind(kind)
+    ? typeof path === 'string' && /^\/home\/?(?:\?|$)/.test(path)
+    : reloadKind(path) === kind;
   const trustedOrigin = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
   const abortError = () => new DOMException('Refresh cancelled', 'AbortError');
   const checkAbort = signal => { if (signal?.aborted) throw abortError(); };
@@ -102,7 +107,8 @@
     return document.querySelector('[data-testid="primaryColumn"]');
   }
 
-  function reloadTabMatches(kind) {
+  function reloadTabMatches(kind, getSettings) {
+    if (homeKind(kind)) return readingKind(getSettings) === kind;
     const href = globalThis.YomikuiHomeScroll.selectedTimelineTab()?.getAttribute('href');
     if (!href) return false;
     try {
@@ -306,6 +312,7 @@
       if (active === job) active = null;
       completed.set(job.id, result);
       if (completed.size > 32) completed.delete(completed.keys().next().value);
+      if (job.resuming) context?.refresh(true);
       send(RESULT, job.id, result);
     };
     const failure = error => ({
@@ -314,7 +321,7 @@
     });
     const reloadPage = async (job, kind) => {
       const reason = refresher.unavailableReason(kind);
-      if (reason || readingKind(options.getSettings) !== kind || !reloadTabMatches(kind)) {
+      if (reason || readingKind(options.getSettings) !== kind || !reloadTabMatches(kind, options.getSettings)) {
         finish(job, { status: 'skipped', reason: reason || 'unavailable' });
         return;
       }
@@ -323,7 +330,7 @@
         return;
       }
       const preparation = await refresher.prepare(job.abort.signal, kind);
-      if (preparation || !reloadTabMatches(kind)) {
+      if (preparation || !reloadTabMatches(kind, options.getSettings)) {
         finish(job, { status: 'skipped', reason: preparation || 'target-changed' });
         return;
       }
@@ -352,13 +359,14 @@
     const resumeReload = async (job, receipt) => {
       const result = await observeUntil(() => {
         if (currentPath() !== receipt.path) return { reason: 'target-changed' };
-        // Search and Explore identify their tabs in the URL. Confirm the tab
-        // directly instead of waiting for Home's tab restoration timer.
-        const reason = !visible ? 'hidden' : unavailableReason(options.getSettings, receipt.kind);
+        // Home may briefly show its default tab before the dashboard restores
+        // the selected one. Confirm the requested tab and its content together.
+        const reason = !visible ? 'hidden' : unavailableReason(options.getSettings, homeKind(receipt.kind) ? undefined : receipt.kind);
         if (reason) return { reason };
-        if (!reloadTabMatches(receipt.kind)) return null;
+        if (!reloadTabMatches(receipt.kind, options.getSettings)) return null;
         const selector = receipt.kind === 'search'
           ? '[data-testid="cellInnerDiv"] a[href], article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="emptyState"]'
+          : homeKind(receipt.kind) ? 'article[data-testid="tweet"], [data-testid="emptyState"]'
           : '[data-testid="cellInnerDiv"] a[href], [data-testid="trend"], article[data-testid="tweet"]';
         const content = primaryColumn()?.querySelector(selector);
         return content ? { ready: true } : null;
@@ -376,7 +384,8 @@
       if (data.type === DESCRIBE) {
         if (context) context.refresh(true);
         else context = new globalThis.YomikuiHomeScroll.ReadingContext({
-          getSettings: options.getSettings, visible, onChange: kind => send(CONTEXT, null, { kind }),
+          getSettings: options.getSettings, visible,
+          onChange: kind => send(CONTEXT, null, { kind: active?.resuming ? null : kind }),
         });
         return;
       }
@@ -412,7 +421,8 @@
       }
       const job = { id: data.requestId, abort: new AbortController() };
       active = job;
-      if (reloadable(data.target)) reloadPage(job, data.target).catch(error => finish(job, failure(error)));
+      const count = options.getTweetCount?.();
+      if (reloadByDefault(data.target) || (Number.isFinite(count) && count >= 200)) reloadPage(job, data.target).catch(error => finish(job, failure(error)));
       else refresher.refresh(job.abort.signal, data.target).catch(failure).then(result => finish(job, result));
     };
     const cancel = () => {
@@ -433,9 +443,9 @@
     } catch {}
     if (receipt && typeof receipt.id === 'string' && receipt.id.length > 0 && receipt.id.length <= 100 &&
         receipt.origin === options.getOrigin() && trustedOrigin(receipt.origin) &&
-        reloadable(receipt.kind) && reloadKind(receipt.path) === receipt.kind &&
+        reloadable(receipt.kind) && reloadPathMatches(receipt.kind, receipt.path) &&
         Number.isFinite(receipt.started) && Date.now() >= receipt.started && Date.now() - receipt.started < RELOAD_TIMEOUT) {
-      const job = { id: receipt.id, abort: new AbortController() };
+      const job = { id: receipt.id, abort: new AbortController(), resuming: true };
       active = job;
       resumeReload(job, receipt).catch(failure).then(result => finish(job, result));
     }

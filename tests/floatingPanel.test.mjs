@@ -23,12 +23,12 @@ function setup() {
 }
 
 function panel(env, options = {}) {
-  const { collapsed = false, mode = 'post', hideEmpty = true, target = ['recommended'], selectionMode = 'single',
+  const { mode = 'post', hideEmpty = true, target = ['recommended'], selectionMode = 'single',
     phase = 'idle', reading = false, ready = true, workspaceId = 'workspace', selectedWorkspaceId = workspaceId,
     kinds = { one: 'recommended' }, lastAction = 'selection', settingsOpen = false, results = [],
     color = 'bluegray', transparency = 0, columns = [{ id: 'one', type: 'home', title: 'Home' }], visible = ['one'],
   } = options;
-  const states = [env.api.preferences({ collapsed, mode, hideEmpty, color, transparency }),
+  const states = [env.api.preferences({ mode, hideEmpty, color, transparency }),
     { workspaceId: selectedWorkspaceId, value: env.api.selectionPreferences({ selectionMode, single: target[0], multiple: target, multipleReady: true }), ready },
     new Set(visible), lastAction, settingsOpen];
   let index, nodes;
@@ -97,8 +97,8 @@ test('single and multiple modes remember independent choices and switching targe
   assert.deepEqual(clone((await env.api.loadTarget('workspace')).multiple), []);
 });
 
-test('the compact panel keeps targets next to actions without individual, all-column or summary rows', () => {
-  const ui = panel(setup(), { collapsed: true });
+test('the panel keeps targets next to actions and only settings beside its drag handle', () => {
+  const ui = panel(setup());
   assert.ok(ui.target('recommended'));
   assert.equal(ui.target('recommended').props.hidden, false);
   assert.ok(!ui.nodes().some(node => node.props?.children === '表示中すべて' || node.props?.label === '個別の列' || node.props?.className === 'yf-summary'));
@@ -106,6 +106,7 @@ test('the compact panel keeps targets next to actions without individual, all-co
   const body = ui.byClass('yf-body').props.children;
   assert.equal(body[1].props.className, 'yf-targets');
   assert.equal(body[2].props.className, 'yf-actions');
+  assert.deepEqual(clone(ui.byClass('yf-header').props.children.map(node => node.props.className)), ['yf-handle', 'yf-settings-toggle']);
   assert.equal(ui.byClass('yf-fields').props.hidden, true);
   ui.byClass('yf-settings-toggle').props.onClick(); ui.render();
   assert.equal(ui.byClass('yf-fields').props.hidden, false);
@@ -133,7 +134,7 @@ test('zero-column groups can be hidden without clearing selection; restoring ano
 
 test('reading, wheel scope and refresh use the same group selection and scroll mode stays in settings', () => {
   const env = setup(), moves = [], refreshes = [];
-  const ui = panel(env, { target: ['recommended', 'search'], selectionMode: 'multiple', mode: 'page', collapsed: true,
+  const ui = panel(env, { target: ['recommended', 'search'], selectionMode: 'multiple', mode: 'page',
     onNavigate: action => moves.push(clone(action)), onRefresh: action => refreshes.push(clone(action)) });
   ui.byClass('yf-top').props.onClick();
   ui.byClass('yf-down').props.onClick();
@@ -179,13 +180,12 @@ test('a temporary unknown page during a reload does not move or hide its target 
   assert.equal(ui.target('recommended').props.hidden, true);
 });
 
-test('color, transparency and movement mode survive preference changes and compact display', async () => {
+test('color, transparency and movement mode survive preference changes', async () => {
   const env = setup();
   const ui = panel(env, { mode: 'page', color: 'sage', transparency: 35 });
   ui.find(node => node.type === 'select' && node.props['aria-label'] === '背景色').props.onChange({ currentTarget: { value: 'gray' } });
   ui.find(node => node.type === 'input' && node.props.type === 'range').props.onChange({ currentTarget: { value: '60' } });
-  ui.byClass('yf-collapse').props.onClick();
   await settle();
   const prefs = await env.api.loadPreferences();
-  assert.deepEqual([prefs.color, prefs.transparency, prefs.mode, prefs.collapsed], ['gray', 60, 'page', true]);
+  assert.deepEqual([prefs.color, prefs.transparency, prefs.mode], ['gray', 60, 'page']);
 });

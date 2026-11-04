@@ -1412,6 +1412,7 @@ function startFrameMaintenance() {
 function startNativeHomeRefresh() {
   globalThis.YomikuiHomeRefresh.installFrame({
     getSettings: () => je,
+    getTweetCount: () => frameMaintenance?.count ?? 0,
     getScroller: _Q,
     isTabRestoring: () => ru !== null,
     getOrigin: () => Uh,
