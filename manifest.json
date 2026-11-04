@@ -61,6 +61,7 @@
         "columnNavigation.js",
         "tweetActions.js",
         "homeScroll.js",
+        "refreshBoundary.js",
         "homeRefresh.js",
         "contentIframe.js"
       ],

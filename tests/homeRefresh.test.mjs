@@ -8,6 +8,7 @@ import { Clock, Events, settle } from './helpers.mjs';
 
 const source = readFileSync(new URL('../homeRefresh.js', import.meta.url), 'utf8');
 const scrollSource = readFileSync(new URL('../homeScroll.js', import.meta.url), 'utf8');
+const boundarySource = readFileSync(new URL('../refreshBoundary.js', import.meta.url), 'utf8');
 const floatingSource = readFileSync(new URL('../floatingControls.js', import.meta.url), 'utf8');
 const P = 'yomikui-home-refresh-';
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -62,6 +63,7 @@ function setup(html = home(), { storage = new Map(), path = '/home' } = {}) {
     fetch() { throw new Error('Native home refresh must not call an API'); },
   });
   vm.runInContext(scrollSource, context);
+  vm.runInContext(boundarySource, context);
   vm.runInContext(floatingSource, context);
   vm.runInContext(source, context);
   const settings = { columnType: 'home', isLiveFeedColumn: false };
@@ -371,6 +373,78 @@ function homeFrameSetup(kind = 'recommended', options = {}) {
   return env;
 }
 
+test('floating refresh marks the pre-update first post after top preparation, including Following', async () => {
+  for (const kind of ['recommended', 'following']) {
+    const env = homeFrameSetup(kind, { count: 199 });
+    env.document.getElementById('tweets').innerHTML = tweet('999');
+    env.scroller.scrollTo = ({ top }) => {
+      env.scroller.scrollTop = top;
+      env.document.getElementById('tweets').innerHTML = tweet('101');
+    };
+    env.document.getElementById(kind).addEventListener('click', () => {
+      env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101');
+    });
+    const installed = env.api.installFrame(env.options);
+    assert.equal(env.document.querySelector('.yomikui-refresh-boundary'), null);
+    env.send();
+    await settle(); await env.clock.advance(280);
+    assert.equal(env.messages.at(-1).data.status, 'updated');
+    assert.equal(env.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
+    assert.equal(env.document.querySelectorAll('.yomikui-refresh-boundary').length, 1);
+    assert.equal(env.storage.size, 0);
+    assert.equal(env.scroller.scrollTop, 0);
+    installed.dispose();
+    assert.equal(env.clock.timers.size, 0);
+    assert.ok(env.observers.every(observer => !observer.connected));
+  }
+});
+
+test('a skipped or cancelled refresh preserves the previous landmark', async () => {
+  const env = homeFrameSetup('following', { count: 199 });
+  env.document.getElementById('following').addEventListener('click', () => {
+    env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101');
+  });
+  const installed = env.api.installFrame(env.options);
+  env.send();
+  await settle(); await env.clock.advance(280);
+  const marker = env.document.querySelector('.yomikui-refresh-boundary');
+  env.send({ requestId: 'cooldown' });
+  await settle();
+  assert.equal(env.messages.at(-1).data.reason, 'cooldown');
+  assert.equal(env.document.querySelector('.yomikui-refresh-boundary'), marker);
+  await env.clock.advance(5000);
+  env.send({ requestId: 'cancelled' });
+  await settle();
+  env.send({ type: P + 'cancel', requestId: 'cancelled' });
+  await settle(); await env.clock.advance(280);
+  assert.equal(env.messages.at(-1).data.reason, 'cancelled');
+  assert.equal(env.document.querySelector('.yomikui-refresh-boundary'), marker);
+  installed.dispose();
+});
+
+test('Home reload carries its landmark across document replacement and waits for the restored tab', async () => {
+  const env = homeFrameSetup('following');
+  const installed = env.api.installFrame(env.options);
+  env.send();
+  await settle(); await env.clock.advance(200);
+  assert.deepEqual(JSON.parse(env.storage.get(reloadKey)).boundary, { id: '101', kind: 'following', path: '/home' });
+  env.window.emit('pagehide');
+  const replacement = homeFrameSetup('following', { storage: env.storage, selected: 'recommended' });
+  replacement.clock.now = env.clock.now;
+  const resumed = replacement.api.installFrame(replacement.options);
+  await settle(); await replacement.clock.advance(80);
+  assert.equal(replacement.document.querySelector('.yomikui-refresh-boundary'), null);
+  replacement.document.getElementById('tabs').innerHTML = tabs('following');
+  replacement.document.getElementById('tweets').innerHTML = tweet('303') + tweet('101');
+  await settle(); await replacement.clock.advance(160);
+  assert.equal(replacement.messages.at(-1).data.status, 'reloaded');
+  assert.equal(replacement.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
+  assert.equal(replacement.storage.has(reloadKey), false);
+  assert.equal(replacement.reloads.length, 0);
+  resumed.dispose(); installed.dispose();
+  assert.equal(replacement.clock.timers.size, 0);
+});
+
 for (const kind of ['recommended', 'following']) {
   test(`${kind} uses the reported cumulative count to switch from native update to one full reload at 200`, async () => {
     for (const count of [199, 200, 260]) {
@@ -486,6 +560,27 @@ function searchSetup(query = '?q=cat%20dog&src=typed_query&f=live&pf=on&lf=on', 
   });
   return env;
 }
+
+test('search reload retains the old top post until it renders later while scrolling', async () => {
+  const env = searchSetup();
+  const installed = env.api.installFrame(env.options);
+  env.send();
+  await settle(); await env.clock.advance(200);
+  const receipt = JSON.parse(env.storage.get(reloadKey));
+  assert.deepEqual(receipt.boundary, { id: '202', kind: 'search', path: '/search' + env.window.location.search });
+  const replacement = searchSetup(env.window.location.search, { storage: env.storage, content: tweet('303') });
+  replacement.clock.now = env.clock.now;
+  const resumed = replacement.api.installFrame(replacement.options);
+  await settle(); await replacement.clock.advance(80);
+  assert.equal(replacement.messages.at(-1).data.status, 'reloaded');
+  assert.equal(replacement.document.querySelector('.yomikui-refresh-boundary'), null);
+  replacement.document.querySelector('[data-testid="primaryColumn"]').insertAdjacentHTML('beforeend', tweet('202'));
+  await settle(); await replacement.clock.advance(80);
+  assert.equal(replacement.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '202');
+  assert.equal(replacement.reloads.length, 0);
+  assert.equal(replacement.storage.has(reloadKey), false);
+  resumed.dispose(); installed.dispose();
+});
 
 for (const [kind, create] of [['explore', exploreSetup], ['search', searchSetup]]) {
   test(`${kind} never reloads when top preparation stalls or the route changes`, async () => {

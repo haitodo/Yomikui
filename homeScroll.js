@@ -376,5 +376,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, navigate, scrollToTop, selectedTimelineTab, isRecommendedTab: recommended });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, navigate, scrollToTop, selectedTimelineTab, tweetId, isRecommendedTab: recommended });
 })();

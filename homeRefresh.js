@@ -167,11 +167,12 @@
   }
 
   class NativeRefresher {
-    constructor({ getSettings, getScroller, isTabRestoring = () => false, isVisible = () => true }) {
+    constructor({ getSettings, getScroller, isTabRestoring = () => false, isVisible = () => true, boundary = null }) {
       this.getSettings = getSettings;
       this.getScroller = getScroller;
       this.isTabRestoring = isTabRestoring;
       this.isVisible = isVisible;
+      this.boundary = boundary;
       this.positions = new globalThis.YomikuiHomeScroll.Tracker({ getSettings, getScroller });
       this.lastAction = -Infinity;
     }
@@ -265,6 +266,7 @@
         this.lastAction = Date.now();
         requested = true;
         this.positions.request(position);
+        this.boundary?.set(this.boundary.snapshot(target));
         this.positions.invoking = true;
         try { globalThis.YomikuiHomeScroll.clickWithHeaderLayout(banner ?? selected); }
         finally { this.positions.invoking = false; }
@@ -291,7 +293,8 @@
   function installFrame(options) {
     if (window.self === window.top) return null;
     let visible = true;
-    const refresher = new NativeRefresher({ ...options, isVisible: () => visible });
+    const boundary = new globalThis.YomikuiRefreshBoundary(options);
+    const refresher = new NativeRefresher({ ...options, boundary, isVisible: () => visible });
     const disposePositions = refresher.positions.install();
     const completed = new Map();
     const navigated = new Map();
@@ -345,6 +348,7 @@
         }
         window.sessionStorage.setItem(reloadKey, JSON.stringify({
           id: job.id, kind, path: currentPath(), origin: options.getOrigin(), started: Date.now(),
+          boundary: boundary.snapshot(kind),
         }));
       } catch {
         finish(job, { status: 'skipped', reason: 'reload-unavailable' });
@@ -374,12 +378,13 @@
       if (result?.reason) return { status: 'requested', method: 'reload', reason: result.reason };
       if (!result) return { status: 'requested', method: 'reload' };
       globalThis.YomikuiHomeScroll.scrollToTop(options.getScroller());
+      if (receipt.boundary?.kind === receipt.kind && receipt.boundary.path === receipt.path) boundary.set(receipt.boundary);
       return { status: 'reloaded', method: 'reload' };
     };
     const onMessage = event => {
       const data = event.data;
       if (event.source !== window.parent || event.origin !== options.getOrigin() || !trustedOrigin(event.origin) || !data) return;
-      if (data.type === 'yomikui-column-visibility') { visible = data.visible === true; context?.setVisible(visible); return; }
+      if (data.type === 'yomikui-column-visibility') { visible = data.visible === true; context?.setVisible(visible); boundary.setVisible(visible); return; }
       if (data.columnId !== options.getColumnId()) return;
       if (data.type === DESCRIBE) {
         if (context) context.refresh(true);
@@ -452,6 +457,7 @@
     return { dispose() {
       cancel();
       context?.dispose();
+      boundary.dispose();
       disposePositions();
       window.removeEventListener('message', onMessage);
       window.removeEventListener('pagehide', onPageHide);
