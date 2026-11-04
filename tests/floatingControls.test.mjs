@@ -116,6 +116,24 @@ test('wheel reversals and unit changes retain their order, and a new target disc
   env.controller.dispose();
 });
 
+test('multiple groups form a unique visible union for reading and wheel input with per-frame group guards', async () => {
+  const env = readingSetup();
+  const target = ['recommended', 'following', 'recommended'];
+  const move = env.controller.move({ target, mode: 'top' });
+  assert.deepEqual(env.messages.map(message => [message.columnId, message.group]), [['one', 'recommended'], ['two', 'recommended'], ['following', 'following']]);
+  await env.clock.advance(300); await move;
+  env.messages.length = 0;
+  env.controller.wheel({ target, deltaY: 10 });
+  env.controller.wheel({ target: ['following', 'recommended'], deltaY: 20 });
+  env.clock.frame(16);
+  assert.deepEqual(env.messages.map(message => message.deltaY), [10, 10, 10, 20, 20, 20]);
+  env.messages.length = 0;
+  assert.equal(env.controller.wheel({ target: [], deltaY: 30 }), false);
+  await env.controller.move({ target: [], mode: 'top' });
+  assert.deepEqual(env.messages, []);
+  env.controller.dispose();
+});
+
 test('wheel batches recheck visibility and drafts and skip unmounted columns', () => {
   const env = readingSetup();
   env.visible.delete('one');
@@ -448,170 +466,16 @@ test('a dragged header stays in place when folding or status text changes the pa
 
 test('panel preferences persist locally in order and normalize invalid values', async () => {
   const env = setup();
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, collapsed: false, mode: 'post', color: 'bluegray', transparency: 0 });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, collapsed: false, mode: 'post', hideEmpty: true, color: 'bluegray', transparency: 0 });
   env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, collapsed: true, mode: 'page' };
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, collapsed: true, mode: 'page', color: 'bluegray', transparency: 0 }, 'older preferences retain the position and mode');
-  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', color: 'invalid', transparency: 110 });
-  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', color: 'lavender', transparency: 35 });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, collapsed: true, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 0 }, 'older preferences retain the position and mode');
+  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', hideEmpty: true, color: 'invalid', transparency: 110 });
+  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35 });
   await Promise.all([first, last]);
-  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, collapsed: true, mode: 'page', color: 'bluegray', transparency: 80 });
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post', color: 'lavender', transparency: 35 });
+  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, collapsed: true, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 80 });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35 });
   for (const transparency of [-20, NaN, Infinity, '60']) assert.equal(env.api.preferences({ transparency }).transparency, 0);
   for (const color of ['invalid', '__proto__', 'toString', '#123456', null]) assert.equal(env.api.preferences({ color }).color, 'bluegray');
-});
-
-function panelTree(env, {
-  collapsed = false, phase = 'idle', reading = false, target = 'all', mode = 'post', lastAction = 'reading',
-  readingMessage = '', refreshText = '', color = 'bluegray', transparency = 0, onNavigate = () => {}, onRefresh = () => {},
-  kinds = { one: 'recommended' }, workspaceId = 'workspace', selectedWorkspaceId = workspaceId, ready = true,
-} = {}) {
-  const states = [env.api.preferences({ collapsed, mode, color, transparency }), { workspaceId: selectedWorkspaceId, target, ready }, new Set(['one']), lastAction];
-  const react = {
-    useState: () => [states.shift(), () => {}], useRef: current => ({ current }), useCallback: fn => fn,
-    useEffect() {}, useLayoutEffect() {},
-  };
-  const element = (type, props) => ({ type, props });
-  const tree = env.api.Panel({
-    React: react, jsx: { jsx: element, jsxs: element },
-    columns: [{ id: 'one', type: 'home', title: 'Home' }],
-    view: { phase, done: 0, total: 1 }, reading: { busy: reading, results: [], message: readingMessage },
-    canRefresh: true, refreshText, onRefresh, onNavigate, kinds, workspaceId,
-  });
-  const nodes = [];
-  const visit = node => {
-    if (!node || typeof node !== 'object') return;
-    nodes.push(node);
-    for (const child of [node.props?.children].flat()) visit(child);
-  };
-  visit(tree);
-  return nodes;
-}
-
-test('targets are saved independently per workspace without losing overlapping writes', async () => {
-  const env = setup();
-  assert.equal(await env.api.loadTarget('first'), 'all');
-  const one = env.api.saveTarget('first', 'group:recommended');
-  const two = env.api.saveTarget('second', 'group:search');
-  const latest = env.api.saveTarget('first', 'one');
-  const duringSave = env.api.loadTarget('first');
-  await Promise.all([one, two, latest]);
-  assert.equal(await duringSave, 'one', 'a fast workspace return waits for pending selection writes');
-  assert.equal(await env.api.loadTarget('first'), 'one');
-  assert.equal(await env.api.loadTarget('second'), 'group:search');
-  assert.equal(await env.api.loadTarget('third'), 'all');
-  const nodes = panelTree(env, { workspaceId: 'third' });
-  nodes.find(node => node.type === 'select' && node.props['aria-label'] === '対象の列').props.onChange({ target: { value: 'group:following' } });
-  await settle();
-  assert.equal(await env.api.loadTarget('third'), 'group:following');
-});
-
-test('group counts stay visible when folded; empty groups and a restoring workspace disable movement', () => {
-  const env = setup();
-  const grouped = panelTree(env, { collapsed: true, target: 'group:recommended' });
-  assert.match(grouped.find(node => node.props?.className === 'yf-summary').props.children, /おすすめ・1列/);
-  const empty = panelTree(env, { target: 'group:search' });
-  assert.ok(empty.filter(node => ['yf-up', 'yf-down', 'yf-top'].includes(node.props?.className)).every(node => node.props.disabled));
-  assert.equal(empty.find(node => node.type === 'select' && node.props['aria-label'] === '対象の列').props.value, 'group:search');
-  const switching = panelTree(env, { selectedWorkspaceId: 'previous', target: 'all' });
-  assert.ok(switching.filter(node => ['yf-up', 'yf-down', 'yf-top'].includes(node.props?.className)).every(node => node.props.disabled));
-  assert.equal(switching.find(node => node.type === 'select' && node.props['aria-label'] === '対象の列').props.disabled, true);
-});
-
-test('background color and transparency are saved independently and preserved with the mode when folding', async () => {
-  const env = setup();
-  const nodes = panelTree(env, { mode: 'page', color: 'sage', transparency: 35 });
-  const color = nodes.find(node => node.type === 'select' && node.props['aria-label'] === '背景色');
-  assert.equal(color.props.value, 'sage');
-  color.props.onChange({ currentTarget: { value: 'gray' } });
-  await settle();
-  assert.equal(env.saved.yomikui_floating_controls_v1.color, 'gray');
-  assert.equal(env.saved.yomikui_floating_controls_v1.transparency, 35);
-  const slider = nodes.find(node => node.type === 'input' && node.props.type === 'range');
-  assert.equal(slider.props['aria-label'], '背景の透明度');
-  slider.props.onChange({ currentTarget: { value: '60' } });
-  await settle();
-  assert.equal(env.saved.yomikui_floating_controls_v1.transparency, 60);
-  assert.equal(env.saved.yomikui_floating_controls_v1.mode, 'page');
-  nodes.find(node => node.props?.className === 'yf-collapse').props.onClick();
-  await settle();
-  const saved = await env.api.loadPreferences();
-  assert.equal(saved.transparency, 60);
-  assert.equal(saved.color, 'gray');
-  assert.equal(saved.collapsed, true);
-});
-
-test('collapsed controls send the same selected target to reading and recommendation updates', () => {
-  const env = setup();
-  const actions = [];
-  const refreshes = [];
-  const nodes = panelTree(env, { collapsed: true, target: 'one', mode: 'page', onNavigate: action => actions.push(clone(action)), onRefresh: action => refreshes.push(clone(action)) });
-  const byClass = name => nodes.find(node => node.props?.className === name);
-  assert.equal(byClass('yf-fields').props.hidden, true);
-  for (const name of ['yf-top', 'yf-up', 'yf-down', 'yf-refresh']) assert.equal(byClass(name).props.disabled, false);
-  byClass('yf-top').props.onClick();
-  byClass('yf-down').props.onClick();
-  assert.deepEqual(actions, [{ target: 'one', mode: 'top' }, { target: 'one', direction: 1, mode: 'page' }]);
-  assert.equal(byClass('yf-refresh').props['aria-label'], '選択中の列を更新', 'the icon-only refresh keeps an accessible name');
-  byClass('yf-refresh').props.onClick();
-  assert.deepEqual(refreshes, [{ target: 'one' }]);
-  assert.match(byClass('yf-refresh').props.title, /選択範囲内.*1列/);
-});
-
-test('refresh is disabled for unknown, offscreen or unsupported targets and while restoring a workspace', () => {
-  const env = setup();
-  for (const props of [
-    { kinds: { one: 'other' } },
-    { target: 'offscreen' }, { kinds: {} }, { selectedWorkspaceId: 'previous' }, { ready: false },
-  ]) {
-    const button = panelTree(env, props).find(node => node.props?.className === 'yf-refresh');
-    assert.equal(button.props.disabled, true);
-  }
-  const unsupported = panelTree(env, { kinds: { one: 'other' } });
-  assert.match(unsupported.find(node => node.props?.className === 'yf-refresh').props.title, /選択範囲内に更新対象の列がありません/);
-});
-
-test('Following, Search and Explore can be selected and refreshed from folded controls with the correct explanation', () => {
-  const env = setup();
-  for (const [kind, label] of [['following', 'フォロー中'], ['search', '検索結果'], ['explore', '話題を検索']]) {
-    const actions = [];
-    const nodes = panelTree(env, { target: `group:${kind}`, kinds: { one: kind }, collapsed: true, onRefresh: action => actions.push(clone(action)) });
-    const button = nodes.find(node => node.props?.className === 'yf-refresh');
-    assert.equal(button.props.disabled, false);
-    assert.match(button.props.title, new RegExp(`${label} 1列`));
-    assert.match(button.props.title, /現在のページを再読み込み/);
-    assert.match(button.props.title, /検索語・タブ・絞り込み条件を維持/);
-    assert.ok(nodes.some(node => node.type === 'option' && node.props.value === `group:${kind}`));
-    button.props.onClick();
-    assert.deepEqual(actions, [{ target: `group:${kind}` }]);
-  }
-});
-
-test('one status line shows the latest operation and keeps full results available as a tooltip', () => {
-  const env = setup();
-  const refresh = panelTree(env, { lastAction: 'refresh', phase: 'cooldown', readingMessage: '移動 1列', refreshText: '表示更新 1列' });
-  const refreshed = refresh.filter(node => node.props?.role === 'status');
-  assert.equal(refreshed.length, 1);
-  assert.equal(refreshed[0].props.children, '表示更新 1列');
-  assert.equal(refreshed[0].props.title, '表示更新 1列');
-  const moving = panelTree(env, { lastAction: 'refresh', reading: true, readingMessage: '1列を移動中', refreshText: '表示更新 1列' });
-  const moved = moving.filter(node => node.props?.role === 'status');
-  assert.equal(moved.length, 1);
-  assert.equal(moved[0].props.children, '1列を移動中');
-});
-
-test('reading controls are disabled while refreshing; refresh cooldown still permits reading', () => {
-  const env = setup();
-  const running = panelTree(env, { phase: 'running' });
-  assert.ok(running.filter(node => ['yf-top', 'yf-up', 'yf-down', 'yf-refresh'].includes(node.props?.className)).every(node => node.props.disabled));
-  const cooldown = panelTree(env, { phase: 'cooldown' });
-  assert.equal(cooldown.find(node => node.props?.className === 'yf-up').props.disabled, false);
-  assert.equal(cooldown.find(node => node.props?.className === 'yf-top').props.disabled, false);
-  assert.equal(cooldown.find(node => node.props?.className === 'yf-refresh').props.disabled, true);
-  const moving = panelTree(env, { reading: true });
-  assert.equal(moving.find(node => node.props?.className === 'yf-top').props.disabled, true);
-  assert.equal(moving.find(node => node.props?.className === 'yf-refresh').props.disabled, true);
-  const offscreen = panelTree(env, { target: 'offscreen' });
-  assert.equal(offscreen.find(node => node.props?.className === 'yf-top').props.disabled, true);
 });
 
 test('the floating helper is included before the dashboard and is safe to load twice', () => {

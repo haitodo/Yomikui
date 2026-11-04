@@ -80,6 +80,78 @@ async function beginNative(env, refresher = new env.api.NativeRefresher(env.opti
   return { pending, refresher };
 }
 
+test('refresh uses the manual instant top operation and waits for paint and settling before clicking once', async () => {
+  const env = setup(), moves = [];
+  env.scroller.scrollTo = options => { moves.push(clone(options)); env.scroller.scrollTop = options.top; };
+  env.window.requestAnimationFrame = env.clock.requestAnimationFrame;
+  env.window.cancelAnimationFrame = env.clock.cancelAnimationFrame;
+  let clicks = 0;
+  env.document.getElementById('recommended').addEventListener('click', () => { clicks++; env.document.getElementById('tweets').innerHTML = tweet('202'); });
+  const { pending } = await beginNative(env);
+  assert.deepEqual(moves, [{ top: 0, behavior: 'instant' }]);
+  await env.clock.advance(200);
+  assert.equal(clicks, 0, 'elapsed time alone does not confirm a painted top');
+  env.clock.frame(16); await settle();
+  assert.equal(clicks, 0);
+  env.clock.frame(16); await settle();
+  assert.equal((await pending).status, 'updated');
+  assert.equal(clicks, 1);
+  await env.clock.advance(1400);
+  assert.equal(env.clock.frames.size, 0);
+  assert.equal(env.clock.timers.size, 0);
+});
+
+test('an ignored or rebounding top scroll times out without clicking, retrying or leaking timers', async () => {
+  for (const rebounds of [false, true]) {
+    const env = setup();
+    let moves = 0, clicks = 0;
+    env.scroller.scrollTo = () => { moves++; if (rebounds) env.scroller.scrollTop = 0; };
+    env.document.addEventListener('click', () => clicks++);
+    const { pending } = await beginNative(env);
+    if (rebounds) env.clock.setTimeout(() => { env.scroller.scrollTop = 300; }, 100);
+    await env.clock.advance(1200);
+    assert.deepEqual(clone(await pending), { status: 'skipped', reason: 'scroll-top' });
+    assert.equal(clicks, 0);
+    assert.equal(moves, 1);
+    assert.equal(env.clock.timers.size, 0);
+    assert.equal(env.clock.frames.size, 0);
+  }
+});
+
+test('a late top arrival needs two stable painted frames and a changed route cancels preparation', async () => {
+  const env = setup();
+  env.scroller.scrollTo = () => {};
+  let clicks = 0;
+  env.document.getElementById('recommended').addEventListener('click', () => { clicks++; env.document.getElementById('tweets').innerHTML = tweet('202'); });
+  const { pending } = await beginNative(env);
+  env.clock.setTimeout(() => { env.scroller.scrollTop = 0; }, 180);
+  await env.clock.advance(200);
+  assert.equal(clicks, 0);
+  await env.clock.advance(8);
+  assert.equal((await pending).status, 'updated');
+  assert.equal(clicks, 1);
+  const changed = setup();
+  const operation = await beginNative(changed);
+  changed.window.location.search = '?different=1';
+  await changed.clock.advance(200);
+  assert.equal((await operation.pending).reason, 'target-changed');
+  assert.equal(changed.clock.timers.size, 0);
+});
+
+test('cancelling top preparation clears both paint callbacks and all deadlines without clicking', async () => {
+  const env = setup(), abort = new AbortController();
+  env.window.requestAnimationFrame = env.clock.requestAnimationFrame;
+  env.window.cancelAnimationFrame = env.clock.cancelAnimationFrame;
+  let clicks = 0;
+  env.document.addEventListener('click', () => clicks++);
+  const { pending } = await beginNative(env, undefined, abort.signal);
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  abort.abort(); await rejected;
+  assert.equal(clicks, 0);
+  assert.equal(env.clock.frames.size, 0);
+  assert.equal(env.clock.timers.size, 0);
+});
+
 test('a CSS-hidden selected recommendation tab refreshes once without exposing the tab bar', async () => {
   const env = setup();
   let clicks = 0;
@@ -314,6 +386,24 @@ function searchSetup(query = '?q=cat%20dog&src=typed_query&f=live&pf=on&lf=on', 
   return env;
 }
 
+for (const [kind, create] of [['explore', exploreSetup], ['search', searchSetup]]) {
+  test(`${kind} never reloads when top preparation stalls or the route changes`, async () => {
+    for (const changed of [false, true]) {
+      const env = create();
+      env.scroller.scrollTo = () => {};
+      const installed = env.api.installFrame(env.options);
+      env.send();
+      if (changed) env.window.location.search += '&changed=1';
+      await env.clock.advance(1200);
+      assert.equal(env.reloads.length, 0);
+      assert.equal(env.messages.at(-1).data.reason, changed ? 'target-changed' : 'scroll-top');
+      assert.equal(env.storage.size, 0);
+      installed.dispose();
+      assert.equal(env.clock.timers.size, 0);
+    }
+  });
+}
+
 for (const tab of ['for_you', 'trending', 'news', 'sports', 'entertainment']) {
   test(`Explore reload preserves the current ${tab} URL and completes after the replacement document renders`, async () => {
     const env = exploreSetup(tab);
@@ -327,6 +417,9 @@ for (const tab of ['for_you', 'trending', 'news', 'sports', 'entertainment']) {
     assert.equal(env.reloads.length, 0);
     env.send();
     env.send();
+    await env.clock.advance(199);
+    assert.equal(env.reloads.length, 0, 'the reload waits for top preparation');
+    await env.clock.advance(1);
     assert.equal(env.reloads.length, 1);
     assert.equal(env.reloads[0].pathname, `/explore/tabs/${tab}`);
     assert.equal(env.reloads[0].search, '?test=1');
@@ -340,6 +433,7 @@ for (const tab of ['for_you', 'trending', 'news', 'sports', 'entertainment']) {
 
     const replacement = exploreSetup(tab, { storage: env.storage, loading: true });
     replacement.window.location.search = '?test=1';
+    await replacement.clock.advance(env.clock.now);
     const resumed = replacement.api.installFrame(replacement.options);
     replacement.send();
     await settle();
@@ -383,6 +477,7 @@ for (const [filter, content, columnType] of [
     assert.equal(env.reloads.length, 0);
     env.send();
     env.send();
+    await env.clock.advance(200);
     assert.equal(env.reloads.length, 1);
     assert.equal(env.reloads[0].pathname, '/search');
     assert.equal(env.reloads[0].search, query);
@@ -394,6 +489,7 @@ for (const [filter, content, columnType] of [
     assert.ok(env.storage.has(reloadKey));
 
     const replacement = searchSetup(query, { storage: env.storage, loading: true });
+    await replacement.clock.advance(env.clock.now);
     const resumed = replacement.api.installFrame({ ...replacement.options, isTabRestoring: () => true });
     replacement.send();
     await settle();
@@ -478,6 +574,7 @@ for (const [kind, create] of [['Explore', exploreSetup], ['Search', searchSetup]
       const installed = env.api.installFrame(env.options);
       change(env);
       env.send();
+      await env.clock.advance(200);
       assert.equal(env.messages.at(-1).data.reason, reason);
       assert.equal(env.reloads.length, 0);
       installed.dispose();
@@ -535,7 +632,7 @@ test('Explore root and trailing-slash URLs resume without switching their curren
 });
 
 for (const [kind, create] of [['explore', exploreSetup], ['search', searchSetup]]) {
-  test(`${kind} pages reached through SPA navigation retain column bootstrap settings when reloaded`, () => {
+  test(`${kind} pages reached through SPA navigation retain column bootstrap settings when reloaded`, async () => {
     const env = create();
     env.window.location.hash = '#yomikui-cidcolumn1-ctsearch-hb1';
     const installed = env.api.installFrame(env.options);
@@ -543,6 +640,7 @@ for (const [kind, create] of [['explore', exploreSetup], ['search', searchSetup]
     env.window.location.search += (env.window.location.search ? '&' : '?') + 'source=test';
     const path = env.window.location.pathname, query = env.window.location.search;
     env.send();
+    await env.clock.advance(200);
     assert.equal(env.reloads.length, 1);
     assert.equal(env.reloads[0].pathname, path);
     assert.equal(env.reloads[0].search, query);
@@ -916,6 +1014,22 @@ test('one user action updates visible supported pages sequentially and leaves of
   await env.clock.advance(5000);
   assert.equal(env.clock.timers.size, 0, 'the idle control has no polling timers');
   env.batch.dispose();
+});
+
+test('a multiple-group refresh snapshots its scope, visits each visible column once and skips changed kinds', async () => {
+  for (const changeNext of [false, true]) {
+    const env = batchSetup({ columns: [
+      { id: 'home', type: 'home' }, { id: 'search', type: 'search' }, { id: 'explore', type: 'explore' }, { id: 'offscreen', type: 'home' },
+    ], offscreen: ['offscreen'] });
+    const target = ['recommended', 'search', 'recommended'];
+    const run = env.batch.run({ target });
+    target.splice(0, target.length, 'explore');
+    if (changeNext) env.report('search', 'following');
+    await env.clock.advance(1000); await run;
+    assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.columnId), changeNext ? ['home'] : ['home', 'search']);
+    if (changeNext) assert.equal(env.views.at(-1).results.at(-1).reason, 'target-changed');
+    env.batch.dispose();
+  }
 });
 
 test('one batch dispatches each visible current page to its own refresh strategy in order', async () => {

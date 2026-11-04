@@ -33,6 +33,7 @@
     error: '更新操作に失敗しました',
     'target-changed': '対象の表示内容・表示範囲が変わりました',
     'reload-unavailable': '列の再読み込みを準備できませんでした',
+    'scroll-top': '先頭への移動を確認できませんでした',
   };
   const isNativeColumn = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
   const refreshable = kind => globalThis.YomikuiHomeScroll.isRefreshableKind(kind);
@@ -173,6 +174,59 @@
       return !this.isVisible() ? 'hidden' : this.isTabRestoring() ? 'unavailable' : unavailableReason(this.getSettings, target);
     }
 
+    async prepare(signal, target) {
+      checkAbort(signal);
+      const reason = this.unavailableReason(target);
+      if (reason) return reason;
+      const path = currentPath();
+      globalThis.YomikuiHomeScroll.scrollToTop(this.getScroller());
+      // Confirm two painted frames at the top as well as X's short settling
+      // interval. A stalled/overridden scroll must never turn into a refresh.
+      const schedule = window.requestAnimationFrame?.bind(window) ?? (callback => setTimeout(callback, 16));
+      const unschedule = window.cancelAnimationFrame?.bind(window) ?? clearTimeout;
+      return new Promise((resolve, reject) => {
+        let frame = null, paints = 0, settled = false, finished = false, scroller = this.getScroller();
+        const guard = () => currentPath() !== path ? 'target-changed' : this.unavailableReason(target);
+        const atTop = () => {
+          const current = this.getScroller();
+          if (current !== scroller) { paints = 0; scroller = current; }
+          const top = current?.scrollTop ?? window.scrollY ?? 0;
+          return Number.isFinite(top) && Math.abs(top) <= 1;
+        };
+        const finish = (reason, error) => {
+          if (finished) return;
+          finished = true;
+          unschedule(frame);
+          clearTimeout(settleTimer);
+          clearTimeout(deadline);
+          signal?.removeEventListener('abort', cancel);
+          error ? reject(error) : resolve(reason);
+        };
+        const cancel = () => finish(null, abortError());
+        const sample = () => {
+          try {
+            const reason = guard();
+            if (reason) { finish(reason); return; }
+            paints = atTop() ? paints + 1 : 0;
+            if (settled && paints >= 2) { finish(null); return; }
+            frame = schedule(sample);
+          } catch (error) { finish(null, error); }
+        };
+        const settleTimer = setTimeout(() => {
+          settled = true;
+          try {
+            const reason = guard();
+            if (reason) finish(reason);
+            else if (atTop() && paints >= 2) finish(null);
+          } catch (error) { finish(null, error); }
+        }, 200);
+        const deadline = setTimeout(() => finish('scroll-top'), 1200);
+        signal?.addEventListener('abort', cancel, { once: true });
+        if (signal?.aborted) cancel();
+        else frame = schedule(sample);
+      });
+    }
+
     async refresh(signal, target = readingKind(this.getSettings) ?? 'recommended') {
       checkAbort(signal);
       let reason = this.unavailableReason(target);
@@ -191,13 +245,9 @@
       // Refresh only the selected Home tab, without switching or retrying.
       // The position preference belongs to recommendations, not Following.
       const position = target === 'recommended' ? this.positions.begin(signal) : null;
-      let updated = false;
+      let updated = false, requested = false;
       try {
-        const scroller = this.getScroller();
-        if (scroller) scroller.scrollTop = 0;
-        else window.scrollTo({ top: 0, behavior: 'instant' });
-        await delay(200, signal);
-        reason = this.unavailableReason(target);
+        reason = await this.prepare(signal, target);
         if (reason) return { status: 'skipped', reason };
         const selected = globalThis.YomikuiHomeScroll.selectedTimelineTab();
         if (!selected || selected !== tab || !selected.isConnected || selected.getAttribute('aria-disabled') === 'true') {
@@ -207,6 +257,7 @@
         const before = tweetSignature();
         const method = banner ? 'new-posts' : 'tab';
         this.lastAction = Date.now();
+        requested = true;
         this.positions.request(position);
         this.positions.invoking = true;
         try { globalThis.YomikuiHomeScroll.clickWithHeaderLayout(banner ?? selected); }
@@ -224,7 +275,7 @@
         return { status: changed ? 'updated' : 'requested', method };
       } finally {
         if (position) {
-          if (signal?.aborted) this.positions.cancel(position);
+          if (signal?.aborted || !requested) this.positions.cancel(position);
           else if (!updated) this.positions.finish(position);
         }
       }
@@ -261,7 +312,7 @@
       status: error.name === 'AbortError' ? 'skipped' : 'failed',
       reason: error.name === 'AbortError' ? 'cancelled' : 'error',
     });
-    const reloadPage = (job, kind) => {
+    const reloadPage = async (job, kind) => {
       const reason = refresher.unavailableReason(kind);
       if (reason || readingKind(options.getSettings) !== kind || !reloadTabMatches(kind)) {
         finish(job, { status: 'skipped', reason: reason || 'unavailable' });
@@ -269,6 +320,11 @@
       }
       if (Date.now() - refresher.lastAction < COOLDOWN) {
         finish(job, { status: 'skipped', reason: 'cooldown' });
+        return;
+      }
+      const preparation = await refresher.prepare(job.abort.signal, kind);
+      if (preparation || !reloadTabMatches(kind)) {
+        finish(job, { status: 'skipped', reason: preparation || 'target-changed' });
         return;
       }
       // This one-shot receipt survives this column's document replacement. It
@@ -309,9 +365,7 @@
       }, Math.max(1, RELOAD_TIMEOUT - (Date.now() - receipt.started)), job.abort.signal);
       if (result?.reason) return { status: 'requested', method: 'reload', reason: result.reason };
       if (!result) return { status: 'requested', method: 'reload' };
-      const scroller = options.getScroller();
-      if (scroller) scroller.scrollTop = 0;
-      else window.scrollTo({ top: 0, behavior: 'instant' });
+      globalThis.YomikuiHomeScroll.scrollToTop(options.getScroller());
       return { status: 'reloaded', method: 'reload' };
     };
     const onMessage = event => {
@@ -358,7 +412,7 @@
       }
       const job = { id: data.requestId, abort: new AbortController() };
       active = job;
-      if (reloadable(data.target)) reloadPage(job, data.target);
+      if (reloadable(data.target)) reloadPage(job, data.target).catch(error => finish(job, failure(error)));
       else refresher.refresh(job.abort.signal, data.target).catch(failure).then(result => finish(job, result));
     };
     const cancel = () => {
@@ -532,6 +586,7 @@
 
     async run({ target = 'all' } = {}) {
       if (this.disposed || this.active || Date.now() < this.cooldownUntil || document.hidden) return;
+      if (Array.isArray(target)) target = [...new Set(target)];
       const state = this.getState();
       const columns = this.getTargets(target).filter(column => refreshable(column.refreshKind));
       if (!columns.length) return;
@@ -641,6 +696,7 @@
     return jsx.jsx(globalThis.YomikuiFloatingControls.Panel, {
       React, jsx, columns, view, reading, hidden, kinds, workspaceId, onVisibleChange, onCancelWheel, canRefresh: columns.some(isNativeColumn), refreshText: summary(view), refreshDetails: details,
       onRefresh: action => { if (store.getState().activeWorkspaceId === workspaceId && !reader.current?.active) { reader.current?.clearWheel(); controller.current?.run(action); } },
+      onCancelRefresh: () => controller.current?.cancel(),
       onNavigate: action => { if (store.getState().activeWorkspaceId === workspaceId && !controller.current?.active) reader.current?.move(action); },
       onWheel: action => store.getState().activeWorkspaceId === workspaceId && !controller.current?.active && reader.current?.wheel(action) === true,
     });

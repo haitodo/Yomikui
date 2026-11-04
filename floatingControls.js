@@ -16,27 +16,43 @@
     'target-changed': '表示内容が対象から変わりました',
   };
   const targetGroup = target => typeof target === 'string' && target.startsWith('group:') ? target.slice(6) : null;
-  const normalizeTarget = value => typeof value === 'string' && value.length > 0 && value.length <= 100 &&
-    (!value.startsWith('group:') || Object.hasOwn(GROUPS, targetGroup(value))) ? value : 'all';
+  const groupName = value => Object.hasOwn(GROUPS, value) ? value : targetGroup(value);
+  function selectionPreferences(value) {
+    const valid = value => typeof value === 'string' && Object.hasOwn(GROUPS, groupName(value));
+    if (typeof value === 'string') {
+      if (value === 'all') return { selectionMode: 'multiple', single: 'recommended', multiple: Object.keys(GROUPS), multipleReady: true };
+      value = { single: valid(value) ? groupName(value) : 'recommended' };
+    }
+    const single = valid(value?.single) ? groupName(value.single) : 'recommended';
+    return {
+      selectionMode: value?.selectionMode === 'multiple' ? 'multiple' : 'single', single,
+      multiple: Array.isArray(value?.multiple) ? [...new Set(value.multiple.filter(valid).map(groupName))] : [single],
+      multipleReady: value?.multipleReady === true || value?.selectionMode === 'multiple',
+    };
+  }
+  const selectedGroups = selection => selection.selectionMode === 'multiple' ? selection.multiple : [selection.single];
+  const targetKey = target => Array.isArray(target) ? [...new Set(target)].sort().join(',') : target;
+  const frameGroup = (target, kind) => Array.isArray(target) ? kind : targetGroup(target);
   const workspaceKey = id => typeof id === 'string' && id.length > 0 && id.length <= 100 ? id : 'default';
-  const matchesTarget = (column, target, kinds) => target === 'all' ||
+  const matchesTarget = (column, target, kinds) => Array.isArray(target) ? target.some(kind => Object.hasOwn(GROUPS, kind) && kinds[column.id] === kind) : target === 'all' ||
     (targetGroup(target) ? Object.hasOwn(GROUPS, targetGroup(target)) && kinds[column.id] === targetGroup(target) : column.id === target);
 
   async function loadTarget(workspaceId) {
     try {
       await savingTargets;
-      return normalizeTarget((await chrome.storage.local.get(TARGETS_KEY))[TARGETS_KEY]?.[workspaceKey(workspaceId)]);
+      return selectionPreferences((await chrome.storage.local.get(TARGETS_KEY))[TARGETS_KEY]?.[workspaceKey(workspaceId)]);
     }
-    catch { return 'all'; }
+    catch { return selectionPreferences(); }
   }
 
   let savingTargets = Promise.resolve();
   function saveTarget(workspaceId, target) {
+    const next = selectionPreferences(target);
     savingTargets = savingTargets.then(async () => {
       try {
         const value = (await chrome.storage.local.get(TARGETS_KEY))[TARGETS_KEY];
         const previous = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-        await chrome.storage.local.set({ [TARGETS_KEY]: { ...previous, [workspaceKey(workspaceId)]: normalizeTarget(target) } });
+        await chrome.storage.local.set({ [TARGETS_KEY]: { ...previous, [workspaceKey(workspaceId)]: next } });
       } catch {}
     });
     return savingTargets;
@@ -48,6 +64,7 @@
       y: Number.isFinite(value?.y) ? clamp(value.y) : 1,
       collapsed: value?.collapsed === true,
       mode: value?.mode === 'page' ? 'page' : 'post',
+      hideEmpty: value?.hideEmpty !== false,
       color: Object.hasOwn(COLORS, value?.color) ? value.color : 'bluegray',
       transparency: Number.isFinite(value?.transparency) ? Math.max(0, Math.min(80, Math.round(value.transparency / 5) * 5)) : 0,
     };
@@ -179,11 +196,11 @@
       if (!this.selectedColumns(target, this.visible).length) return false;
       if (this.active && !this.active.cancelled) { this.active.cancelledByWheel = true; this.cancel(); }
       const previous = this.wheelBuffer;
-      if (previous && (previous.workspaceId !== state.activeWorkspaceId || previous.target !== target)) this.clearWheel();
+      if (previous && (previous.workspaceId !== state.activeWorkspaceId || targetKey(previous.target) !== targetKey(target))) this.clearWheel();
       // Keep reversals and unit changes in order, including at a column's edge.
       else if (previous && (previous.deltaMode !== deltaMode || previous.direction !== Math.sign(deltaY))) this.flushWheel();
       const leading = !this.wheelBuffer;
-      if (leading) this.wheelBuffer = { workspaceId: state.activeWorkspaceId, target, deltaMode, direction: Math.sign(deltaY), deltaY: 0, frame: null };
+      if (leading) this.wheelBuffer = { workspaceId: state.activeWorkspaceId, target: Array.isArray(target) ? [...target] : target, deltaMode, direction: Math.sign(deltaY), deltaY: 0, frame: null };
       const buffer = this.wheelBuffer;
       buffer.deltaY += deltaY;
       // Send the first input in this event, without waiting for the dashboard's
@@ -203,6 +220,7 @@
       if (deltaY === 0) return;
       const state = this.getState();
       if (this.disposed || document.hidden || state.activeWorkspaceId !== buffer.workspaceId) return;
+      const kinds = this.kinds();
       for (const column of this.selectedColumns(buffer.target)) {
         if (state.columnComposing?.[column.id]) continue;
         const frame = this.getFrame(column.id);
@@ -217,7 +235,7 @@
         try { frame.window.postMessage({
           type: PREFIX + 'scroll', requestId: crypto.randomUUID(), columnId: column.id, mode: 'wheel',
           deltaY, deltaMode: buffer.deltaMode,
-          ...(targetGroup(buffer.target) ? { group: targetGroup(buffer.target) } : {}),
+          ...(frameGroup(buffer.target, kinds[column.id]) ? { group: frameGroup(buffer.target, kinds[column.id]) } : {}),
         }, frame.origin); } catch {}
       }
     }
@@ -231,6 +249,7 @@
       if (this.disposed || this.active || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ direction, mode })) return;
       this.clearWheel();
       const state = this.getState();
+      const kinds = this.kinds();
       const columns = this.selectedColumns(target);
       if (!columns.length) {
         this.onChange({ busy: false, results: [], message: '画面内に閲覧対象の列がありません' });
@@ -248,7 +267,7 @@
           if (state.columnComposing?.[column.id]) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'draft' };
           if (!frame?.window || !trusted(frame.origin)) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'unavailable' };
           state.markColumnActivity?.(column.id);
-          return this.request(column, frame, direction, mode, targetGroup(target));
+          return this.request(column, frame, direction, mode, frameGroup(target, kinds[column.id]));
         }));
         // Bound rapid clicks without queuing steps or running a repeat timer.
         const remaining = 300 - (Date.now() - started);
@@ -308,7 +327,7 @@
     const receive = event => {
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
           Math.abs(event.deltaX || 0) > Math.abs(event.deltaY) ||
-          event.target.closest?.('select, input, textarea, [contenteditable="true"], [role="listbox"], [role="menu"]') ||
+          event.target.closest?.('label, select, input, textarea, [contenteditable="true"], [role="listbox"], [role="menu"]') ||
           panel.scrollHeight > panel.clientHeight + 1) return;
       const action = { deltaY: event.deltaY, deltaMode: event.deltaMode ?? 0 };
       if (globalThis.YomikuiHomeScroll.isReadingAction({ mode: 'wheel', ...action }) && onWheel(action)) event.preventDefault();
@@ -458,7 +477,7 @@
     #yomikui-root{--yf-bluegray:#2c3e52;--yf-lavender:#45364f;--yf-sage:#2f453b;--yf-gray:#3a3b45}
     #yomikui-root[data-theme="dim"]{--yf-bluegray:#30475b;--yf-lavender:#453c56;--yf-sage:#344d46;--yf-gray:#3a424b}
     #yomikui-root[data-theme="light"]{--yf-bluegray:#e5eef8;--yf-lavender:#eee5f7;--yf-sage:#e1f0e8;--yf-gray:#e9eaef}
-    .yomikui-floating-panel{position:fixed;right:20px;bottom:24px;z-index:800;width:248px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;border:1px solid color-mix(in oklab,var(--popover-foreground) 20%,transparent);border-radius:var(--radius);--yf-panel-background:color-mix(in oklab,var(--yf-surface-base) var(--yf-surface-opacity,100%),transparent);--yf-control-background:color-mix(in oklab,color-mix(in oklab,var(--yf-surface-base) 94%,var(--popover-foreground)) var(--yf-surface-opacity,100%),transparent);--yf-muted-foreground:color-mix(in oklab,var(--popover-foreground) 75%,var(--yf-surface-base));background:var(--yf-panel-background);color:var(--popover-foreground);box-shadow:0 6px 24px #00000033,0 1px 4px #0000001f;font-size:12px;line-height:1.4}
+    .yomikui-floating-panel{position:fixed;right:20px;bottom:24px;z-index:800;width:288px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;border:1px solid color-mix(in oklab,var(--popover-foreground) 20%,transparent);border-radius:var(--radius);--yf-panel-background:color-mix(in oklab,var(--yf-surface-base) var(--yf-surface-opacity,100%),transparent);--yf-control-background:color-mix(in oklab,color-mix(in oklab,var(--yf-surface-base) 94%,var(--popover-foreground)) var(--yf-surface-opacity,100%),transparent);--yf-muted-foreground:color-mix(in oklab,var(--popover-foreground) 75%,var(--yf-surface-base));background:var(--yf-panel-background);color:var(--popover-foreground);box-shadow:0 6px 24px #00000033,0 1px 4px #0000001f;font-size:12px;line-height:1.4}
     .yomikui-floating-panel *{box-sizing:border-box}
     .yomikui-floating-panel svg{flex-shrink:0}
     .yomikui-floating-panel .yf-header{display:flex;align-items:center;gap:2px;position:sticky;top:0;z-index:1;padding:4px 4px 0;background:var(--yf-panel-background)}
@@ -469,9 +488,22 @@
     .yomikui-floating-panel button:focus-visible,.yomikui-floating-panel select:focus-visible,.yomikui-floating-panel input:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
     .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;gap:6px;min-height:24px;padding:4px 5px;color:var(--yf-muted-foreground);cursor:grab;touch-action:none;user-select:none}
     .yomikui-floating-panel .yf-title{flex-shrink:0;font-size:11px;font-weight:600;color:var(--foreground)}
-    .yomikui-floating-panel .yf-collapse{width:24px;min-height:24px;padding:4px;color:var(--yf-muted-foreground)}
-    .yomikui-floating-panel .yf-body{padding:8px}
-    .yomikui-floating-panel .yf-fields{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:6px;margin-bottom:8px}
+    .yomikui-floating-panel .yf-collapse,.yomikui-floating-panel .yf-settings-toggle{width:24px;min-height:24px;padding:4px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-body{padding:4px 8px 8px}
+    .yomikui-floating-panel [hidden]{display:none!important}
+    .yomikui-floating-panel .yf-choice-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px;margin-bottom:4px}
+    .yomikui-floating-panel .yf-selection-mode{display:flex;gap:2px;padding:2px;border-radius:7px;background:var(--yf-control-background)}
+    .yomikui-floating-panel .yf-selection-mode button{min-height:26px;padding:3px 7px;font-size:11px}
+    .yomikui-floating-panel .yf-hide-empty{display:flex;align-items:center;gap:4px;min-height:28px;font-size:11px;color:var(--yf-muted-foreground);white-space:nowrap;cursor:pointer}
+    .yomikui-floating-panel .yf-hide-empty input{margin:0;accent-color:var(--foreground)}
+    .yomikui-floating-panel .yf-targets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+    .yomikui-floating-panel .yf-target{justify-content:flex-start;min-height:32px;padding:5px 6px;background:var(--yf-control-background)}
+    .yomikui-floating-panel button[aria-pressed="true"]{background:var(--popover-foreground);color:var(--popover)}
+    .yomikui-floating-panel button[aria-pressed="true"]:not(:disabled):hover{background:var(--popover-foreground);color:var(--popover)}
+    .yomikui-floating-panel .yf-mark{width:12px;flex-shrink:0;text-align:center}
+    .yomikui-floating-panel .yf-count{margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums}
+    .yomikui-floating-panel.yf-compact .yf-target{min-height:28px;padding-block:3px}
+    .yomikui-floating-panel .yf-fields{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
     .yomikui-floating-panel label{position:relative;min-width:0}
     .yomikui-floating-panel .yf-sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
     .yomikui-floating-panel select{appearance:none;width:100%;min-width:0;height:28px;padding:0 23px 0 8px;border:1px solid transparent;border-radius:6px;background:var(--yf-control-background);color:var(--popover-foreground);font:inherit;font-size:11px;text-overflow:ellipsis;cursor:pointer;transition:border-color .15s}
@@ -479,22 +511,21 @@
     .yomikui-floating-panel select:disabled{opacity:.5;cursor:default}
     .yomikui-floating-panel option{background:var(--popover);color:var(--popover-foreground)}
     .yomikui-floating-panel label>svg,.yomikui-floating-panel .yf-color-select>svg{position:absolute;right:7px;top:50%;width:12px;height:12px;transform:translateY(-50%);color:var(--yf-muted-foreground);pointer-events:none}
-    .yomikui-floating-panel .yf-color{grid-column:1 / -1;display:flex;align-items:center;gap:8px;font-size:10px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-setting{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-setting>span:first-child{min-width:4em}
     .yomikui-floating-panel .yf-color-select{position:relative;flex:1;min-width:0}
-    .yomikui-floating-panel .yf-transparency{grid-column:1 / -1;display:flex;align-items:center;gap:8px;font-size:10px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-transparency{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-transparency input{appearance:none;flex:1;min-width:0;height:20px;padding:0;background:transparent;cursor:pointer}
     .yomikui-floating-panel .yf-transparency input::-webkit-slider-runnable-track{height:3px;border-radius:3px;background:color-mix(in oklab,var(--yf-muted-foreground) 35%,transparent)}
     .yomikui-floating-panel .yf-transparency input::-webkit-slider-thumb{appearance:none;width:12px;height:12px;margin-top:-4.5px;border-radius:50%;background:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-transparency-value{width:3.5ch;text-align:right;font-variant-numeric:tabular-nums}
-    .yomikui-floating-panel .yf-summary{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400;color:var(--yf-muted-foreground)}
-    .yomikui-floating-panel .yf-actions{display:flex;align-items:stretch;gap:6px}
+    .yomikui-floating-panel .yf-actions{display:flex;align-items:stretch;gap:4px;margin-top:4px}
     .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));flex:1;min-width:0;gap:2px;padding:2px;border-radius:8px;background:var(--yf-control-background)}
-    .yomikui-floating-panel .yf-refresh-area{display:flex;align-items:center;padding-left:6px;border-left:1px solid var(--border)}
-    .yomikui-floating-panel .yf-refresh{width:32px;min-height:32px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-refresh-area{display:flex;align-items:stretch}
+    .yomikui-floating-panel .yf-refresh{width:76px;min-height:32px;background:var(--yf-control-background)}
     .yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:yomikui-floating-spin 1s linear infinite}
-    .yomikui-floating-panel .yf-status{margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:16px;color:var(--yf-muted-foreground)}
     @keyframes yomikui-floating-spin{to{transform:rotate(360deg)}}
-    @media(pointer:coarse){.yomikui-floating-panel button{min-height:44px}.yomikui-floating-panel .yf-collapse,.yomikui-floating-panel .yf-refresh{width:44px}.yomikui-floating-panel select{height:36px;font-size:12px}.yomikui-floating-panel .yf-transparency input{height:28px}}
+    @media(pointer:coarse){.yomikui-floating-panel button,.yomikui-floating-panel .yf-target,.yomikui-floating-panel.yf-compact .yf-target,.yomikui-floating-panel .yf-selection-mode button,.yomikui-floating-panel .yf-hide-empty{min-height:44px}.yomikui-floating-panel .yf-collapse,.yomikui-floating-panel .yf-settings-toggle{width:44px;min-height:44px}.yomikui-floating-panel .yf-refresh{min-height:44px}.yomikui-floating-panel select{height:44px;font-size:16px}.yomikui-floating-panel .yf-transparency input{height:28px}}
     @media(prefers-reduced-motion:reduce){.yomikui-floating-panel button,.yomikui-floating-panel select{transition:none}.yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:none}}
   `.replaceAll('.yomikui-floating-panel', '#yomikui-root .yomikui-floating-panel');
 
@@ -510,18 +541,20 @@
     return true;
   }
 
-  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onNavigate, onWheel, onCancelWheel, workspaceId = 'default', kinds = {}, onVisibleChange }) {
+  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onCancelRefresh, onNavigate, onWheel, onCancelWheel, workspaceId = 'default', kinds = {}, onVisibleChange }) {
     const [prefs, setPrefs] = React.useState(preferences);
-    const [selection, setSelection] = React.useState(() => ({ workspaceId, target: 'all', ready: false }));
+    const [selection, setSelection] = React.useState(() => ({ workspaceId, value: selectionPreferences(), ready: false }));
     const [visible, setVisible] = React.useState(() => new Set());
     const [lastAction, setLastAction] = React.useState('reading');
+    const [settingsOpen, setSettingsOpen] = React.useState(false);
     const prefsRef = React.useRef(prefs), dirty = React.useRef(false);
     const panelRef = React.useRef(null), handleRef = React.useRef(null), positionRef = React.useRef(null);
     const wheelRef = React.useRef(null);
+    const countsRef = React.useRef(null);
     const eligible = columns.filter(readable);
     const available = eligible.length > 0 || canRefresh;
     const targetReady = selection.workspaceId === workspaceId && selection.ready;
-    const target = targetReady ? selection.target : '__loading__';
+    const target = targetReady ? selectedGroups(selection.value) : [];
     const useLayoutEffect = React.useLayoutEffect ?? React.useEffect;
     const updatePrefs = React.useCallback(patch => {
       dirty.current = true;
@@ -548,8 +581,8 @@
     useLayoutEffect(() => { positionRef.current?.setPosition(prefs); }, [prefs]);
     React.useEffect(() => {
       let mounted = true;
-      loadTarget(workspaceId).then(target => {
-        if (mounted) { setSelection({ workspaceId, target, ready: true }); setLastAction('selection'); }
+      loadTarget(workspaceId).then(value => {
+        if (mounted) { setSelection({ workspaceId, value, ready: true }); setLastAction('selection'); }
       });
       return () => { mounted = false; };
     }, [workspaceId]);
@@ -579,20 +612,27 @@
     if (hidden || !available) return null;
     const busy = view.phase === 'running';
     const visibleColumns = eligible.filter(column => visible.has(column.id));
+    const currentCounts = Object.fromEntries(Object.keys(GROUPS).map(kind => [kind, visibleColumns.filter(column => kinds[column.id] === kind).length]));
+    // A reloading frame briefly reports an unknown kind. Keep the controls
+    // stationary during the operation; execution still uses live contexts.
+    if ((!busy && !reading.busy) || countsRef.current?.workspaceId !== workspaceId) countsRef.current = { workspaceId, counts: currentCounts };
+    const displayCounts = countsRef.current.counts;
     const selectedColumns = targetReady ? visibleColumns.filter(column => matchesTarget(column, target, kinds)) : [];
     const refreshCounts = globalThis.YomikuiHomeScroll.REFRESH_KINDS.map(kind => ({
       kind, count: selectedColumns.filter(column => kinds[column.id] === kind).length,
     }));
     const refreshCount = refreshCounts.reduce((total, item) => total + item.count, 0);
     const refreshTargets = refreshCounts.filter(item => item.count).map(item => `${GROUPS[item.kind]} ${item.count}列`).join('・');
-    const selected = !targetReady ? '読み込み中' : target === 'all' ? '表示中すべて' : GROUPS[targetGroup(target)] || columns.find(column => column.id === target)?.title || '選択した列';
+    const selected = !targetReady ? '読み込み中' : target.map(kind => GROUPS[kind]).join('・') || '対象未選択';
     const selectionVisible = selectedColumns.length > 0;
     wheelRef.current = action => targetReady && selectionVisible && !busy && !positionRef.current?.drag && onWheel?.({ target, ...action }) === true;
-    const selectTarget = target => {
+    const selectTarget = patch => {
+      if (!targetReady || busy || reading.busy) return;
       onCancelWheel?.();
-      setSelection({ workspaceId, target, ready: true });
+      const value = selectionPreferences({ ...selection.value, ...patch });
+      setSelection({ workspaceId, value, ready: true });
       setLastAction('selection');
-      saveTarget(workspaceId, target);
+      saveTarget(workspaceId, value);
     };
     const icon = name => jsx.jsx('svg', {
       width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75,
@@ -601,6 +641,7 @@
         top: 'M5 3h14M12 21V7m-6 6 6-6 6 6', up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
         grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
         refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 17.9 17',
+        settings: 'M10 2h4l1 3 2 1 3-1 2 4-2 2v2l2 2-2 4-3-1-2 1-1 3h-4l-1-3-2-1-3 1-2-4 2-2v-2L2 9l2-4 3 1 2-1z M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8',
       }[name] }),
     });
     const details = reading.results.map(result => `${result.title || '列'}: ${
@@ -609,39 +650,72 @@
     const showRefresh = busy || (lastAction === 'refresh' && !reading.busy);
     const noSelection = targetReady && !selectionVisible && !busy;
     const statusText = !targetReady ? '対象を読み込み中' : noSelection ? '画面内に閲覧対象の列がありません' : showRefresh ? refreshText : lastAction === 'reading' || reading.busy ? reading.message : '';
-    const statusDetails = noSelection ? statusText : showRefresh ? refreshDetails || refreshText : details || reading.message;
+    const results = view.results ?? [];
+    const feedback = view.phase === 'cancelled' ? '中止済' : results.some(result => ['failed', 'requested'].includes(result.status)) ? '未確認' :
+      results.some(result => result.status === 'skipped') ? results.some(result => ['updated', 'reloaded'].includes(result.status)) ? '一部' : '対象外' : results.length ? '完了' : '更新';
+    const refreshLabel = busy ? onCancelRefresh ? '中止' : '更新中' : lastAction === 'refresh' && ['cooldown', 'cancelled'].includes(view.phase) ? feedback : '更新';
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
-      ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
+      ref: panelRef, className: `yomikui-floating-panel${prefs.collapsed ? ' yf-compact' : ''}`, 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
       style: { '--yf-surface-base': prefs.color === 'theme' ? 'var(--popover)' : `var(--yf-${prefs.color})`, '--yf-surface-opacity': `${100 - prefs.transparency}%` },
       children: [
         jsx.jsxs('div', { className: 'yf-header', children: [
           jsx.jsxs('button', { ref: handleRef, type: 'button', className: 'yf-handle', title: 'ドラッグして移動（矢印キーでも移動）', 'aria-label': '閲覧・更新パネルを移動。矢印キーでも移動できます', children: [
             icon('grip'), jsx.jsx('span', { className: 'yf-title', children: '閲覧・更新' }),
-            prefs.collapsed && jsx.jsx('span', { className: 'yf-summary', title: `${selected}・${selectedColumns.length}列 · ${prefs.mode === 'page' ? '画面ごと' : '投稿ごと'}`, children: `${target === 'all' ? 'すべて' : selected}・${selectedColumns.length}列 · ${prefs.mode === 'page' ? '画面' : '投稿'}` }),
           ] }),
-          jsx.jsx('button', { type: 'button', className: 'yf-collapse', 'aria-label': prefs.collapsed ? '設定を展開する' : '設定を折りたたむ', 'aria-expanded': !prefs.collapsed, 'aria-controls': 'yomikui-reading-settings', onClick: () => updatePrefs({ collapsed: !prefs.collapsed }), children: icon(prefs.collapsed ? 'down' : 'up') }),
+          jsx.jsx('button', { type: 'button', className: 'yf-settings-toggle', 'aria-label': 'パネル設定', 'aria-expanded': settingsOpen, 'aria-controls': 'yomikui-reading-settings', onClick: () => setSettingsOpen(!settingsOpen), children: icon('settings') }),
+          jsx.jsx('button', { type: 'button', className: 'yf-collapse', 'aria-label': 'コンパクト表示', 'aria-pressed': prefs.collapsed, onClick: () => { updatePrefs({ collapsed: !prefs.collapsed }); setSettingsOpen(false); }, children: icon(prefs.collapsed ? 'down' : 'up') }),
         ] }),
         jsx.jsxs('div', { className: 'yf-body', children: [
-          jsx.jsxs('div', { id: 'yomikui-reading-settings', className: 'yf-fields', hidden: prefs.collapsed, style: prefs.collapsed ? { display: 'none' } : undefined, children: [
-            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '対象の列' }), jsx.jsxs('select', { 'aria-label': '対象の列', title: `${selected}・${selectedColumns.length}列（スクロール・更新の対象）`, value: target, disabled: !targetReady || busy || reading.busy, onChange: event => selectTarget(event.target.value), children: [
-              !targetReady && jsx.jsx('option', { value: '__loading__', children: '読み込み中' }),
-              jsx.jsxs('optgroup', { label: '表示内容', children: [
-                jsx.jsx('option', { value: 'all', children: '表示中すべて' }),
-                ...Object.entries(GROUPS).map(([group, title]) => jsx.jsx('option', { value: `group:${group}`, children: `${title}（${visibleColumns.filter(column => kinds[column.id] === group).length}列）` }, group)),
-              ] }),
-              jsx.jsxs('optgroup', { label: '個別の列', children: [
-                ...eligible.map((column, index) => jsx.jsx('option', { value: column.id, disabled: !visible.has(column.id), children: `${index + 1}. ${column.title || '列'}${visible.has(column.id) ? '' : '（画面外）'}` }, column.id)),
-                targetReady && target !== 'all' && !targetGroup(target) && !eligible.some(column => column.id === target) && jsx.jsx('option', { value: target, disabled: true, children: '選択した列（対象なし）' }),
-              ] }),
-            ] }), icon('down')] }),
-            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '移動方式' }), jsx.jsxs('select', { 'aria-label': '移動方式', title: '移動方式', value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.target.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] }), icon('down')] }),
-            jsx.jsxs('label', { className: 'yf-color', htmlFor: 'yomikui-panel-color', children: [
-              jsx.jsx('span', { children: '背景色' }),
-              jsx.jsxs('span', { className: 'yf-color-select', children: [
-                jsx.jsxs('select', { id: 'yomikui-panel-color', 'aria-label': '背景色', value: prefs.color, onChange: event => updatePrefs({ color: event.currentTarget.value }), children:
-                  Object.entries(COLORS).map(([value, title]) => jsx.jsx('option', { value, children: title }, value)),
-                }), icon('down'),
+          jsx.jsxs('div', { className: 'yf-choice-row', children: [
+            jsx.jsx('div', { className: 'yf-selection-mode', role: 'group', 'aria-label': '対象の選択方式', children:
+              [['single', '切り替え'], ['multiple', '複数選択']].map(([mode, title]) => jsx.jsx('button', {
+                type: 'button', 'aria-pressed': targetReady && selection.value.selectionMode === mode, disabled: !targetReady || busy || reading.busy,
+                onClick: () => selectTarget({ selectionMode: mode, ...(mode === 'multiple' && !selection.value.multipleReady ? { multiple: [selection.value.single], multipleReady: true } : {}) }), children: title,
+              }, mode)),
+            }),
+            jsx.jsxs('label', { className: 'yf-hide-empty', children: [
+              jsx.jsx('input', { type: 'checkbox', checked: prefs.hideEmpty, onChange: event => updatePrefs({ hideEmpty: event.currentTarget.checked }) }), '0列を隠す',
+            ] }),
+          ] }),
+          jsx.jsx('div', { className: 'yf-targets', role: 'group', 'aria-label': '操作する列の表示内容', children: Object.entries(GROUPS).map(([kind, title]) => {
+            const count = displayCounts[kind];
+            const pressed = target.includes(kind);
+            return jsx.jsxs('button', {
+              type: 'button', className: 'yf-target', 'data-target': kind, 'aria-pressed': pressed, hidden: prefs.hideEmpty && count === 0,
+              disabled: !targetReady || busy || reading.busy || (count === 0 && !(selection.value.selectionMode === 'multiple' && pressed)),
+              title: `${title}・画面内${count}列`,
+              onClick: () => selectTarget(selection.value.selectionMode === 'multiple' ? { multiple: pressed ? target.filter(group => group !== kind) : [...target, kind] } : { single: kind }),
+              children: [jsx.jsx('span', { className: 'yf-mark', 'aria-hidden': true, children: pressed ? '✓' : '' }), title, jsx.jsx('span', { className: 'yf-count', children: `${count}列` })],
+            }, kind);
+          }) }),
+          jsx.jsxs('div', { className: 'yf-actions', role: 'group', 'aria-label': `${selected}への操作`, children: [
+            jsx.jsxs('div', { className: 'yf-steps', children: [jsx.jsxs('button', {
+              type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
+              'aria-label': '先頭へ', title: `一覧の先頭へ戻る${lastAction === 'reading' && details ? '\n' + details : ''}`, onClick: () => navigate({ target, mode: 'top' }), children: [icon('top'), '先頭'],
+            }),
+            ...[-1, 1].map(direction => jsx.jsxs('button', {
+              type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
+              title: `${prefs.mode === 'page' ? '画面の約8割' : '投稿ごと'}に${direction === 1 ? '下' : '上'}へ移動${lastAction === 'reading' && details ? '\n' + details : ''}`,
+              onClick: () => navigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
+            }, direction)),
+            ] }),
+            canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
+              jsx.jsx('button', {
+                type: 'button', className: 'yf-refresh',
+                disabled: busy ? !onCancelRefresh : reading.busy || !targetReady || refreshCount === 0 || view.phase === 'cooldown' || view.phase === 'cancelled',
+                'aria-label': busy ? '更新を中止する' : '選択中の列を更新', 'aria-busy': busy,
+                title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を先頭へ戻してから順番に更新します。おすすめ・フォロー中は新着読み込み、検索結果・話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします。検索語・タブ・絞り込み条件を維持します` : '選択範囲内に更新対象の列がありません'}`,
+                onClick: () => { if (busy) onCancelRefresh?.(); else { setLastAction('refresh'); onRefresh({ target }); } }, children: [icon('refresh'), refreshLabel],
+              }),
+            }),
+          ] }),
+          jsx.jsx('div', { id: 'yomikui-home-refresh-status', className: 'yf-sr-only', role: 'status', 'aria-live': 'polite', children: statusText }),
+          jsx.jsxs('div', { id: 'yomikui-reading-settings', className: 'yf-fields', hidden: !settingsOpen, children: [
+            jsx.jsxs('label', { className: 'yf-setting', children: [jsx.jsx('span', { children: '移動方式' }), jsx.jsxs('span', { className: 'yf-color-select', children: [jsx.jsxs('select', { 'aria-label': '移動方式', value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.currentTarget.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] }), icon('down')] })] }),
+            jsx.jsxs('label', { className: 'yf-setting', htmlFor: 'yomikui-panel-color', children: [
+              jsx.jsx('span', { children: '背景色' }), jsx.jsxs('span', { className: 'yf-color-select', children: [
+                jsx.jsx('select', { id: 'yomikui-panel-color', 'aria-label': '背景色', value: prefs.color, onChange: event => updatePrefs({ color: event.currentTarget.value }), children: Object.entries(COLORS).map(([value, title]) => jsx.jsx('option', { value, children: title }, value)) }), icon('down'),
               ] }),
             ] }),
             jsx.jsxs('label', { className: 'yf-transparency', htmlFor: 'yomikui-panel-transparency', title: '背景の透明度（0%で不透明）', children: [
@@ -650,32 +724,10 @@
               jsx.jsx('span', { className: 'yf-transparency-value', 'aria-hidden': true, children: `${prefs.transparency}%` }),
             ] }),
           ] }),
-          jsx.jsxs('div', { className: 'yf-actions', children: [
-            jsx.jsxs('div', { className: 'yf-steps', children: [jsx.jsxs('button', {
-              type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
-              'aria-label': '先頭へ', title: '一覧の先頭へ戻る', onClick: () => navigate({ target, mode: 'top' }), children: [icon('top'), '先頭'],
-            }),
-            ...[-1, 1].map(direction => jsx.jsxs('button', {
-              type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
-              title: `${prefs.mode === 'page' ? '画面の約8割' : '投稿ごと'}に${direction === 1 ? '下' : '上'}へ移動`,
-              onClick: () => navigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
-            }, direction)),
-            ] }),
-            canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
-              jsx.jsx('button', {
-                type: 'button', className: 'yf-refresh',
-                disabled: busy || reading.busy || !targetReady || refreshCount === 0 || view.phase === 'cooldown' || view.phase === 'cancelled',
-                'aria-label': '選択中の列を更新', 'aria-busy': busy,
-                title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を順番に更新します。おすすめ・フォロー中は新着読み込み、検索結果・話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします。検索語・タブ・絞り込み条件を維持します` : '選択範囲内に更新対象の列がありません'}`,
-                onClick: () => { setLastAction('refresh'); onRefresh({ target }); }, children: icon('refresh'),
-              }),
-            }),
-          ] }),
-          statusText && jsx.jsx('div', { id: 'yomikui-home-refresh-status', className: 'yf-status', role: 'status', 'aria-live': 'polite', title: statusDetails, children: statusText }),
         ] }),
       ],
     });
   }
 
-  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, installWheel, visibleColumnIds, preferences, loadPreferences, savePreferences, loadTarget, saveTarget, matchesTarget, readingSummary, installStyles });
+  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, installWheel, visibleColumnIds, preferences, selectionPreferences, loadPreferences, savePreferences, loadTarget, saveTarget, matchesTarget, readingSummary, installStyles });
 })();

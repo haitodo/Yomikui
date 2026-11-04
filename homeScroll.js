@@ -133,6 +133,13 @@
     }
   }
 
+  function scrollToTop(scroller) {
+    const options = { top: 0, behavior: 'instant' };
+    if (scroller?.scrollTo) scroller.scrollTo(options);
+    else if (scroller) scroller.scrollTop = 0;
+    else window.scrollTo(options);
+  }
+
   // One explicit reading action, using only the existing rendered timeline.
   // Keep a screenful of a long post readable before advancing to the next one.
   function navigate({ getSettings, getScroller, direction, mode, deltaY, deltaMode = 0, beforeMove }) {
@@ -218,7 +225,8 @@
     if (atEdge && mode !== 'top' && mode !== 'wheel') return { status: 'edge' };
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     const options = { top: next, behavior: mode === 'top' || mode === 'wheel' || reduced ? 'instant' : 'smooth' };
-    if (scroller?.scrollTo) scroller.scrollTo(options);
+    if (mode === 'top') scrollToTop(scroller);
+    else if (scroller?.scrollTo) scroller.scrollTo(options);
     else if (scroller && !rootScroller) scroller.scrollTop = next;
     else window.scrollTo(options);
     return { status: atEdge ? 'edge' : 'moved' };
@@ -368,5 +376,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, navigate, selectedTimelineTab, isRecommendedTab: recommended });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, navigate, scrollToTop, selectedTimelineTab, isRecommendedTab: recommended });
 })();
