@@ -75,22 +75,25 @@ function readingSetup({ quiet = false } = {}) {
   return { ...env, state, visible, frames, messages, views, activity, controller, kinds, contextRequests, contextViews, report };
 }
 
-test('wheel input coalesces per animation frame without cooldowns, repeated work, or UI updates per event', async () => {
+test('wheel input starts before the next paint and coalesces only additional input without cooldowns or UI updates', async () => {
   const env = readingSetup();
   assert.equal(env.controller.wheel({ target: 'group:recommended', deltaY: 10.25 }), true);
+  assert.deepEqual(env.messages.map(message => [message.columnId, message.deltaY]), [['one', 10.25], ['two', 10.25]], 'the first movement does not depend on an animation callback');
   env.controller.wheel({ target: 'group:recommended', deltaY: 9.5 });
-  assert.equal(env.messages.length, 0);
+  env.controller.wheel({ target: 'group:recommended', deltaY: 5.25 });
+  assert.equal(env.messages.length, 2);
   assert.equal(env.clock.frames.size, 1);
   env.clock.frame(16);
-  assert.deepEqual(env.messages.map(message => [message.columnId, message.deltaY, message.group]), [['one', 19.75, 'recommended'], ['two', 19.75, 'recommended']]);
+  assert.deepEqual(env.messages.slice(2).map(message => [message.columnId, message.deltaY, message.group]), [['one', 14.75, 'recommended'], ['two', 14.75, 'recommended']]);
   assert.ok(env.messages.every(message => message.type === PREFIX + 'scroll' && message.deltaMode === 0));
   assert.equal(env.views.length, 0, 'scrolling does not rerender or move the panel under the pointer');
   env.controller.wheel({ target: 'group:recommended', deltaY: 5 });
+  assert.equal(env.messages.length, 6, 'input after a paint also starts immediately');
   env.clock.frame(16);
-  assert.equal(env.messages.length, 4, 'the next frame accepts input immediately');
+  assert.equal(env.messages.length, 6, 'a drained batch is not replayed');
   assert.deepEqual(env.activity, ['one', 'two'], 'activity updates are throttled');
   await env.clock.advance(10000);
-  assert.equal(env.messages.length, 4);
+  assert.equal(env.messages.length, 6);
   assert.equal(env.clock.frames.size, 0);
   assert.equal(env.clock.timers.size, 0);
   env.controller.dispose();
@@ -99,25 +102,27 @@ test('wheel input coalesces per animation frame without cooldowns, repeated work
 test('wheel reversals and unit changes retain their order, and a new target discards an old pending delta', () => {
   const env = readingSetup();
   env.controller.wheel({ target: 'one', deltaY: 100 });
+  env.controller.wheel({ target: 'one', deltaY: 10 });
   env.controller.wheel({ target: 'one', deltaY: -20 });
+  env.controller.wheel({ target: 'one', deltaY: -5 });
   env.controller.wheel({ target: 'one', deltaY: 3, deltaMode: 1 });
   env.clock.frame(16);
-  assert.deepEqual(env.messages.map(message => [message.deltaY, message.deltaMode]), [[100, 0], [-20, 0], [3, 1]]);
+  assert.deepEqual(env.messages.map(message => [message.deltaY, message.deltaMode]), [[100, 0], [10, 0], [-20, 0], [-5, 0], [3, 1]]);
   env.controller.wheel({ target: 'one', deltaY: 200 });
+  env.controller.wheel({ target: 'one', deltaY: 30 });
   env.controller.wheel({ target: 'two', deltaY: 40 });
   env.clock.frame(16);
-  assert.deepEqual(env.messages.slice(3).map(message => [message.columnId, message.deltaY]), [['two', 40]]);
+  assert.deepEqual(env.messages.slice(5).map(message => [message.columnId, message.deltaY]), [['one', 200], ['two', 40]]);
   env.controller.dispose();
 });
 
 test('wheel batches recheck visibility and drafts and skip unmounted columns', () => {
   const env = readingSetup();
-  env.controller.wheel({ target: 'all', deltaY: 120 });
   env.visible.delete('one');
   env.state.columnComposing.two = true;
-  env.clock.frame(16);
+  env.controller.wheel({ target: 'all', deltaY: 120 });
   assert.deepEqual(env.messages.map(message => message.columnId), ['following']);
-  env.controller.wheel({ target: 'following', deltaY: 120 });
+  env.controller.wheel({ target: 'all', deltaY: 120 });
   env.frames.delete('following');
   env.clock.frame(16);
   assert.equal(env.messages.length, 1);
@@ -128,6 +133,9 @@ test('queued wheel input is cancelled on workspace changes, hiding, pagehide and
   for (const cause of ['workspace', 'hidden', 'pagehide', 'dispose']) {
     const env = readingSetup();
     env.controller.wheel({ target: 'group:recommended', deltaY: 120 });
+    assert.equal(env.messages.length, 2);
+    env.messages.length = 0;
+    env.controller.wheel({ target: 'group:recommended', deltaY: 30 });
     if (cause === 'workspace') { env.state.activeWorkspaceId = 'new'; env.controller.syncState(); }
     if (cause === 'hidden') { env.document.hidden = true; env.document.dispatchEvent(new env.dom.Event('visibilitychange')); }
     if (cause === 'pagehide') env.window.emit('pagehide');
@@ -147,14 +155,16 @@ test('wheel input takes over a pending step, and a later button action cancels q
   env.controller.wheel({ target: 'one', deltaY: 20 });
   env.clock.frame(16);
   await step;
-  assert.deepEqual(env.messages.map(message => message.type), [PREFIX + 'navigate', PREFIX + 'scroll']);
-  assert.equal(env.messages[1].deltaY, 40);
+  assert.deepEqual(env.messages.map(message => message.type), [PREFIX + 'navigate', PREFIX + 'scroll', PREFIX + 'scroll']);
+  assert.deepEqual(env.messages.slice(1).map(message => message.deltaY), [20, 20]);
   assert.equal(env.views.at(-1).busy, false);
   env.controller.wheel({ target: 'one', deltaY: 120 });
+  env.controller.wheel({ target: 'one', deltaY: 80 });
   const top = env.controller.move({ target: 'one', mode: 'top' });
   env.clock.frame(16);
   await env.clock.advance(300); await top;
-  assert.equal(env.messages.length, 3);
+  assert.equal(env.messages.length, 5);
+  assert.equal(env.messages.at(-2).deltaY, 120, 'the immediate movement is retained, but the buffered 80px is cancelled');
   assert.equal(env.messages.at(-1).mode, 'top');
   env.controller.dispose();
 });

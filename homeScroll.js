@@ -155,6 +155,23 @@
     const scroller = getScroller();
     const rootScroller = !scroller || scroller === document.scrollingElement ||
       scroller === document.documentElement || scroller === document.body;
+    const wheelScroller = rootScroller ? window : scroller;
+    if (mode === 'wheel' && wheelScroller.scrollBy) {
+      if (!primary()?.querySelector('article[data-testid="tweet"]')) return { status: 'skipped', reason: 'unavailable' };
+      let unit = 1;
+      if (deltaMode === 1) unit = parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16;
+      if (deltaMode === 2) {
+        const rect = rootScroller ? null : scroller.getBoundingClientRect();
+        unit = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
+      }
+      const amount = deltaY * unit;
+      if (!Number.isFinite(amount) || !Number.isFinite(unit) || unit <= 0) return { status: 'skipped', reason: 'unavailable' };
+      beforeMove?.();
+      // Let the browser clamp a relative scroll. Pixel/line wheel input needs
+      // no post bounds, viewport measurement, or readback after moving.
+      wheelScroller.scrollBy({ top: amount, behavior: 'instant' });
+      return { status: 'moved' };
+    }
     const rect = rootScroller ? null : scroller.getBoundingClientRect();
     const height = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
     let posts = articles();

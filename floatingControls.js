@@ -174,18 +174,26 @@
       const previous = this.wheelBuffer;
       if (previous && (previous.workspaceId !== state.activeWorkspaceId || previous.target !== target)) this.clearWheel();
       // Keep reversals and unit changes in order, including at a column's edge.
-      else if (previous && (previous.deltaMode !== deltaMode || Math.sign(previous.deltaY) !== Math.sign(deltaY))) this.flushWheel();
-      if (!this.wheelBuffer) this.wheelBuffer = { workspaceId: state.activeWorkspaceId, target, deltaMode, deltaY: 0, frame: null };
+      else if (previous && (previous.deltaMode !== deltaMode || previous.direction !== Math.sign(deltaY))) this.flushWheel();
+      const leading = !this.wheelBuffer;
+      if (leading) this.wheelBuffer = { workspaceId: state.activeWorkspaceId, target, deltaMode, direction: Math.sign(deltaY), deltaY: 0, frame: null };
       const buffer = this.wheelBuffer;
       buffer.deltaY += deltaY;
-      if (buffer.frame == null) buffer.frame = requestAnimationFrame(() => this.flushWheel());
+      // Send the first input in this event, without waiting for the dashboard's
+      // next paint. Only additional input in the same frame needs coalescing.
+      if (leading) this.flushWheel(true);
       return true;
     }
 
-    flushWheel() {
+    flushWheel(leading = false) {
       const buffer = this.wheelBuffer;
       if (!buffer) return;
-      this.clearWheel();
+      const deltaY = buffer.deltaY;
+      if (leading) {
+        buffer.deltaY = 0;
+        buffer.frame = requestAnimationFrame(() => this.flushWheel());
+      } else this.clearWheel();
+      if (deltaY === 0) return;
       const state = this.getState();
       if (this.disposed || document.hidden || state.activeWorkspaceId !== buffer.workspaceId) return;
       const visible = this.getVisibleIds(), kinds = this.kinds();
@@ -202,7 +210,7 @@
         // response deadline, repeat timer, or queue behind a previous action.
         try { frame.window.postMessage({
           type: PREFIX + 'scroll', requestId: crypto.randomUUID(), columnId: column.id, mode: 'wheel',
-          deltaY: buffer.deltaY, deltaMode: buffer.deltaMode,
+          deltaY, deltaMode: buffer.deltaMode,
           ...(targetGroup(buffer.target) ? { group: targetGroup(buffer.target) } : {}),
         }, frame.origin); } catch {}
       }

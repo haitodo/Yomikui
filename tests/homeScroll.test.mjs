@@ -126,6 +126,45 @@ test('wheel line and page units use the target column line height and visible vi
   assert.equal(env.scroller.scrollTop, 678);
 });
 
+test('native wheel scrolling needs no post or viewport bounds, extent reads, or position readback for pixels', () => {
+  const env = readingSetup();
+  const moves = [];
+  env.scroller.scrollBy = options => {
+    moves.push({ ...options });
+    env.scroller.scrollTop = Math.max(0, Math.min(1400, env.scroller.scrollTop + options.top));
+  };
+  const unexpectedLayout = () => assert.fail('pixel input must let the browser handle scroll bounds');
+  env.scroller.getBoundingClientRect = unexpectedLayout;
+  for (const name of ['scrollHeight', 'clientHeight']) Object.defineProperty(env.scroller, name, { get: unexpectedLayout });
+  for (const article of env.document.querySelectorAll('article')) article.getBoundingClientRect = unexpectedLayout;
+  env.window.getComputedStyle = unexpectedLayout;
+  env.scroller.scrollTo = unexpectedLayout;
+  let cancelled = 0;
+  for (const delta of [.25, 120, -45.5, 10000, 20, -10000]) env.wheel(delta, 0, () => cancelled++);
+  assert.equal(env.scroller.scrollTop, 0, 'the native scroller clamps to both ends');
+  assert.deepEqual(moves.map(move => move.top), [.25, 120, -45.5, 10000, 20, -10000]);
+  assert.ok(moves.every(move => move.behavior === 'instant'));
+  assert.equal(cancelled, 6, 'direct input cancels smooth steps and refresh correction even at an edge');
+});
+
+test('relative wheel scrolling converts line and page units and supports the root viewport', () => {
+  const env = readingSetup();
+  const moves = [];
+  env.scroller.scrollBy = options => moves.push({ ...options });
+  env.window.getComputedStyle = () => ({ lineHeight: '20px' });
+  env.wheel(3, 1);
+  env.scroller.getBoundingClientRect = () => ({ top: 50, bottom: 650 });
+  env.wheel(-.5, 2);
+  env.window.getComputedStyle = () => ({ lineHeight: 'normal' });
+  env.wheel(-2, 1);
+  assert.deepEqual(moves.map(move => move.top), [60, -275, -32]);
+  env.scroller.getBoundingClientRect = () => ({ top: 700, bottom: 900 });
+  assert.equal(env.wheel(1, 2).status, 'skipped', 'a page needs a positive visible height');
+  env.window.scrollBy = options => moves.push({ ...options });
+  env.api.navigate({ getSettings: () => env.settings, getScroller: () => null, mode: 'wheel', deltaY: .5, deltaMode: 2 });
+  assert.equal(moves.at(-1).top, 300);
+});
+
 test('returning to the top after reading jumps directly without clicking X controls', () => {
   const env = readingSetup();
   env.navigate();
@@ -188,6 +227,7 @@ test('reading skips unavailable, modal, composing and non-native pages without m
   ];
   for (const mode of ['post', 'top', 'wheel']) for (const change of variants) {
     const env = readingSetup();
+    env.scroller.scrollBy = () => assert.fail('a guarded wheel command must not reach the browser scroller');
     change(env);
     assert.equal((mode === 'wheel' ? env.wheel(120) : env.navigate(1, mode)).status, 'skipped');
     assert.equal(env.scroller.scrollTop, 100);
