@@ -89,6 +89,27 @@ test('page reading uses the visible scroller height, accounts for offsets, and c
   assert.equal(env.scroller.scrollTop, 0);
 });
 
+test('returning to the top after reading jumps directly without clicking X controls', () => {
+  const env = readingSetup();
+  env.navigate();
+  env.navigate();
+  assert.ok(env.scroller.scrollTop > 300);
+  const moves = [];
+  env.scroller.scrollTo = options => { moves.push({ ...options }); env.scroller.scrollTop = options.top; };
+  let clicks = 0, cancelled = 0;
+  env.document.addEventListener('click', () => clicks++);
+  const toTop = () => env.api.navigate({
+    getSettings: () => env.settings, getScroller: () => env.scroller, mode: 'top', beforeMove: () => cancelled++,
+  });
+  assert.equal(toTop().status, 'moved');
+  assert.equal(env.scroller.scrollTop, 0);
+  assert.deepEqual(moves, [{ top: 0, behavior: 'instant' }]);
+  assert.equal(toTop().status, 'edge');
+  assert.equal(moves.length, 1, 'returning again at the top does not issue another scroll');
+  assert.equal(cancelled, 2, 'remaining refresh correction is cancelled even at the top');
+  assert.equal(clicks, 0);
+});
+
 test('reading remains available on Following and does not click any X controls', () => {
   const env = readingSetup();
   env.settings.columnType = 'following';
@@ -112,10 +133,10 @@ test('reading skips unavailable, modal, composing and non-native pages without m
     env => { env.window.location.pathname = '/someone/status/123'; },
     env => { env.document.querySelector('[data-testid="primaryColumn"]').innerHTML = ''; },
   ];
-  for (const change of variants) {
+  for (const mode of ['post', 'top']) for (const change of variants) {
     const env = readingSetup();
     change(env);
-    assert.equal(env.navigate().status, 'skipped');
+    assert.equal(env.navigate(1, mode).status, 'skipped');
     assert.equal(env.scroller.scrollTop, 100);
   }
 });

@@ -9,6 +9,8 @@
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
   const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'customUrl']);
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
+  const isReadingAction = ({ direction, mode }) => mode === 'top' ||
+    ((direction === 1 || direction === -1) && ['post', 'page'].includes(mode));
   const articles = () => [...primary()?.querySelectorAll('article[data-testid="tweet"]') ?? []];
   const tweetId = article => (article.querySelector('time')?.closest('a[href*="/status/"]') ??
     article.querySelector('a[href*="/status/"]'))?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1];
@@ -54,7 +56,7 @@
   // One explicit reading action, using only the existing rendered timeline.
   // Keep a screenful of a long post readable before advancing to the next one.
   function navigate({ getSettings, getScroller, direction, mode, beforeMove }) {
-    if ((direction !== 1 && direction !== -1) || !['post', 'page'].includes(mode)) {
+    if (!isReadingAction({ direction, mode })) {
       return { status: 'skipped', reason: 'unavailable' };
     }
     const settings = getSettings();
@@ -86,7 +88,7 @@
     const stride = height * .8;
     const extent = scroller?.scrollHeight ?? document.documentElement.scrollHeight;
     const limit = Math.max(0, extent - (rootScroller ? window.innerHeight : scroller.clientHeight));
-    let next = top + direction * stride;
+    let next = mode === 'top' ? 0 : top + direction * stride;
     if (mode === 'post') {
       const anchors = posts.map(post => top + post.getBoundingClientRect().top - viewportTop).sort((a, b) => a - b);
       if (direction > 0) {
@@ -102,7 +104,7 @@
     beforeMove?.();
     if (Math.abs(next - top) < 1) return { status: 'edge' };
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const options = { top: next, behavior: reduced ? 'instant' : 'smooth' };
+    const options = { top: next, behavior: mode === 'top' || reduced ? 'instant' : 'smooth' };
     if (scroller?.scrollTo) scroller.scrollTo(options);
     else if (scroller && !rootScroller) scroller.scrollTop = next;
     else window.scrollTo(options);
@@ -253,5 +255,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, navigate });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, navigate });
 })();

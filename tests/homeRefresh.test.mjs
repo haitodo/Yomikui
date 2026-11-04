@@ -291,10 +291,32 @@ test('native reading validates commands and deduplicates repeated steps', () => 
   assert.equal(env.clock.timers.size, 0);
 });
 
+test('a trusted top command returns once without refreshing or replaying a duplicate request', () => {
+  const env = readingFrameSetup();
+  const data = { type: P + 'navigate', mode: 'top' };
+  let clicks = 0;
+  env.document.addEventListener('click', () => clicks++);
+  env.send(data, { source: {} });
+  env.send(data, { origin: 'https://evil.example' });
+  assert.equal(env.scroller.scrollTop, 800);
+  assert.equal(env.messages.length, 0);
+  env.send(data);
+  assert.equal(env.scroller.scrollTop, 0);
+  assert.equal(env.messages.at(-1).data.status, 'moved');
+  env.scroller.scrollTop = 400;
+  env.send(data);
+  assert.equal(env.scroller.scrollTop, 400, 'a duplicate must not reset a later reading position');
+  assert.equal(clicks, 0);
+  env.installed.dispose();
+});
+
 test('offscreen native frames reject reading commands', () => {
   const env = readingFrameSetup();
   env.send({ type: 'yomikui-column-visibility', visible: false });
   env.send({ type: P + 'navigate', direction: 1, mode: 'post' });
+  assert.equal(env.messages.at(-1).data.reason, 'hidden');
+  assert.equal(env.scroller.scrollTop, 800);
+  env.send({ type: P + 'navigate', mode: 'top', requestId: 'top' });
   assert.equal(env.messages.at(-1).data.reason, 'hidden');
   assert.equal(env.scroller.scrollTop, 800);
   env.installed.dispose();

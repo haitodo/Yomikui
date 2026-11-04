@@ -77,6 +77,21 @@ test('one reading action addresses only visible native columns and includes Foll
   env.controller.dispose();
 });
 
+test('returning to the top uses the current all-visible or individual target', async () => {
+  const env = readingSetup();
+  const all = env.controller.move({ mode: 'top' });
+  assert.deepEqual(env.messages.map(message => message.columnId), ['one', 'two', 'following']);
+  assert.ok(env.messages.every(message => message.mode === 'top'));
+  await env.clock.advance(300);
+  await all;
+  const selected = env.controller.move({ target: 'two', mode: 'top' });
+  assert.deepEqual(env.messages.slice(3).map(message => message.columnId), ['two']);
+  await env.clock.advance(300);
+  await selected;
+  assert.equal(env.views.at(-1).message, '移動 1列');
+  env.controller.dispose();
+});
+
 test('a chosen column that leaves the screen never falls back to moving other columns', async () => {
   const env = readingSetup();
   env.visible.delete('one');
@@ -259,8 +274,8 @@ test('panel preferences persist locally in order and normalize invalid values', 
   assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post' });
 });
 
-function panelTree(env, { collapsed = false, phase = 'idle', reading = false, target = 'all' } = {}) {
-  const states = [env.api.preferences({ collapsed }), target, new Set(['one'])];
+function panelTree(env, { collapsed = false, phase = 'idle', reading = false, target = 'all', mode = 'post', onNavigate = () => {} } = {}) {
+  const states = [env.api.preferences({ collapsed, mode }), target, new Set(['one'])];
   const react = {
     useState: () => [states.shift(), () => {}], useRef: current => ({ current }), useCallback: fn => fn,
     useEffect() {}, useLayoutEffect() {},
@@ -270,7 +285,7 @@ function panelTree(env, { collapsed = false, phase = 'idle', reading = false, ta
     React: react, jsx: { jsx: element, jsxs: element },
     columns: [{ id: 'one', type: 'home', title: 'Home' }],
     view: { phase, done: 0, total: 1 }, reading: { busy: reading, results: [], message: '' },
-    canRefresh: true, onRefresh() {}, onNavigate() {},
+    canRefresh: true, onRefresh() {}, onNavigate,
   });
   const nodes = [];
   const visit = node => {
@@ -282,24 +297,32 @@ function panelTree(env, { collapsed = false, phase = 'idle', reading = false, ta
   return nodes;
 }
 
-test('collapsed controls retain both reading actions and the separate all-home refresh', () => {
+test('collapsed controls retain top, step actions and the separate all-home refresh', () => {
   const env = setup();
-  const nodes = panelTree(env, { collapsed: true });
+  const actions = [];
+  const nodes = panelTree(env, { collapsed: true, target: 'one', mode: 'page', onNavigate: action => actions.push(clone(action)) });
   const byClass = name => nodes.find(node => node.props?.className === name);
   assert.equal(byClass('yf-fields').props.hidden, true);
-  for (const name of ['yf-up', 'yf-down', 'yf-refresh']) assert.equal(byClass(name).props.disabled, false);
+  for (const name of ['yf-top', 'yf-up', 'yf-down', 'yf-refresh']) assert.equal(byClass(name).props.disabled, false);
+  byClass('yf-top').props.onClick();
+  byClass('yf-down').props.onClick();
+  assert.deepEqual(actions, [{ target: 'one', mode: 'top' }, { target: 'one', direction: 1, mode: 'page' }]);
   assert.match(byClass('yf-refresh').props.title, /ホーム列全体/);
 });
 
 test('reading controls are disabled while refreshing; refresh cooldown still permits reading', () => {
   const env = setup();
   const running = panelTree(env, { phase: 'running' });
-  assert.ok(running.filter(node => ['yf-up', 'yf-down', 'yf-refresh'].includes(node.props?.className)).every(node => node.props.disabled));
+  assert.ok(running.filter(node => ['yf-top', 'yf-up', 'yf-down', 'yf-refresh'].includes(node.props?.className)).every(node => node.props.disabled));
   const cooldown = panelTree(env, { phase: 'cooldown' });
   assert.equal(cooldown.find(node => node.props?.className === 'yf-up').props.disabled, false);
+  assert.equal(cooldown.find(node => node.props?.className === 'yf-top').props.disabled, false);
   assert.equal(cooldown.find(node => node.props?.className === 'yf-refresh').props.disabled, true);
   const moving = panelTree(env, { reading: true });
+  assert.equal(moving.find(node => node.props?.className === 'yf-top').props.disabled, true);
   assert.equal(moving.find(node => node.props?.className === 'yf-refresh').props.disabled, true);
+  const offscreen = panelTree(env, { target: 'offscreen' });
+  assert.equal(offscreen.find(node => node.props?.className === 'yf-top').props.disabled, true);
 });
 
 test('the floating helper is included before the dashboard and is safe to load twice', () => {

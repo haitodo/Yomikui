@@ -91,7 +91,7 @@
     }
 
     async move({ target = 'all', direction, mode }) {
-      if (this.disposed || this.active || document.hidden || (direction !== 1 && direction !== -1) || !['post', 'page'].includes(mode)) return;
+      if (this.disposed || this.active || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ direction, mode })) return;
       const state = this.getState();
       const visible = this.getVisibleIds();
       const columns = state.columns.filter(column => readable(column) && visible.has(column.id) && (target === 'all' || target === column.id));
@@ -305,7 +305,7 @@
     .yomikui-floating-panel label{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:12px;color:var(--muted-foreground)}
     .yomikui-floating-panel select{width:100%;min-width:0;padding:7px 4px;border:1px solid var(--border);border-radius:7px;background:var(--background);color:var(--foreground);font:inherit}
     .yomikui-floating-panel .yf-summary{font-size:12px;color:var(--muted-foreground);margin-bottom:9px;overflow-wrap:anywhere}
-    .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
     .yomikui-floating-panel .yf-down{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
     .yomikui-floating-panel .yf-refresh-area{border-top:1px solid var(--border);margin-top:12px;padding-top:12px}
     .yomikui-floating-panel .yf-refresh{width:100%;background:var(--card)}
@@ -390,7 +390,7 @@
       width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2,
       strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
       children: jsx.jsx('path', { d: {
-        up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
+        top: 'M5 3h14M12 21V7m-6 6 6-6 6 6', up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
         grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
         refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 17.9 17',
       }[name] }),
@@ -414,10 +414,16 @@
             jsx.jsxs('label', { children: ['移動', jsx.jsxs('select', { value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.target.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] })] }),
           ] }),
           prefs.collapsed && jsx.jsx('div', { className: 'yf-summary', children: `${selected} · ${prefs.mode === 'page' ? '画面ごと' : '投稿ごと'}` }),
-          jsx.jsxs('div', { className: 'yf-steps', children: [-1, 1].map(direction => jsx.jsxs('button', {
-            type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
-            onClick: () => onNavigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
-          }, direction)) }),
+          jsx.jsxs('div', { className: 'yf-steps', children: [
+            jsx.jsxs('button', {
+              type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
+              title: '一覧の先頭へ戻る', onClick: () => onNavigate({ target, mode: 'top' }), children: [icon('top'), '先頭へ'],
+            }),
+            ...[-1, 1].map(direction => jsx.jsxs('button', {
+              type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
+              onClick: () => onNavigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
+            }, direction)),
+          ] }),
           !selectionVisible && jsx.jsx('div', { className: 'yf-status', children: '画面内に閲覧対象の列がありません' }),
           reading.message && jsx.jsx('div', { className: 'yf-status', role: 'status', 'aria-live': 'polite', title: details, children: reading.message }),
           canRefresh && jsx.jsxs('div', { className: 'yf-refresh-area', children: [

@@ -218,7 +218,7 @@
       if (data.columnId !== options.getColumnId() || typeof data.requestId !== 'string' ||
           data.requestId.length < 1 || data.requestId.length > 100) return;
       if (data.type === NAVIGATE) {
-        if ((data.direction !== 1 && data.direction !== -1) || !['post', 'page'].includes(data.mode)) return;
+        if (!globalThis.YomikuiHomeScroll.isReadingAction(data)) return;
         if (navigated.has(data.requestId)) { send(NAVIGATED, data.requestId, navigated.get(data.requestId)); return; }
         let result;
         try {
