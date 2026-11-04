@@ -11,15 +11,6 @@
   "add_column_menu_list": {
     "message": "リスト"
   },
-  "add_column_menu_live_feed_search": {
-    "message": "Live Feed 検索"
-  },
-  "add_column_menu_live_feed_search_placeholder": {
-    "message": "例: ねこ, #ハッシュタグ, from:ユーザー名"
-  },
-  "add_column_menu_live_feed_search_query": {
-    "message": "検索クエリ"
-  },
   "add_column_menu_profile_page": {
     "message": "プロフィールページ"
   },
@@ -48,9 +39,6 @@
   },
   "app_loading_media": {
     "message": "画像を読み込み中…"
-  },
-  "app_location_rate_limit": {
-    "message": "地域情報の取得制限中です。15分後に再開します。"
   },
   "app_next_media": {
     "message": "次へ"
@@ -136,9 +124,6 @@
       }
     }
   },
-  "column_live_feed_return_tooltip": {
-    "message": "ライブフィードに戻るには、戻るか更新をクリックしてください。"
-  },
   "column_perf_degraded": {
     "message": "長時間の利用により動作が重くなる可能性があります。列の再読み込みを推奨します。"
   },
@@ -150,12 +135,6 @@
   },
   "column_scroll_to_top": {
     "message": "一番上までスクロール"
-  },
-  "column_settings_account_country": {
-    "message": "アカウントの国を表示"
-  },
-  "column_settings_account_country_desc": {
-    "message": "Xの「アカウントについて」から取得した国旗と国名を表示します（ローカルにキャッシュされ、全列で共有）。"
   },
   "column_settings_active_count": {
     "message": "$1$件有効",
@@ -274,17 +253,11 @@
   "tweet_action_retweet_list": {
     "message": "リツイート一覧"
   },
-  "column_settings_hide_quotes": {
-    "message": "引用ツイートを非表示"
-  },
-  "column_settings_hide_quotes_desc": {
-    "message": "他の投稿を引用しているツイートを非表示にします（Live Feed 専用）。"
-  },
   "column_settings_hide_retweets": {
     "message": "リポストを非表示"
   },
   "column_settings_hide_retweets_desc": {
-    "message": "この列のリポスト（リツイート）を非表示にします。Live Feed では取得時に除外されます。"
+    "message": "この列のリポスト（リツイート）を非表示にします。"
   },
   "column_settings_hide_top_bar": {
     "message": "トップバーを非表示"
@@ -311,7 +284,7 @@
     "message": "メディア付きのみ表示"
   },
   "column_settings_media_only_desc": {
-    "message": "画像・動画・GIFを含むツイートのみ表示します。Live Feed では取得時にメディアなしのツイートが除外されます。"
+    "message": "画像・動画・GIFを含むツイートのみ表示します。"
   },
   "column_settings_media_size": {
     "message": "メディアサイズ"
@@ -324,12 +297,6 @@
   },
   "column_settings_media_size_small": {
     "message": "小"
-  },
-  "column_settings_one_click_block": {
-    "message": "ツイートのワンクリックブロック"
-  },
-  "column_settings_one_click_block_desc": {
-    "message": "ツイートの「その他」メニュー横にワンクリックブロックボタンを追加します。"
   },
   "column_settings_remember_last_page": {
     "message": "最後に開いていたページを記憶"
@@ -345,12 +312,6 @@
   },
   "column_settings_show_revenue": {
     "message": "推定ツイート収益を表示"
-  },
-  "column_settings_text_only": {
-    "message": "テキストのみ表示"
-  },
-  "column_settings_text_only_desc": {
-    "message": "画像・動画・GIFを含まないテキストのみのツイートを表示します（「メディア付きのみ」と併用不可・Live Feed 専用）。"
   },
   "column_settings_title": {
     "message": "タイトル"
@@ -548,21 +509,6 @@
   },
   "language_label": {
     "message": "言語"
-  },
-  "live_feed_error_poll": {
-    "message": "ツイートを読み込めませんでした。Twitterがレート制限を行っているか、更新中である可能性があります。"
-  },
-  "live_feed_replying_to": {
-    "message": "$1$さんへの返信",
-    "placeholders": {
-      "1": {
-        "content": "$1",
-        "example": "@jack"
-      }
-    }
-  },
-  "live_feed_retry_btn": {
-    "message": "再試行"
   },
   "login_checking": {
     "message": "確認中..."
@@ -780,32 +726,11 @@
   "sidebar_add_column": {
     "message": "列の追加"
   },
-  "sidebar_api_usage": {
-    "message": "API 使用率: $1$%",
-    "placeholders": {
-      "1": {
-        "content": "$1",
-        "example": "42"
-      }
-    }
-  },
-  "sidebar_autoplay_recommended": {
-    "message": "パフォーマンスを向上させるために有効にしておくことが推奨されます。"
-  },
   "sidebar_backup_restore": {
     "message": "バックアップと復元"
   },
   "sidebar_custom_text_size": {
     "message": "カスタムテキストサイズ"
-  },
-  "sidebar_desktop_notifications": {
-    "message": "デスクトップ通知"
-  },
-  "sidebar_disable_autoplay": {
-    "message": "自動再生を無効にする"
-  },
-  "sidebar_display_duration": {
-    "message": "表示時間"
   },
   "sidebar_export": {
     "message": "エクスポート"
@@ -819,9 +744,6 @@
   "sidebar_hide_sidebar": {
     "message": "サイドバーを非表示"
   },
-  "sidebar_image_viewer_live_feed_note": {
-    "message": "ライブフィードのカラムでは常に有効です。"
-  },
   "sidebar_import": {
     "message": "インポート"
   },
@@ -833,9 +755,6 @@
   },
   "sidebar_manage": {
     "message": "管理"
-  },
-  "sidebar_poll_interval": {
-    "message": "ポーリング間隔"
   },
   "sidebar_position": {
     "message": "表示位置"
@@ -885,9 +804,6 @@
   },
   "sidebar_switch_account_hint_has_timeline": {
     "message": "アカウントを切り替えるには、タイムライン履歴カラムを削除してください。"
-  },
-  "sidebar_switch_account_hint_live_feed": {
-    "message": "アカウントを切り替えるには、最初のカラムのライブフィードを無効にしてください。"
   },
   "sidebar_switch_account_hint_no_columns": {
     "message": "アカウントを切り替えるには、少なくとも1つのカラムを追加してください。"
@@ -1017,63 +933,6 @@
         "example": "News"
       }
     }
-  },
-  "live_feed_poll_card_votes": {
-    "message": "$1$票",
-    "placeholders": {
-      "1": {
-        "content": "$1",
-        "example": "12"
-      }
-    }
-  },
-  "live_feed_poll_card_votes_one": {
-    "message": "1票"
-  },
-  "live_feed_poll_card_final": {
-    "message": "最終結果"
-  },
-  "live_feed_poll_card_days_left": {
-    "message": "残り$1$日",
-    "placeholders": {
-      "1": {
-        "content": "$1",
-        "example": "12"
-      }
-    }
-  },
-  "live_feed_poll_card_hours_left": {
-    "message": "残り$1$時間",
-    "placeholders": {
-      "1": {
-        "content": "$1",
-        "example": "12"
-      }
-    }
-  },
-  "live_feed_poll_card_minutes_left": {
-    "message": "残り$1$分",
-    "placeholders": {
-      "1": {
-        "content": "$1",
-        "example": "12"
-      }
-    }
-  },
-  "live_feed_poll_card_ending_soon": {
-    "message": "まもなく終了"
-  },
-  "live_feed_poll_card_vote_failed": {
-    "message": "投票に失敗しました"
-  },
-  "column_settings_live_feed": {
-    "message": "ライブフィード"
-  },
-  "column_settings_live_feed_desc": {
-    "message": "新着ツイートを自動ストリーミング表示します（TweetDeck風）。Xのiframeの代わりにYomikui独自のタイムラインUIを使用します。"
-  },
-  "column_settings_live_feed_required": {
-    "message": "この設定を変更するにはライブフィードを無効にしてください"
   },
   "release_1_4_0_1": {
     "message": "ライブフィード: カラムごとに新着ツイートを自動取得するTweetDeck風ストリーミング機能"

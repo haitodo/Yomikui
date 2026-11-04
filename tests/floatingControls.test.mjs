@@ -560,25 +560,26 @@ test('collapsed controls send the same selected target to reading and recommenda
 test('refresh is disabled for unknown, offscreen or unsupported targets and while restoring a workspace', () => {
   const env = setup();
   for (const props of [
-    { target: 'group:search', kinds: { one: 'search' } },
+    { kinds: { one: 'other' } },
     { target: 'offscreen' }, { kinds: {} }, { selectedWorkspaceId: 'previous' }, { ready: false },
   ]) {
     const button = panelTree(env, props).find(node => node.props?.className === 'yf-refresh');
     assert.equal(button.props.disabled, true);
   }
-  const search = panelTree(env, { target: 'group:search', kinds: { one: 'search' } });
-  assert.match(search.find(node => node.props?.className === 'yf-refresh').props.title, /キーワード検索の結果の更新には対応していません/);
+  const unsupported = panelTree(env, { kinds: { one: 'other' } });
+  assert.match(unsupported.find(node => node.props?.className === 'yf-refresh').props.title, /選択範囲内に更新対象の列がありません/);
 });
 
-test('Following and Explore can be selected and refreshed from folded controls with the correct explanation', () => {
+test('Following, Search and Explore can be selected and refreshed from folded controls with the correct explanation', () => {
   const env = setup();
-  for (const [kind, label] of [['following', 'フォロー中'], ['explore', '話題を検索']]) {
+  for (const [kind, label] of [['following', 'フォロー中'], ['search', '検索結果'], ['explore', '話題を検索']]) {
     const actions = [];
     const nodes = panelTree(env, { target: `group:${kind}`, kinds: { one: kind }, collapsed: true, onRefresh: action => actions.push(clone(action)) });
     const button = nodes.find(node => node.props?.className === 'yf-refresh');
     assert.equal(button.props.disabled, false);
     assert.match(button.props.title, new RegExp(`${label} 1列`));
     assert.match(button.props.title, /現在のページを再読み込み/);
+    assert.match(button.props.title, /検索語・タブ・絞り込み条件を維持/);
     assert.ok(nodes.some(node => node.type === 'option' && node.props.value === `group:${kind}`));
     button.props.onClick();
     assert.deepEqual(actions, [{ target: `group:${kind}` }]);

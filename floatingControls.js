@@ -666,7 +666,7 @@
                 type: 'button', className: 'yf-refresh',
                 disabled: busy || reading.busy || !targetReady || refreshCount === 0 || view.phase === 'cooldown' || view.phase === 'cancelled',
                 'aria-label': '選択中の列を更新', 'aria-busy': busy,
-                title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を順番に更新します。おすすめ・フォロー中は新着読み込み、話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします` : '選択範囲内に更新対象の列がありません。キーワード検索の結果の更新には対応していません'}`,
+                title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を順番に更新します。おすすめ・フォロー中は新着読み込み、検索結果・話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします。検索語・タブ・絞り込み条件を維持します` : '選択範囲内に更新対象の列がありません'}`,
                 onClick: () => { setLastAction('refresh'); onRefresh({ target }); }, children: icon('refresh'),
               }),
             }),

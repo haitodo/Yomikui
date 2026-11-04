@@ -18,7 +18,7 @@
   const FRAME_TIMEOUT = 12000;
   const REQUEST_TIMEOUT = 11000;
   const RELOAD_TIMEOUT = 20000;
-  const RELOAD_KEY = 'yomikui_explore_refresh_v1:';
+  const RELOAD_KEY = 'yomikui_page_refresh_v1:';
   const REASONS = {
     'not-home': '更新対象以外のページを表示中',
     following: '更新対象以外のタブを表示中',
@@ -38,6 +38,10 @@
   const refreshable = kind => globalThis.YomikuiHomeScroll.isRefreshableKind(kind);
   const readingKind = getSettings => globalThis.YomikuiHomeScroll.readingKind(getSettings);
   const currentPath = () => window.location.pathname + (window.location.search || '');
+  const reloadable = kind => kind === 'search' || kind === 'explore';
+  const reloadKind = path => typeof path !== 'string' ? null :
+    /^\/search\/?(?:\?|$)/.test(path) ? 'search' :
+    /^\/explore(?:\/tabs\/[\w-]+)?\/?(?:\?|$)/.test(path) ? 'explore' : null;
   const trustedOrigin = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
   const abortError = () => new DOMException('Refresh cancelled', 'AbortError');
   const checkAbort = signal => { if (signal?.aborted) throw abortError(); };
@@ -97,10 +101,27 @@
     return document.querySelector('[data-testid="primaryColumn"]');
   }
 
+  function reloadTabMatches(kind) {
+    const href = globalThis.YomikuiHomeScroll.selectedTimelineTab()?.getAttribute('href');
+    if (!href) return false;
+    try {
+      const current = new URL(currentPath(), window.location.origin);
+      const tab = new URL(href, window.location.origin);
+      if (tab.origin !== current.origin || reloadKind(tab.pathname + tab.search) !== kind) return false;
+      const path = current.pathname.replace(/\/$/, '');
+      if (kind === 'explore' && path === '/explore') return true;
+      if (tab.pathname.replace(/\/$/, '') !== path) return false;
+      // Search links can encode spaces differently or omit the default Top
+      // filter. Compare their meaning without changing the actual current URL.
+      return kind !== 'search' || (tab.searchParams.get('q') === current.searchParams.get('q') &&
+        (tab.searchParams.get('f') || 'top') === (current.searchParams.get('f') || 'top'));
+    } catch { return false; }
+  }
+
   function unavailableReason(getSettings, target) {
     const settings = getSettings();
     const path = window.location.pathname.replace(/\/$/, '');
-    if ((path !== '/home' && !/^\/explore(?:\/tabs\/[\w-]+)?$/.test(path)) ||
+    if ((path !== '/home' && !reloadKind(currentPath())) ||
         !isNativeColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) || settings?.isTimelineColumn) return 'not-home';
     if (document.hidden) return 'hidden';
     if (document.querySelector('[role="dialog"]')) return 'dialog';
@@ -240,9 +261,9 @@
       status: error.name === 'AbortError' ? 'skipped' : 'failed',
       reason: error.name === 'AbortError' ? 'cancelled' : 'error',
     });
-    const reloadExplore = job => {
-      const reason = refresher.unavailableReason('explore');
-      if (reason || readingKind(options.getSettings) !== 'explore' || !globalThis.YomikuiHomeScroll.selectedTimelineTab()) {
+    const reloadPage = (job, kind) => {
+      const reason = refresher.unavailableReason(kind);
+      if (reason || readingKind(options.getSettings) !== kind || !reloadTabMatches(kind)) {
         finish(job, { status: 'skipped', reason: reason || 'unavailable' });
         return;
       }
@@ -255,12 +276,12 @@
       try {
         // X's SPA navigation can drop our settings hash. Keep this column's
         // bootstrap information so contentIframe initializes after the reload,
-        // while preserving the actual Explore path and query string.
+        // while preserving the actual page path and query string.
         if (!window.location.hash?.includes('yomikui') && bootstrapHash.includes('yomikui')) {
           window.history.replaceState(window.history.state, '', currentPath() + bootstrapHash);
         }
         window.sessionStorage.setItem(reloadKey, JSON.stringify({
-          id: job.id, path: currentPath(), origin: options.getOrigin(), started: Date.now(),
+          id: job.id, kind, path: currentPath(), origin: options.getOrigin(), started: Date.now(),
         }));
       } catch {
         finish(job, { status: 'skipped', reason: 'reload-unavailable' });
@@ -275,18 +296,15 @@
     const resumeReload = async (job, receipt) => {
       const result = await observeUntil(() => {
         if (currentPath() !== receipt.path) return { reason: 'target-changed' };
-        // Explore's URL identifies its tab. Confirm that tab directly instead
-        // of waiting for Home's remembered-tab restoration timer to finish.
-        const reason = !visible ? 'hidden' : unavailableReason(options.getSettings, 'explore');
+        // Search and Explore identify their tabs in the URL. Confirm the tab
+        // directly instead of waiting for Home's tab restoration timer.
+        const reason = !visible ? 'hidden' : unavailableReason(options.getSettings, receipt.kind);
         if (reason) return { reason };
-        const selected = globalThis.YomikuiHomeScroll.selectedTimelineTab();
-        if (!selected) return null;
-        const href = selected.getAttribute('href');
-        if (window.location.pathname.replace(/\/$/, '') !== '/explore' &&
-            (!href || new URL(href, window.location.origin).pathname.replace(/\/$/, '') !== window.location.pathname.replace(/\/$/, ''))) return null;
-        const content = primaryColumn()?.querySelector(
-          '[data-testid="cellInnerDiv"] a[href], [data-testid="trend"], article[data-testid="tweet"]',
-        );
+        if (!reloadTabMatches(receipt.kind)) return null;
+        const selector = receipt.kind === 'search'
+          ? '[data-testid="cellInnerDiv"] a[href], article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="emptyState"]'
+          : '[data-testid="cellInnerDiv"] a[href], [data-testid="trend"], article[data-testid="tweet"]';
+        const content = primaryColumn()?.querySelector(selector);
         return content ? { ready: true } : null;
       }, Math.max(1, RELOAD_TIMEOUT - (Date.now() - receipt.started)), job.abort.signal);
       if (result?.reason) return { status: 'requested', method: 'reload', reason: result.reason };
@@ -340,7 +358,7 @@
       }
       const job = { id: data.requestId, abort: new AbortController() };
       active = job;
-      if (data.target === 'explore') reloadExplore(job);
+      if (reloadable(data.target)) reloadPage(job, data.target);
       else refresher.refresh(job.abort.signal, data.target).catch(failure).then(result => finish(job, result));
     };
     const cancel = () => {
@@ -361,7 +379,7 @@
     } catch {}
     if (receipt && typeof receipt.id === 'string' && receipt.id.length > 0 && receipt.id.length <= 100 &&
         receipt.origin === options.getOrigin() && trustedOrigin(receipt.origin) &&
-        typeof receipt.path === 'string' && /^\/explore(?:\/tabs\/[\w-]+)?\/?(?:\?|$)/.test(receipt.path) &&
+        reloadable(receipt.kind) && reloadKind(receipt.path) === receipt.kind &&
         Number.isFinite(receipt.started) && Date.now() >= receipt.started && Date.now() - receipt.started < RELOAD_TIMEOUT) {
       const job = { id: receipt.id, abort: new AbortController() };
       active = job;
@@ -450,12 +468,12 @@
         try { pending.frame.postMessage({
           type: REQUEST, requestId: pending.id, columnId: pending.columnId, target: pending.kind,
         }, pending.origin); } catch { pending.finish({ status: 'failed', reason: 'error' }); }
-      } else if (data.type === RELOADING && pending.sent && pending.kind === 'explore' && !pending.reloading) {
+      } else if (data.type === RELOADING && pending.sent && reloadable(pending.kind) && !pending.reloading) {
         pending.reloading = true;
         clearTimeout(pending.deadline);
         pending.deadline = setTimeout(() => this.cancelPending('timeout'), RELOAD_TIMEOUT + 1000);
       } else if (data.type === RESULT && pending.sent && ['updated', 'reloaded', 'requested', 'skipped', 'failed'].includes(data.status)) {
-        if (data.status === 'reloaded' && (!pending.reloading || pending.kind !== 'explore')) return;
+        if (data.status === 'reloaded' && (!pending.reloading || !reloadable(pending.kind))) return;
         if (['updated', 'reloaded', 'requested'].includes(data.status) && !this.pendingIsCurrent()) {
           pending.finish({ status: 'skipped', reason: 'target-changed' });
           return;

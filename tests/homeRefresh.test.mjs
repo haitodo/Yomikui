@@ -286,13 +286,29 @@ const explore = (tab = 'news', { loading = false } = {}) => `<main data-testid="
     `<a role="tab" href="/explore/tabs/${id}" aria-selected="${id === tab}">${id}</a>`).join('')}</div>
   ${loading ? '<div role="progressbar"></div>' : '<div data-testid="cellInnerDiv"><a href="/i/trending/123">A trend or news story</a></div>'}
 </main>`;
-const reloadKey = 'yomikui_explore_refresh_v1:column1';
+const reloadKey = 'yomikui_page_refresh_v1:column1';
 function exploreSetup(tab = 'news', options = {}) {
   const env = setup(explore(tab, options), { ...options, path: `/explore/tabs/${tab}` });
   env.settings.columnType = 'explore';
   env.send = (data, event = {}) => env.window.emit('message', {
     source: env.window.parent, origin: 'https://x.com', data: {
       type: P + 'request', columnId: 'column1', requestId: 'reload1', target: 'explore', ...data,
+    }, ...event,
+  });
+  return env;
+}
+
+const searchPage = (query, { loading = false, content = tweet('202') } = {}) => `<main data-testid="primaryColumn">
+  <div role="tablist"><a role="tab" aria-selected="true" href="/search${query.replaceAll('&', '&amp;')}">Selected search tab</a></div>
+  ${loading ? '<div role="progressbar"></div>' : content}
+</main>`;
+function searchSetup(query = '?q=cat%20dog&src=typed_query&f=live&pf=on&lf=on', options = {}) {
+  const env = setup(searchPage(query, options), { ...options, path: '/search' });
+  env.window.location.search = query;
+  env.settings.columnType = 'search';
+  env.send = (data, event = {}) => env.window.emit('message', {
+    source: env.window.parent, origin: 'https://x.com', data: {
+      type: P + 'request', columnId: 'column1', requestId: 'reload1', target: 'search', ...data,
     }, ...event,
   });
   return env;
@@ -346,28 +362,133 @@ for (const tab of ['for_you', 'trending', 'news', 'sports', 'entertainment']) {
   });
 }
 
-test('Explore refuses drafts, dialogs, hidden columns, mismatched targets and unavailable storage', async () => {
-  for (const [reason, change] of [
-    ['draft', env => env.document.body.insertAdjacentHTML('beforeend', '<textarea data-testid="tweetTextarea_0">A draft</textarea>')],
-    ['dialog', env => env.document.body.insertAdjacentHTML('beforeend', '<div role="dialog">A dialog</div>')],
-    ['hidden', env => env.send({ type: 'yomikui-column-visibility', visible: false })],
-    ['target-changed', env => { env.window.location.pathname = '/home'; env.document.body.innerHTML = home(); }],
-    ['reload-unavailable', env => { env.window.sessionStorage.setItem = () => { throw new Error('Storage disabled'); }; }],
-  ]) {
-    const env = exploreSetup();
+for (const [filter, content, columnType] of [
+  ['', tweet('202'), 'home'],
+  ['live', tweet('303'), 'following'],
+  ['user', '<div data-testid="UserCell">A matching account</div>', 'search'],
+  ['media', '<div data-testid="cellInnerDiv"><a href="/author/status/202/photo/1"><img alt="A matching photo"></a></div>', 'customUrl'],
+  ['list', '<div data-testid="cellInnerDiv"><a href="/i/lists/123">A matching list</a></div>', 'explore'],
+]) {
+  test(`search ${filter || 'top'} reload preserves its query, filters and current tab across document replacement`, async () => {
+    const q = filter === 'live' ? 'filter:follows' : '#猫 & filter:links';
+    const query = `?q=${encodeURIComponent(q)}&src=typed_query${filter ? `&f=${filter}` : ''}&pf=on&lf=on`;
+    const env = searchSetup(query, { content });
+    env.settings.columnType = columnType;
+    env.window.location.hash = '#yomikui-cidcolumn1';
+    let clicks = 0;
+    env.document.addEventListener('click', () => clicks++);
     const installed = env.api.installFrame(env.options);
-    change(env);
-    env.send();
-    assert.equal(env.messages.at(-1).data.reason, reason);
+    env.send({}, { source: {} });
+    env.send({}, { origin: 'https://untrusted.example' });
     assert.equal(env.reloads.length, 0);
+    env.send();
+    env.send();
+    assert.equal(env.reloads.length, 1);
+    assert.equal(env.reloads[0].pathname, '/search');
+    assert.equal(env.reloads[0].search, query);
+    assert.equal(env.reloads[0].hash, '#yomikui-cidcolumn1');
+    assert.equal(clicks, 0);
+    assert.equal(JSON.parse(env.storage.get(reloadKey)).kind, 'search');
+    assert.equal(env.messages.at(-1).data.type, P + 'reloading');
+    env.window.emit('pagehide');
+    assert.ok(env.storage.has(reloadKey));
+
+    const replacement = searchSetup(query, { storage: env.storage, loading: true });
+    const resumed = replacement.api.installFrame({ ...replacement.options, isTabRestoring: () => true });
+    replacement.send();
+    await settle();
+    assert.equal(replacement.reloads.length, 0, 'duplicate requests do not reload the replacement document');
+    assert.deepEqual(replacement.messages, [], 'the search results must render before completing');
+    replacement.document.body.innerHTML = searchPage(query, { content });
+    await settle();
+    await replacement.clock.advance(80);
+    assert.equal(replacement.messages.at(-1).data.status, 'reloaded');
+    assert.equal(replacement.messages.at(-1).data.method, 'reload');
+    assert.equal(replacement.scroller.scrollTop, 0);
+    assert.equal(replacement.window.location.search, query);
+    assert.equal(replacement.storage.has(reloadKey), false);
+    replacement.send();
+    assert.equal(replacement.messages.at(-1).data.status, 'reloaded');
+    assert.equal(replacement.reloads.length, 0);
+    resumed.dispose();
     installed.dispose();
-  }
+    assert.equal(replacement.clock.timers.size, 0);
+    assert.ok(replacement.observers.every(observer => !observer.connected));
+  });
+}
+
+test('an empty search result is a completed reload, including the default Top tab and equivalent query encodings', async () => {
+  const query = '?q=cat%20dog&f=top&pf=on';
+  const env = searchSetup(query, { content: '<div data-testid="emptyState">No results found</div>' });
+  env.document.querySelector('[role="tab"]').setAttribute('href', '/search?q=cat+dog');
+  env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind: 'search', path: '/search' + query, origin: 'https://x.com', started: 0 }));
+  const installed = env.api.installFrame(env.options);
+  await settle();
+  assert.equal(env.messages.at(-1).data.status, 'reloaded');
+  assert.equal(env.reloads.length, 0);
+  assert.equal(env.clock.timers.size, 0);
+  installed.dispose();
 });
 
+for (const href of ['/search?q=different&f=live', '/search?q=cat+dog&f=user']) {
+  test(`search reload waits for the matching query and tab instead of confirming stale content: ${href}`, async () => {
+    const env = searchSetup();
+    const path = env.window.location.pathname + env.window.location.search;
+    env.document.querySelector('[role="tab"]').setAttribute('href', href);
+    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind: 'search', path, origin: 'https://x.com', started: 0 }));
+    const installed = env.api.installFrame(env.options);
+    await settle();
+    assert.deepEqual(env.messages, []);
+    env.document.querySelector('[role="tab"]').setAttribute('href', '/search?q=cat+dog&f=live');
+    await settle();
+    await env.clock.advance(80);
+    assert.equal(env.messages.at(-1).data.status, 'reloaded');
+    assert.equal(env.window.location.pathname + env.window.location.search, path);
+    assert.equal(env.reloads.length, 0);
+    installed.dispose();
+  });
+}
+
+test('changing the search query while awaiting the replacement document does not confirm a different result', async () => {
+  const env = searchSetup(undefined, { loading: true });
+  const path = env.window.location.pathname + env.window.location.search;
+  env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind: 'search', path, origin: 'https://x.com', started: 0 }));
+  const installed = env.api.installFrame(env.options);
+  env.window.location.search = '?q=different&f=live';
+  env.document.body.innerHTML = searchPage(env.window.location.search);
+  await settle();
+  await env.clock.advance(80);
+  assert.equal(env.messages.at(-1).data.status, 'requested');
+  assert.equal(env.messages.at(-1).data.reason, 'target-changed');
+  assert.equal(env.reloads.length, 0);
+  assert.equal(env.clock.timers.size, 0);
+  installed.dispose();
+});
+
+for (const [kind, create] of [['Explore', exploreSetup], ['Search', searchSetup]]) {
+  test(`${kind} refuses drafts, dialogs, hidden columns, mismatched targets and unavailable storage`, async () => {
+    for (const [reason, change] of [
+      ['draft', env => env.document.body.insertAdjacentHTML('beforeend', '<textarea data-testid="tweetTextarea_0">A draft</textarea>')],
+      ['dialog', env => env.document.body.insertAdjacentHTML('beforeend', '<div role="dialog">A dialog</div>')],
+      ['hidden', env => env.send({ type: 'yomikui-column-visibility', visible: false })],
+      ['target-changed', env => { env.window.location.pathname = '/home'; env.document.body.innerHTML = home(); }],
+      ['reload-unavailable', env => { env.window.sessionStorage.setItem = () => { throw new Error('Storage disabled'); }; }],
+    ]) {
+      const env = create();
+      const installed = env.api.installFrame(env.options);
+      change(env);
+      env.send();
+      assert.equal(env.messages.at(-1).data.reason, reason);
+      assert.equal(env.reloads.length, 0);
+      installed.dispose();
+    }
+  });
+}
+
 test('Explore receipts are scoped to a column and origin, expire, and never cause a second reload', async () => {
-  for (const invalid of [{ origin: 'https://untrusted.example' }, { started: -21000 }, { started: 1 }, { id: '' }, { path: '/search?q=test' }]) {
+  for (const invalid of [{ origin: 'https://untrusted.example' }, { started: -21000 }, { started: 1 }, { id: '' }, { kind: 'recommended' }, { kind: undefined }, { path: '/search?q=test' }]) {
     const env = exploreSetup();
-    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path: '/explore/tabs/news', origin: 'https://x.com', started: 0, ...invalid }));
+    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind: 'explore', path: '/explore/tabs/news', origin: 'https://x.com', started: 0, ...invalid }));
     const installed = env.api.installFrame(env.options);
     await settle();
     assert.deepEqual(env.messages, []);
@@ -377,31 +498,34 @@ test('Explore receipts are scoped to a column and origin, expire, and never caus
     installed.dispose();
   }
   const env = exploreSetup();
-  env.storage.set('yomikui_explore_refresh_v1:other-column', JSON.stringify({ id: 'other', path: '/explore/tabs/news', origin: 'https://x.com', started: 0 }));
+  env.storage.set('yomikui_page_refresh_v1:other-column', JSON.stringify({ id: 'other', kind: 'explore', path: '/explore/tabs/news', origin: 'https://x.com', started: 0 }));
   const installed = env.api.installFrame(env.options);
   await settle();
   assert.deepEqual(env.messages, []);
   installed.dispose();
 });
 
-test('an Explore reload that never renders is reported as unconfirmed and releases observers', async () => {
-  const env = exploreSetup('news', { loading: true });
-  env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path: '/explore/tabs/news', origin: 'https://x.com', started: 0 }));
-  const installed = env.api.installFrame(env.options);
-  await env.clock.advance(20000);
-  assert.equal(env.messages.at(-1).data.status, 'requested');
-  assert.equal(env.messages.at(-1).data.method, 'reload');
-  assert.equal(env.reloads.length, 0);
-  assert.ok(env.observers.every(observer => !observer.connected));
-  assert.equal(env.clock.timers.size, 0);
-  installed.dispose();
-});
+for (const [kind, create] of [['explore', exploreSetup], ['search', searchSetup]]) {
+  test(`${kind} reloads that never render are reported as unconfirmed and release observers`, async () => {
+    const env = create(undefined, { loading: true });
+    const path = env.window.location.pathname + env.window.location.search;
+    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind, path, origin: 'https://x.com', started: 0 }));
+    const installed = env.api.installFrame(env.options);
+    await env.clock.advance(20000);
+    assert.equal(env.messages.at(-1).data.status, 'requested');
+    assert.equal(env.messages.at(-1).data.method, 'reload');
+    assert.equal(env.reloads.length, 0);
+    assert.ok(env.observers.every(observer => !observer.connected));
+    assert.equal(env.clock.timers.size, 0);
+    installed.dispose();
+  });
+}
 
 test('Explore root and trailing-slash URLs resume without switching their current tab', async () => {
   for (const path of ['/explore', '/explore/', '/explore/tabs/trending/']) {
     const env = exploreSetup(path.includes('trending') ? 'trending' : 'for_you');
     env.window.location.pathname = path;
-    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path, origin: 'https://x.com', started: 0 }));
+    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind: 'explore', path, origin: 'https://x.com', started: 0 }));
     const installed = env.api.installFrame(env.options);
     await settle();
     assert.equal(env.messages.at(-1).data.status, 'reloaded');
@@ -410,35 +534,41 @@ test('Explore root and trailing-slash URLs resume without switching their curren
   }
 });
 
-test('an Explore page reached through SPA navigation retains column bootstrap settings when reloaded', () => {
-  const env = exploreSetup('trending');
-  env.window.location.hash = '#yomikui-cidcolumn1-ctsearch-hb1';
-  const installed = env.api.installFrame(env.options);
-  env.window.location.hash = '';
-  env.window.location.search = '?source=test';
-  env.send();
-  assert.equal(env.reloads.length, 1);
-  assert.equal(env.reloads[0].pathname, '/explore/tabs/trending');
-  assert.equal(env.reloads[0].search, '?source=test');
-  assert.equal(env.reloads[0].hash, '#yomikui-cidcolumn1-ctsearch-hb1');
-  installed.dispose();
-});
-
-test('cancelling an Explore operation clears its receipt or its replacement-document observer', async () => {
-  for (const resuming of [false, true]) {
-    const env = exploreSetup('news', { loading: resuming });
-    if (resuming) env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path: '/explore/tabs/news', origin: 'https://x.com', started: 0 }));
+for (const [kind, create] of [['explore', exploreSetup], ['search', searchSetup]]) {
+  test(`${kind} pages reached through SPA navigation retain column bootstrap settings when reloaded`, () => {
+    const env = create();
+    env.window.location.hash = '#yomikui-cidcolumn1-ctsearch-hb1';
     const installed = env.api.installFrame(env.options);
-    if (!resuming) env.send();
-    env.send({ type: P + 'cancel' });
-    await settle();
-    assert.equal(env.messages.at(-1).data.reason, 'cancelled');
-    assert.equal(env.storage.has(reloadKey), false);
-    assert.equal(env.clock.timers.size, 0);
-    assert.ok(env.observers.every(observer => !observer.connected));
+    env.window.location.hash = '';
+    env.window.location.search += (env.window.location.search ? '&' : '?') + 'source=test';
+    const path = env.window.location.pathname, query = env.window.location.search;
+    env.send();
+    assert.equal(env.reloads.length, 1);
+    assert.equal(env.reloads[0].pathname, path);
+    assert.equal(env.reloads[0].search, query);
+    assert.equal(env.reloads[0].hash, '#yomikui-cidcolumn1-ctsearch-hb1');
     installed.dispose();
-  }
-});
+  });
+}
+
+for (const [kind, create] of [['explore', exploreSetup], ['search', searchSetup]]) {
+  test(`cancelling a ${kind} operation clears its receipt or its replacement-document observer`, async () => {
+    for (const resuming of [false, true]) {
+      const env = create(undefined, { loading: resuming });
+      const path = env.window.location.pathname + env.window.location.search;
+      if (resuming) env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', kind, path, origin: 'https://x.com', started: 0 }));
+      const installed = env.api.installFrame(env.options);
+      if (!resuming) env.send();
+      env.send({ type: P + 'cancel' });
+      await settle();
+      assert.equal(env.messages.at(-1).data.reason, 'cancelled');
+      assert.equal(env.storage.has(reloadKey), false);
+      assert.equal(env.clock.timers.size, 0);
+      assert.ok(env.observers.every(observer => !observer.connected));
+      installed.dispose();
+    }
+  });
+}
 
 test('cancellation releases readiness observers and timers without clicking', async () => {
   const env = setup(home({ loading: true }));
@@ -732,8 +862,9 @@ function batchSetup({ columns, quiet, offscreen = [], currentKinds = {} } = {}) 
       if (data.type === P + 'probe') {
         env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'ready' } });
       } else if (data.type === P + 'request') {
-        if (data.target === 'explore') env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'reloading' } });
-        env.clock.setTimeout(() => env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'result', status: data.target === 'explore' ? 'reloaded' : 'updated', method: data.target === 'explore' ? 'reload' : 'tab' } }), 30);
+        const reload = ['explore', 'search'].includes(data.target);
+        if (reload) env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'reloading' } });
+        env.clock.setTimeout(() => env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'result', status: reload ? 'reloaded' : 'updated', method: reload ? 'reload' : 'tab' } }), 30);
       }
     } };
     frames.set(column.id, frame);
@@ -759,7 +890,7 @@ function batchSetup({ columns, quiet, offscreen = [], currentKinds = {} } = {}) 
   return { ...env, batch, reader, state, activity, messages, mounts, frames, views, visible, report };
 }
 
-test('one user action updates visible recommendations sequentially and leaves offscreen columns alone', async () => {
+test('one user action updates visible supported pages sequentially and leaves offscreen columns alone', async () => {
   const env = batchSetup({
     columns: [
       { id: 'home1', type: 'home' }, { id: 'search', type: 'search' },
@@ -773,12 +904,12 @@ test('one user action updates visible recommendations sequentially and leaves of
   assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home1']);
   await env.clock.advance(1500);
   await run;
-  assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home1']);
-  assert.equal(env.views.at(-1).total, 2);
-  assert.deepEqual(env.views.at(-1).results.map(item => item.status), ['updated', 'skipped']);
+  assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home1', 'search']);
+  assert.equal(env.views.at(-1).total, 3);
+  assert.deepEqual(env.views.at(-1).results.map(item => item.status), ['updated', 'reloaded', 'skipped']);
   assert.equal(env.views.at(-1).results.at(-1).reason, 'draft');
   assert.deepEqual(env.mounts, []);
-  assert.deepEqual(env.activity, ['home1']);
+  assert.deepEqual(env.activity, ['home1', 'search']);
   const sent = env.messages.length;
   await env.batch.run();
   assert.equal(env.messages.length, sent, 'cooldown prevents another batch');
@@ -792,69 +923,72 @@ test('one batch dispatches each visible current page to its own refresh strategy
     { id: 'recommendations', type: 'home' }, { id: 'following-tab', type: 'home' },
     { id: 'news', type: 'customUrl' }, { id: 'keyword-search', type: 'search' },
     { id: 'following-search', type: 'following' }, { id: 'offscreen', type: 'explore' },
-  ], currentKinds: { 'following-tab': 'following', news: 'explore' }, offscreen: ['offscreen'] });
+    { id: 'offscreen-search', type: 'search' },
+  ], currentKinds: { 'following-tab': 'following', news: 'explore' }, offscreen: ['offscreen', 'offscreen-search'] });
   const run = env.batch.run();
   assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.target), ['recommended']);
-  await env.clock.advance(1500);
+  await env.clock.advance(2500);
   await run;
   assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => [message.columnId, message.target]), [
-    ['recommendations', 'recommended'], ['following-tab', 'following'], ['news', 'explore'],
+    ['recommendations', 'recommended'], ['following-tab', 'following'], ['news', 'explore'], ['keyword-search', 'search'], ['following-search', 'search'],
   ]);
-  assert.deepEqual(env.views.at(-1).results.map(result => result.status), ['updated', 'updated', 'reloaded']);
-  assert.equal(env.api.summary(env.views.at(-1)), '表示更新 2列 ／ 再読み込み 1列');
+  assert.deepEqual(env.views.at(-1).results.map(result => result.status), ['updated', 'updated', 'reloaded', 'reloaded', 'reloaded']);
+  assert.equal(env.api.summary(env.views.at(-1)), '表示更新 2列 ／ 再読み込み 3列');
   assert.deepEqual(env.mounts, []);
   env.batch.dispose();
 });
 
-test('an Explore reload tolerates its unloading context but waits for a trusted completion before advancing', async () => {
-  const env = batchSetup({ columns: [{ id: 'news', type: 'explore' }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
-  const run = env.batch.run({ target: 'all' });
-  const request = env.messages.find(message => message.type === P + 'request');
-  const emit = (type, status, changes = {}) => env.window.emit('message', {
-    source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + type, status, method: 'reload' }, ...changes,
-  });
-  emit('result', 'reloaded');
-  assert.equal(env.views.at(-1).done, 0, 'completion requires the reload-start acknowledgement');
-  emit('reloading');
-  env.report('news', null);
-  env.batch.syncState();
-  await env.clock.advance(1000);
-  assert.equal(env.views.at(-1).done, 0);
-  assert.equal(env.messages.filter(message => message.type === P + 'request').length, 1);
-  emit('result', 'reloaded', { source: {} });
-  emit('result', 'reloaded', { origin: 'https://untrusted.example' });
-  assert.equal(env.views.at(-1).done, 0);
-  env.report('news', 'explore');
-  emit('result', 'reloaded');
-  await settle();
-  await env.clock.advance(1000);
-  await run;
-  assert.deepEqual(env.views.at(-1).results.map(result => result.status), ['reloaded', 'updated']);
-  env.batch.dispose();
-  assert.equal(env.clock.timers.size, 0);
-});
-
-for (const change of ['offscreen', 'page', 'frame', 'workspace']) {
-  test(`an Explore reload is cancelled on ${change} without replaying it`, async () => {
-    const env = batchSetup({ columns: [{ id: 'news', type: 'explore' }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
-    const run = env.batch.run();
+for (const kind of ['explore', 'search']) {
+  test(`${kind} reload tolerates its unloading context but waits for a trusted completion before advancing`, async () => {
+    const env = batchSetup({ columns: [{ id: 'news', type: kind }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
+    const run = env.batch.run({ target: 'all' });
     const request = env.messages.find(message => message.type === P + 'request');
-    env.window.emit('message', { source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + 'reloading' } });
+    const emit = (type, status, changes = {}) => env.window.emit('message', {
+      source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + type, status, method: 'reload' }, ...changes,
+    });
+    emit('result', 'reloaded');
+    assert.equal(env.views.at(-1).done, 0, 'completion requires the reload-start acknowledgement');
+    emit('reloading');
     env.report('news', null);
-    if (change === 'offscreen') env.visible.delete('news');
-    if (change === 'page') env.report('news', 'search');
-    if (change === 'frame') env.frames.set('news', { postMessage() {} });
-    if (change === 'workspace') env.state.activeWorkspaceId = 'other';
     env.batch.syncState();
+    await env.clock.advance(12000);
+    assert.equal(env.views.at(-1).done, 0);
+    assert.equal(env.messages.filter(message => message.type === P + 'request').length, 1);
+    emit('result', 'reloaded', { source: {} });
+    emit('result', 'reloaded', { origin: 'https://untrusted.example' });
+    assert.equal(env.views.at(-1).done, 0);
+    env.report('news', kind);
+    emit('result', 'reloaded');
     await settle();
     await env.clock.advance(1000);
     await run;
-    assert.equal(env.views.at(-1).results[0].status, 'skipped');
-    assert.equal(env.messages.filter(message => message.type === P + 'request' && message.columnId === 'news').length, 1);
-    assert.equal(env.messages.filter(message => message.type === P + 'request' && message.columnId === 'home').length, change === 'workspace' ? 0 : 1);
+    assert.deepEqual(env.views.at(-1).results.map(result => result.status), ['reloaded', 'updated']);
     env.batch.dispose();
     assert.equal(env.clock.timers.size, 0);
   });
+
+  for (const change of ['offscreen', 'page', 'frame', 'workspace']) {
+    test(`${kind} reload is cancelled on ${change} without replaying it`, async () => {
+      const env = batchSetup({ columns: [{ id: 'news', type: kind }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
+      const run = env.batch.run();
+      const request = env.messages.find(message => message.type === P + 'request');
+      env.window.emit('message', { source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + 'reloading' } });
+      env.report('news', null);
+      if (change === 'offscreen') env.visible.delete('news');
+      if (change === 'page') env.report('news', kind === 'explore' ? 'search' : 'explore');
+      if (change === 'frame') env.frames.set('news', { postMessage() {} });
+      if (change === 'workspace') env.state.activeWorkspaceId = 'other';
+      env.batch.syncState();
+      await settle();
+      await env.clock.advance(1000);
+      await run;
+      assert.equal(env.views.at(-1).results[0].status, 'skipped');
+      assert.equal(env.messages.filter(message => message.type === P + 'request' && message.columnId === 'news').length, 1);
+      assert.equal(env.messages.filter(message => message.type === P + 'request' && message.columnId === 'home').length, change === 'workspace' ? 0 : 1);
+      env.batch.dispose();
+      assert.equal(env.clock.timers.size, 0);
+    });
+  }
 }
 
 test('changing the next Home tab during an all-visible batch does not silently refresh the new tab', async () => {

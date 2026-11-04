@@ -13,7 +13,7 @@
     (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && [0, 1, 2].includes(deltaMode)) ||
     ((direction === 1 || direction === -1) && ['post', 'page'].includes(mode));
   const READING_GROUPS = ['recommended', 'following', 'search', 'explore'];
-  const REFRESH_KINDS = ['recommended', 'following', 'explore'];
+  const REFRESH_KINDS = ['recommended', 'following', 'search', 'explore'];
   const isRefreshableKind = kind => REFRESH_KINDS.includes(kind);
   const selectedTimelineTab = () => [...primary()?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
     .find(tab => !tab.closest('article, [role="dialog"]'));
