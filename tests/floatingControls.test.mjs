@@ -266,19 +266,22 @@ test('a dragged header stays in place when folding or status text changes the pa
 
 test('panel preferences persist locally in order and normalize invalid values', async () => {
   const env = setup();
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, collapsed: false, mode: 'post' });
-  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page' });
-  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post' });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, collapsed: false, mode: 'post', transparency: 0 });
+  env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, collapsed: true, mode: 'page' };
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, collapsed: true, mode: 'page', transparency: 0 }, 'older preferences retain the position and mode');
+  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', transparency: 110 });
+  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', transparency: 35 });
   await Promise.all([first, last]);
-  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, collapsed: true, mode: 'page' });
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post' });
+  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, collapsed: true, mode: 'page', transparency: 80 });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, collapsed: false, mode: 'post', transparency: 35 });
+  for (const transparency of [-20, NaN, Infinity, '60']) assert.equal(env.api.preferences({ transparency }).transparency, 0);
 });
 
 function panelTree(env, {
   collapsed = false, phase = 'idle', reading = false, target = 'all', mode = 'post', lastAction = 'reading',
-  readingMessage = '', refreshText = '', onNavigate = () => {}, onRefresh = () => {},
+  readingMessage = '', refreshText = '', transparency = 0, onNavigate = () => {}, onRefresh = () => {},
 } = {}) {
-  const states = [env.api.preferences({ collapsed, mode }), target, new Set(['one']), lastAction];
+  const states = [env.api.preferences({ collapsed, mode, transparency }), target, new Set(['one']), lastAction];
   const react = {
     useState: () => [states.shift(), () => {}], useRef: current => ({ current }), useCallback: fn => fn,
     useEffect() {}, useLayoutEffect() {},
@@ -299,6 +302,22 @@ function panelTree(env, {
   visit(tree);
   return nodes;
 }
+
+test('changing transparency saves it with the current mode and preserves it when folding', async () => {
+  const env = setup();
+  const nodes = panelTree(env, { mode: 'page', transparency: 35 });
+  const slider = nodes.find(node => node.type === 'input' && node.props.type === 'range');
+  assert.equal(slider.props['aria-label'], '背景の透明度');
+  slider.props.onChange({ currentTarget: { value: '60' } });
+  await settle();
+  assert.equal(env.saved.yomikui_floating_controls_v1.transparency, 60);
+  assert.equal(env.saved.yomikui_floating_controls_v1.mode, 'page');
+  nodes.find(node => node.props?.className === 'yf-collapse').props.onClick();
+  await settle();
+  const saved = await env.api.loadPreferences();
+  assert.equal(saved.transparency, 60);
+  assert.equal(saved.collapsed, true);
+});
 
 test('collapsed controls retain top, step actions and the separate all-home refresh', () => {
   const env = setup();
