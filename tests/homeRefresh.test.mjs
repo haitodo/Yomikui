@@ -312,6 +312,39 @@ test('a trusted top command returns once without refreshing or replaying a dupli
   env.installed.dispose();
 });
 
+test('continuous wheel messages validate the sender, amount and current group and do not reply per frame', () => {
+  const env = readingFrameSetup();
+  const data = { type: P + 'scroll', mode: 'wheel', deltaY: 120, deltaMode: 0, group: 'recommended' };
+  let clicks = 0;
+  env.document.addEventListener('click', () => clicks++);
+  env.send(data, { source: {} });
+  env.send(data, { origin: 'https://evil.example' });
+  env.send({ ...data, columnId: 'another' });
+  env.send({ ...data, deltaY: NaN });
+  env.send({ ...data, deltaMode: 3 });
+  env.send({ ...data, mode: 'top' });
+  env.send({ ...data, type: P + 'navigate' });
+  assert.equal(env.scroller.scrollTop, 800);
+  env.send(data);
+  assert.equal(env.scroller.scrollTop, 920);
+  env.send(data);
+  assert.equal(env.scroller.scrollTop, 920, 'duplicate delivery does not apply the delta twice');
+  env.send({ ...data, deltaY: -20, requestId: 'up' });
+  assert.equal(env.scroller.scrollTop, 900);
+  env.document.getElementById('recommended').setAttribute('aria-selected', 'false');
+  env.document.getElementById('following').setAttribute('aria-selected', 'true');
+  env.send({ ...data, requestId: 'changed' });
+  assert.equal(env.scroller.scrollTop, 900);
+  env.send({ ...data, group: 'following', requestId: 'following' });
+  assert.equal(env.scroller.scrollTop, 1020);
+  env.send({ type: 'yomikui-column-visibility', visible: false });
+  env.send({ ...data, group: 'following', requestId: 'hidden' });
+  assert.equal(env.scroller.scrollTop, 1020);
+  assert.equal(env.messages.length, 0);
+  assert.equal(clicks, 0);
+  env.installed.dispose();
+});
+
 test('offscreen native frames reject reading commands', () => {
   const env = readingFrameSetup();
   env.send({ type: 'yomikui-column-visibility', visible: false });
@@ -433,6 +466,8 @@ test('reading cannot interrupt a native refresh but cancels its remaining scroll
   env.send({ type: P + 'request', target: 'recommended', requestId: 'refresh1' });
   env.send({ type: P + 'navigate', direction: 1, mode: 'post', requestId: 'too-early' });
   assert.equal(env.messages.at(-1).data.reason, 'busy');
+  env.send({ type: P + 'scroll', mode: 'wheel', deltaY: 120, deltaMode: 0, requestId: 'wheel-too-early' });
+  assert.equal(env.scroller.scrollTop, 800, 'wheel input cannot interrupt refresh preparation');
   await settle();
   await env.clock.advance(200);
   assert.equal(env.messages.at(-1).data.status, 'updated');

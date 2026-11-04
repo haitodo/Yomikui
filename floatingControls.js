@@ -88,6 +88,7 @@
       this.pending = new Map();
       this.contexts = new Map();
       this.visible = new Set();
+      this.wheelActivity = new Map();
       this.active = null;
       this.receive = this.receive.bind(this);
       this.onVisibility = () => { if (document.hidden) this.cancel(); };
@@ -165,8 +166,56 @@
       });
     }
 
+    wheel({ target = 'all', deltaY, deltaMode = 0 }) {
+      if (this.disposed || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ mode: 'wheel', deltaY, deltaMode })) return false;
+      const state = this.getState(), kinds = this.kinds();
+      if (!state.columns.some(column => readable(column) && this.visible.has(column.id) && matchesTarget(column, target, kinds))) return false;
+      if (this.active && !this.active.cancelled) { this.active.cancelledByWheel = true; this.cancel(); }
+      const previous = this.wheelBuffer;
+      if (previous && (previous.workspaceId !== state.activeWorkspaceId || previous.target !== target)) this.clearWheel();
+      // Keep reversals and unit changes in order, including at a column's edge.
+      else if (previous && (previous.deltaMode !== deltaMode || Math.sign(previous.deltaY) !== Math.sign(deltaY))) this.flushWheel();
+      if (!this.wheelBuffer) this.wheelBuffer = { workspaceId: state.activeWorkspaceId, target, deltaMode, deltaY: 0, frame: null };
+      const buffer = this.wheelBuffer;
+      buffer.deltaY += deltaY;
+      if (buffer.frame == null) buffer.frame = requestAnimationFrame(() => this.flushWheel());
+      return true;
+    }
+
+    flushWheel() {
+      const buffer = this.wheelBuffer;
+      if (!buffer) return;
+      this.clearWheel();
+      const state = this.getState();
+      if (this.disposed || document.hidden || state.activeWorkspaceId !== buffer.workspaceId) return;
+      const visible = this.getVisibleIds(), kinds = this.kinds();
+      for (const column of state.columns) {
+        if (!readable(column) || !visible.has(column.id) || !matchesTarget(column, buffer.target, kinds) || state.columnComposing?.[column.id]) continue;
+        const frame = this.getFrame(column.id);
+        if (!frame?.window || !trusted(frame.origin)) continue;
+        const now = Date.now();
+        if (!this.wheelActivity.has(column.id) || now - this.wheelActivity.get(column.id) >= 500) {
+          this.wheelActivity.set(column.id, now);
+          state.markColumnActivity?.(column.id);
+        }
+        // Continuous input is applied immediately in the frame. It has no
+        // response deadline, repeat timer, or queue behind a previous action.
+        try { frame.window.postMessage({
+          type: PREFIX + 'scroll', requestId: crypto.randomUUID(), columnId: column.id, mode: 'wheel',
+          deltaY: buffer.deltaY, deltaMode: buffer.deltaMode,
+          ...(targetGroup(buffer.target) ? { group: targetGroup(buffer.target) } : {}),
+        }, frame.origin); } catch {}
+      }
+    }
+
+    clearWheel() {
+      if (this.wheelBuffer?.frame != null) cancelAnimationFrame(this.wheelBuffer.frame);
+      this.wheelBuffer = null;
+    }
+
     async move({ target = 'all', direction, mode }) {
       if (this.disposed || this.active || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ direction, mode })) return;
+      this.clearWheel();
       const state = this.getState();
       const visible = this.getVisibleIds();
       const kinds = this.kinds();
@@ -201,7 +250,7 @@
       } finally {
         clearTimeout(job.timer);
         this.active = null;
-        if (!this.disposed) this.onChange({ busy: false, results, message: job.cancelled ? '閲覧操作を中止しました' : readingSummary(results) });
+        if (!this.disposed) this.onChange({ busy: false, results, message: job.cancelledByWheel ? 'ホイール操作に切り替えました' : job.cancelled ? '閲覧操作を中止しました' : readingSummary(results) });
       }
     }
 
@@ -209,10 +258,11 @@
       const state = this.getState();
       const changed = state.activeWorkspaceId !== this.workspaceId || state.columns !== this.columns;
       if (state.activeWorkspaceId !== this.workspaceId) {
-        this.cancel(); this.contexts.clear(); this.visible.clear(); this.workspaceId = state.activeWorkspaceId;
+        this.cancel(); this.contexts.clear(); this.visible.clear(); this.wheelActivity.clear(); this.workspaceId = state.activeWorkspaceId;
       }
       this.columns = state.columns;
       for (const id of this.contexts.keys()) if (!state.columns.some(column => column.id === id && readable(column))) this.contexts.delete(id);
+      for (const id of this.wheelActivity.keys()) if (!state.columns.some(column => column.id === id)) this.wheelActivity.delete(id);
       if (changed) this.syncVisible();
       else {
         // Activity updates need not measure the rack again. Its scroll/resize
@@ -226,6 +276,7 @@
     }
 
     cancel() {
+      this.clearWheel();
       if (!this.active) return;
       this.active.cancelled = true;
       for (const pending of this.pending.values()) pending.finish({ status: 'skipped', reason: 'cancelled' });
@@ -239,6 +290,19 @@
       window.removeEventListener('pagehide', this.onPageHide);
       document.removeEventListener('visibilitychange', this.onVisibility);
     }
+  }
+
+  function installWheel(panel, onWheel) {
+    const receive = event => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+          Math.abs(event.deltaX || 0) > Math.abs(event.deltaY) ||
+          event.target.closest?.('select, input, textarea, [contenteditable="true"], [role="listbox"], [role="menu"]') ||
+          panel.scrollHeight > panel.clientHeight + 1) return;
+      const action = { deltaY: event.deltaY, deltaMode: event.deltaMode ?? 0 };
+      if (globalThis.YomikuiHomeScroll.isReadingAction({ mode: 'wheel', ...action }) && onWheel(action)) event.preventDefault();
+    };
+    panel.addEventListener('wheel', receive, { passive: false, capture: true });
+    return () => panel.removeEventListener('wheel', receive, { capture: true });
   }
 
   function readingSummary(results) {
@@ -430,13 +494,14 @@
     return true;
   }
 
-  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onNavigate, workspaceId = 'default', kinds = {}, onVisibleChange }) {
+  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onNavigate, onWheel, onCancelWheel, workspaceId = 'default', kinds = {}, onVisibleChange }) {
     const [prefs, setPrefs] = React.useState(preferences);
     const [selection, setSelection] = React.useState(() => ({ workspaceId, target: 'all', ready: false }));
     const [visible, setVisible] = React.useState(() => new Set());
     const [lastAction, setLastAction] = React.useState('reading');
     const prefsRef = React.useRef(prefs), dirty = React.useRef(false);
     const panelRef = React.useRef(null), handleRef = React.useRef(null), positionRef = React.useRef(null);
+    const wheelRef = React.useRef(null);
     const eligible = columns.filter(readable);
     const available = eligible.length > 0 || canRefresh;
     const targetReady = selection.workspaceId === workspaceId && selection.ready;
@@ -460,8 +525,9 @@
       if (hidden || !available || !panelRef.current || !handleRef.current) return;
       installStyles();
       const position = new PanelPosition({ panel: panelRef.current, handle: handleRef.current, position: prefsRef.current, onCommit: updatePrefs });
+      const disposeWheel = installWheel(panelRef.current, action => wheelRef.current?.(action) === true);
       positionRef.current = position;
-      return () => { position.dispose(); positionRef.current = null; };
+      return () => { disposeWheel(); position.dispose(); positionRef.current = null; };
     }, [hidden, available, updatePrefs]);
     useLayoutEffect(() => { positionRef.current?.setPosition(prefs); }, [prefs]);
     React.useEffect(() => {
@@ -500,7 +566,9 @@
     const selectedColumns = targetReady ? visibleColumns.filter(column => matchesTarget(column, target, kinds)) : [];
     const selected = !targetReady ? '読み込み中' : target === 'all' ? '表示中すべて' : GROUPS[targetGroup(target)] || columns.find(column => column.id === target)?.title || '選択した列';
     const selectionVisible = selectedColumns.length > 0;
+    wheelRef.current = action => targetReady && selectionVisible && !busy && !positionRef.current?.drag && onWheel?.({ target, ...action }) === true;
     const selectTarget = target => {
+      onCancelWheel?.();
       setSelection({ workspaceId, target, ready: true });
       setLastAction('selection');
       saveTarget(workspaceId, target);
@@ -523,7 +591,7 @@
     const statusDetails = noSelection ? statusText : showRefresh ? refreshDetails || refreshText : details || reading.message;
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
-      ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル',
+      ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
       style: { '--yf-surface-opacity': `${100 - prefs.transparency}%` },
       children: [
         jsx.jsxs('div', { className: 'yf-header', children: [
@@ -574,5 +642,5 @@
     });
   }
 
-  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, visibleColumnIds, preferences, loadPreferences, savePreferences, loadTarget, saveTarget, matchesTarget, readingSummary, installStyles });
+  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, installWheel, visibleColumnIds, preferences, loadPreferences, savePreferences, loadTarget, saveTarget, matchesTarget, readingSummary, installStyles });
 })();

@@ -10,6 +10,7 @@
   const CANCEL = PREFIX + 'cancel';
   const NAVIGATE = PREFIX + 'navigate';
   const NAVIGATED = PREFIX + 'navigated';
+  const SCROLL = PREFIX + 'scroll';
   const DESCRIBE = PREFIX + 'describe';
   const CONTEXT = PREFIX + 'context';
   const COOLDOWN = 5000;
@@ -229,19 +230,20 @@
       if (data.type === 'yomikui-settings-update') { context?.schedule(); return; }
       if (typeof data.requestId !== 'string' ||
           data.requestId.length < 1 || data.requestId.length > 100) return;
-      if (data.type === NAVIGATE) {
-        if (!globalThis.YomikuiHomeScroll.isReadingAction(data) ||
+      if (data.type === NAVIGATE || data.type === SCROLL) {
+        const scrolling = data.type === SCROLL;
+        if (scrolling !== (data.mode === 'wheel') || !globalThis.YomikuiHomeScroll.isReadingAction(data) ||
             (data.group !== undefined && !globalThis.YomikuiHomeScroll.READING_GROUPS.includes(data.group))) return;
-        if (navigated.has(data.requestId)) { send(NAVIGATED, data.requestId, navigated.get(data.requestId)); return; }
+        if (navigated.has(data.requestId)) { if (!scrolling) send(NAVIGATED, data.requestId, navigated.get(data.requestId)); return; }
         let result;
         try {
           result = active ? { status: 'skipped', reason: 'busy' } : !visible ? { status: 'skipped', reason: 'hidden' } :
             data.group !== undefined && globalThis.YomikuiHomeScroll.readingKind(options.getSettings) !== data.group ? { status: 'skipped', reason: 'target-changed' } :
-            globalThis.YomikuiHomeScroll.navigate({ ...options, direction: data.direction, mode: data.mode, beforeMove: () => refresher.positions.cancel() });
+            globalThis.YomikuiHomeScroll.navigate({ ...options, direction: data.direction, mode: data.mode, deltaY: data.deltaY, deltaMode: data.deltaMode, beforeMove: () => refresher.positions.cancel() });
         } catch { result = { status: 'failed', reason: 'error' }; }
         navigated.set(data.requestId, result);
         if (navigated.size > 32) navigated.delete(navigated.keys().next().value);
-        send(NAVIGATED, data.requestId, result);
+        if (!scrolling) send(NAVIGATED, data.requestId, result);
         return;
       }
       if (data.type === PROBE) { send(READY, data.requestId); return; }
@@ -475,6 +477,7 @@
     const controller = React.useRef(null);
     const reader = React.useRef(null);
     const onVisibleChange = React.useCallback(ids => reader.current?.syncVisible(ids), []);
+    const onCancelWheel = React.useCallback(() => reader.current?.clearWheel(), []);
     React.useEffect(() => {
       const getFrame = id => {
         const frame = frames.current.get(id);
@@ -498,9 +501,10 @@
       result.status === 'updated' ? '投稿一覧の更新を確認' : result.status === 'requested' ? '更新操作済み・表示変化未確認' : REASONS[result.reason] || '応答未確認'
     }`).join('\n');
     return jsx.jsx(globalThis.YomikuiFloatingControls.Panel, {
-      React, jsx, columns, view, reading, hidden, kinds, workspaceId, onVisibleChange, canRefresh: columns.some(isHomeColumn), refreshText: summary(view), refreshDetails: details,
-      onRefresh: () => { if (store.getState().activeWorkspaceId === workspaceId && !reader.current?.active) controller.current?.run(); },
+      React, jsx, columns, view, reading, hidden, kinds, workspaceId, onVisibleChange, onCancelWheel, canRefresh: columns.some(isHomeColumn), refreshText: summary(view), refreshDetails: details,
+      onRefresh: () => { if (store.getState().activeWorkspaceId === workspaceId && !reader.current?.active) { reader.current?.clearWheel(); controller.current?.run(); } },
       onNavigate: action => { if (store.getState().activeWorkspaceId === workspaceId && !controller.current?.active) reader.current?.move(action); },
+      onWheel: action => store.getState().activeWorkspaceId === workspaceId && !controller.current?.active && reader.current?.wheel(action) === true,
     });
   }
 

@@ -55,7 +55,7 @@ function readingSetup({ quiet = false } = {}) {
         return;
       }
       messages.push({ ...clone(data), origin });
-      if (!quiet) env.clock.setTimeout(() => env.window.emit('message', {
+      if (!quiet && data.type !== PREFIX + 'scroll') env.clock.setTimeout(() => env.window.emit('message', {
         source: frame, origin, data: { ...data, type: PREFIX + 'navigated', status: 'moved' },
       }), 10);
     } };
@@ -74,6 +74,115 @@ function readingSetup({ quiet = false } = {}) {
   };
   return { ...env, state, visible, frames, messages, views, activity, controller, kinds, contextRequests, contextViews, report };
 }
+
+test('wheel input coalesces per animation frame without cooldowns, repeated work, or UI updates per event', async () => {
+  const env = readingSetup();
+  assert.equal(env.controller.wheel({ target: 'group:recommended', deltaY: 10.25 }), true);
+  env.controller.wheel({ target: 'group:recommended', deltaY: 9.5 });
+  assert.equal(env.messages.length, 0);
+  assert.equal(env.clock.frames.size, 1);
+  env.clock.frame(16);
+  assert.deepEqual(env.messages.map(message => [message.columnId, message.deltaY, message.group]), [['one', 19.75, 'recommended'], ['two', 19.75, 'recommended']]);
+  assert.ok(env.messages.every(message => message.type === PREFIX + 'scroll' && message.deltaMode === 0));
+  assert.equal(env.views.length, 0, 'scrolling does not rerender or move the panel under the pointer');
+  env.controller.wheel({ target: 'group:recommended', deltaY: 5 });
+  env.clock.frame(16);
+  assert.equal(env.messages.length, 4, 'the next frame accepts input immediately');
+  assert.deepEqual(env.activity, ['one', 'two'], 'activity updates are throttled');
+  await env.clock.advance(10000);
+  assert.equal(env.messages.length, 4);
+  assert.equal(env.clock.frames.size, 0);
+  assert.equal(env.clock.timers.size, 0);
+  env.controller.dispose();
+});
+
+test('wheel reversals and unit changes retain their order, and a new target discards an old pending delta', () => {
+  const env = readingSetup();
+  env.controller.wheel({ target: 'one', deltaY: 100 });
+  env.controller.wheel({ target: 'one', deltaY: -20 });
+  env.controller.wheel({ target: 'one', deltaY: 3, deltaMode: 1 });
+  env.clock.frame(16);
+  assert.deepEqual(env.messages.map(message => [message.deltaY, message.deltaMode]), [[100, 0], [-20, 0], [3, 1]]);
+  env.controller.wheel({ target: 'one', deltaY: 200 });
+  env.controller.wheel({ target: 'two', deltaY: 40 });
+  env.clock.frame(16);
+  assert.deepEqual(env.messages.slice(3).map(message => [message.columnId, message.deltaY]), [['two', 40]]);
+  env.controller.dispose();
+});
+
+test('wheel batches recheck visibility and drafts and skip unmounted columns', () => {
+  const env = readingSetup();
+  env.controller.wheel({ target: 'all', deltaY: 120 });
+  env.visible.delete('one');
+  env.state.columnComposing.two = true;
+  env.clock.frame(16);
+  assert.deepEqual(env.messages.map(message => message.columnId), ['following']);
+  env.controller.wheel({ target: 'following', deltaY: 120 });
+  env.frames.delete('following');
+  env.clock.frame(16);
+  assert.equal(env.messages.length, 1);
+  env.controller.dispose();
+});
+
+test('queued wheel input is cancelled on workspace changes, hiding, pagehide and disposal', () => {
+  for (const cause of ['workspace', 'hidden', 'pagehide', 'dispose']) {
+    const env = readingSetup();
+    env.controller.wheel({ target: 'group:recommended', deltaY: 120 });
+    if (cause === 'workspace') { env.state.activeWorkspaceId = 'new'; env.controller.syncState(); }
+    if (cause === 'hidden') { env.document.hidden = true; env.document.dispatchEvent(new env.dom.Event('visibilitychange')); }
+    if (cause === 'pagehide') env.window.emit('pagehide');
+    if (cause === 'dispose') env.controller.dispose();
+    env.clock.frame(16);
+    assert.equal(env.messages.length, 0, cause);
+    assert.equal(env.clock.frames.size, 0);
+    assert.equal(env.clock.timers.size, 0);
+    env.controller.dispose();
+  }
+});
+
+test('wheel input takes over a pending step, and a later button action cancels queued wheel input', async () => {
+  const env = readingSetup();
+  const step = env.controller.move({ target: 'one', direction: 1, mode: 'post' });
+  env.controller.wheel({ target: 'one', deltaY: 20 });
+  env.controller.wheel({ target: 'one', deltaY: 20 });
+  env.clock.frame(16);
+  await step;
+  assert.deepEqual(env.messages.map(message => message.type), [PREFIX + 'navigate', PREFIX + 'scroll']);
+  assert.equal(env.messages[1].deltaY, 40);
+  assert.equal(env.views.at(-1).busy, false);
+  env.controller.wheel({ target: 'one', deltaY: 120 });
+  const top = env.controller.move({ target: 'one', mode: 'top' });
+  env.clock.frame(16);
+  await env.clock.advance(300); await top;
+  assert.equal(env.messages.length, 3);
+  assert.equal(env.messages.at(-1).mode, 'top');
+  env.controller.dispose();
+});
+
+test('panel wheel forwarding preserves native settings, zoom, horizontal gestures and panel overflow', () => {
+  const env = setup();
+  const panel = env.document.createElement('section');
+  panel.innerHTML = '<button>下へ</button><select><option>おすすめ</option></select><input type="range">';
+  env.document.body.appendChild(panel);
+  const actions = [];
+  const dispose = env.api.installWheel(panel, action => { actions.push(clone(action)); return true; });
+  const send = (target, values = {}) => {
+    const event = new env.dom.Event('wheel', { bubbles: true, cancelable: true });
+    Object.assign(event, { deltaY: 120, deltaX: 0, deltaMode: 0, ...values });
+    target.dispatchEvent(event);
+    return event;
+  };
+  assert.equal(send(panel.querySelector('button'), { deltaY: 2.5 }).defaultPrevented, true);
+  assert.deepEqual(actions, [{ deltaY: 2.5, deltaMode: 0 }]);
+  for (const values of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { deltaX: 200 }, { deltaY: 0 }]) assert.equal(send(panel, values).defaultPrevented, false);
+  for (const selector of ['select', 'input']) assert.equal(send(panel.querySelector(selector)).defaultPrevented, false);
+  Object.defineProperties(panel, { scrollHeight: { value: 200 }, clientHeight: { value: 100 } });
+  assert.equal(send(panel).defaultPrevented, false);
+  assert.equal(actions.length, 1);
+  dispose();
+  send(panel.querySelector('button'));
+  assert.equal(actions.length, 1);
+});
 
 test('reading groups address the current content instead of the saved column type', async () => {
   const env = readingSetup();

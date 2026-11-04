@@ -49,6 +49,9 @@ function readingSetup() {
   env.navigate = (direction = 1, mode = 'post', beforeMove) => env.api.navigate({
     getSettings: () => env.settings, getScroller: () => env.scroller, direction, mode, beforeMove,
   });
+  env.wheel = (deltaY, deltaMode = 0, beforeMove) => env.api.navigate({
+    getSettings: () => env.settings, getScroller: () => env.scroller, mode: 'wheel', deltaY, deltaMode, beforeMove,
+  });
   return env;
 }
 
@@ -87,6 +90,40 @@ test('page reading uses the visible scroller height, accounts for offsets, and c
   env.scroller.scrollTop = 10;
   env.navigate(-1, 'page');
   assert.equal(env.scroller.scrollTop, 0);
+});
+
+test('wheel input keeps fractional pixel amounts, applies immediately, and clamps at the ends', () => {
+  const env = readingSetup();
+  const moves = [];
+  env.scroller.scrollTo = options => { moves.push({ ...options }); env.scroller.scrollTop = options.top; };
+  assert.equal(env.wheel(.25).status, 'moved');
+  assert.equal(env.scroller.scrollTop, 100.25);
+  env.wheel(120);
+  assert.equal(env.scroller.scrollTop, 220.25);
+  env.wheel(-45.5);
+  assert.equal(env.scroller.scrollTop, 174.75);
+  env.wheel(10000);
+  assert.equal(env.scroller.scrollTop, 1400);
+  assert.equal(env.wheel(20).status, 'edge');
+  env.wheel(-10000);
+  assert.equal(env.scroller.scrollTop, 0);
+  assert.ok(moves.every(move => move.behavior === 'instant'));
+});
+
+test('wheel line and page units use the target column line height and visible viewport', () => {
+  const env = readingSetup();
+  env.window.getComputedStyle = () => ({ lineHeight: '20px' });
+  env.wheel(3, 1);
+  assert.equal(env.scroller.scrollTop, 160);
+  env.scroller.getBoundingClientRect = () => ({ top: 50, bottom: 650 });
+  env.wheel(1, 2);
+  assert.equal(env.scroller.scrollTop, 710, 'one page is the 550px visible area');
+  env.window.getComputedStyle = () => ({ lineHeight: 'normal' });
+  env.wheel(-2, 1);
+  assert.equal(env.scroller.scrollTop, 678);
+  for (const deltaY of [0, NaN, Infinity, '20']) assert.equal(env.wheel(deltaY).status, 'skipped');
+  assert.equal(env.wheel(20, 3).status, 'skipped');
+  assert.equal(env.scroller.scrollTop, 678);
 });
 
 test('returning to the top after reading jumps directly without clicking X controls', () => {
@@ -149,10 +186,10 @@ test('reading skips unavailable, modal, composing and non-native pages without m
     env => { env.window.location.pathname = '/someone/status/123'; },
     env => { env.document.querySelector('[data-testid="primaryColumn"]').innerHTML = ''; },
   ];
-  for (const mode of ['post', 'top']) for (const change of variants) {
+  for (const mode of ['post', 'top', 'wheel']) for (const change of variants) {
     const env = readingSetup();
     change(env);
-    assert.equal(env.navigate(1, mode).status, 'skipped');
+    assert.equal((mode === 'wheel' ? env.wheel(120) : env.navigate(1, mode)).status, 'skipped');
     assert.equal(env.scroller.scrollTop, 100);
   }
 });

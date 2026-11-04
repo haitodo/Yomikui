@@ -9,7 +9,8 @@
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
   const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'customUrl']);
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
-  const isReadingAction = ({ direction, mode }) => mode === 'top' ||
+  const isReadingAction = ({ direction, mode, deltaY, deltaMode = 0 }) => mode === 'top' ||
+    (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && [0, 1, 2].includes(deltaMode)) ||
     ((direction === 1 || direction === -1) && ['post', 'page'].includes(mode));
   const READING_GROUPS = ['recommended', 'following', 'search'];
   function readingKind(getSettings) {
@@ -130,8 +131,8 @@
 
   // One explicit reading action, using only the existing rendered timeline.
   // Keep a screenful of a long post readable before advancing to the next one.
-  function navigate({ getSettings, getScroller, direction, mode, beforeMove }) {
-    if (!isReadingAction({ direction, mode })) {
+  function navigate({ getSettings, getScroller, direction, mode, deltaY, deltaMode = 0, beforeMove }) {
+    if (!isReadingAction({ direction, mode, deltaY, deltaMode })) {
       return { status: 'skipped', reason: 'unavailable' };
     }
     const settings = getSettings();
@@ -156,14 +157,20 @@
       scroller === document.documentElement || scroller === document.body;
     const rect = rootScroller ? null : scroller.getBoundingClientRect();
     const height = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
-    const posts = articles().filter(article => article.getBoundingClientRect().height > 0);
-    if (!posts.length || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
+    let posts = articles();
+    if (mode === 'post') posts = posts.filter(article => article.getBoundingClientRect().height > 0);
+    const rendered = mode === 'post' ? posts.length > 0 : posts.some(article => article.getBoundingClientRect().height > 0);
+    if (!rendered || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
     const top = scroller?.scrollTop ?? window.scrollY ?? 0;
     const viewportTop = rootScroller ? 0 : Math.max(0, rect.top);
     const stride = height * .8;
     const extent = scroller?.scrollHeight ?? document.documentElement.scrollHeight;
     const limit = Math.max(0, extent - (rootScroller ? window.innerHeight : scroller.clientHeight));
     let next = mode === 'top' ? 0 : top + direction * stride;
+    if (mode === 'wheel') {
+      const lineHeight = deltaMode === 1 ? parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16 : 1;
+      next = top + deltaY * (deltaMode === 2 ? height : lineHeight);
+    }
     if (mode === 'post') {
       const anchors = posts.map(post => top + post.getBoundingClientRect().top - viewportTop).sort((a, b) => a - b);
       if (direction > 0) {
@@ -177,11 +184,11 @@
     next = Math.max(0, Math.min(limit, next));
     if (!Number.isFinite(next)) return { status: 'skipped', reason: 'unavailable' };
     beforeMove?.();
-    const atEdge = Math.abs(next - top) < 1;
-    // An instant top request must also cancel a smooth step that has not painted yet.
-    if (atEdge && mode !== 'top') return { status: 'edge' };
+    const atEdge = mode === 'wheel' ? next === top : Math.abs(next - top) < 1;
+    // Direct input also cancels a smooth step that has not painted yet.
+    if (atEdge && mode !== 'top' && mode !== 'wheel') return { status: 'edge' };
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const options = { top: next, behavior: mode === 'top' || reduced ? 'instant' : 'smooth' };
+    const options = { top: next, behavior: mode === 'top' || mode === 'wheel' || reduced ? 'instant' : 'smooth' };
     if (scroller?.scrollTo) scroller.scrollTo(options);
     else if (scroller && !rootScroller) scroller.scrollTop = next;
     else window.scrollTo(options);
