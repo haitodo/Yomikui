@@ -10,6 +10,8 @@
   const CANCEL = PREFIX + 'cancel';
   const NAVIGATE = PREFIX + 'navigate';
   const NAVIGATED = PREFIX + 'navigated';
+  const DESCRIBE = PREFIX + 'describe';
+  const CONTEXT = PREFIX + 'context';
   const COOLDOWN = 5000;
   const FRAME_TIMEOUT = 12000;
   const REQUEST_TIMEOUT = 11000;
@@ -205,6 +207,7 @@
     const navigated = new Map();
     let active = null;
     let visible = true;
+    let context = null;
     const send = (type, requestId, value = {}) => {
       const origin = options.getOrigin();
       if (trustedOrigin(origin)) window.parent.postMessage({
@@ -214,15 +217,26 @@
     const onMessage = event => {
       const data = event.data;
       if (event.source !== window.parent || event.origin !== options.getOrigin() || !trustedOrigin(event.origin) || !data) return;
-      if (data.type === 'yomikui-column-visibility') { visible = data.visible === true; return; }
-      if (data.columnId !== options.getColumnId() || typeof data.requestId !== 'string' ||
+      if (data.type === 'yomikui-column-visibility') { visible = data.visible === true; context?.setVisible(visible); return; }
+      if (data.columnId !== options.getColumnId()) return;
+      if (data.type === DESCRIBE) {
+        if (context) context.refresh(true);
+        else context = new globalThis.YomikuiHomeScroll.ReadingContext({
+          getSettings: options.getSettings, visible, onChange: kind => send(CONTEXT, null, { kind }),
+        });
+        return;
+      }
+      if (data.type === 'yomikui-settings-update') { context?.schedule(); return; }
+      if (typeof data.requestId !== 'string' ||
           data.requestId.length < 1 || data.requestId.length > 100) return;
       if (data.type === NAVIGATE) {
-        if (!globalThis.YomikuiHomeScroll.isReadingAction(data)) return;
+        if (!globalThis.YomikuiHomeScroll.isReadingAction(data) ||
+            (data.group !== undefined && !globalThis.YomikuiHomeScroll.READING_GROUPS.includes(data.group))) return;
         if (navigated.has(data.requestId)) { send(NAVIGATED, data.requestId, navigated.get(data.requestId)); return; }
         let result;
         try {
           result = active ? { status: 'skipped', reason: 'busy' } : !visible ? { status: 'skipped', reason: 'hidden' } :
+            data.group !== undefined && globalThis.YomikuiHomeScroll.readingKind(options.getSettings) !== data.group ? { status: 'skipped', reason: 'target-changed' } :
             globalThis.YomikuiHomeScroll.navigate({ ...options, direction: data.direction, mode: data.mode, beforeMove: () => refresher.positions.cancel() });
         } catch { result = { status: 'failed', reason: 'error' }; }
         navigated.set(data.requestId, result);
@@ -260,6 +274,7 @@
     document.addEventListener('visibilitychange', onVisibility);
     return { dispose() {
       cancel();
+      context?.dispose();
       disposePositions();
       window.removeEventListener('message', onMessage);
       window.removeEventListener('pagehide', cancel);
@@ -455,8 +470,11 @@
   function FloatingControl({ React, jsx, store, columns, frames, origins, onMountChange, hidden }) {
     const [view, setView] = React.useState({ phase: 'idle', results: [], total: 0, done: 0 });
     const [reading, setReading] = React.useState({ busy: false, results: [], message: '' });
+    const [kinds, setKinds] = React.useState({});
+    const [workspaceId, setWorkspaceId] = React.useState(() => store.getState().activeWorkspaceId);
     const controller = React.useRef(null);
     const reader = React.useRef(null);
+    const onVisibleChange = React.useCallback(ids => reader.current?.syncVisible(ids), []);
     React.useEffect(() => {
       const getFrame = id => {
         const frame = frames.current.get(id);
@@ -467,10 +485,12 @@
         getFrame,
         setMounted: onMountChange, onChange: setView,
       });
-      const navigation = new globalThis.YomikuiFloatingControls.ReadingController({ getState: store.getState, getFrame, onChange: setReading });
+      const navigation = new globalThis.YomikuiFloatingControls.ReadingController({ getState: store.getState, getFrame, onChange: setReading, onContext: setKinds });
       controller.current = batch;
       reader.current = navigation;
-      const unsubscribe = store.subscribe(() => { batch.syncState(); navigation.syncState(); });
+      const sync = () => { batch.syncState(); navigation.syncState(); setWorkspaceId(store.getState().activeWorkspaceId); };
+      const unsubscribe = store.subscribe(sync);
+      sync();
       return () => { unsubscribe(); batch.dispose(); navigation.dispose(); controller.current = null; reader.current = null; };
     }, [store, frames, origins, onMountChange]);
     React.useEffect(() => { if (hidden) { controller.current?.cancel(); reader.current?.cancel(); } }, [hidden]);
@@ -478,9 +498,9 @@
       result.status === 'updated' ? '投稿一覧の更新を確認' : result.status === 'requested' ? '更新操作済み・表示変化未確認' : REASONS[result.reason] || '応答未確認'
     }`).join('\n');
     return jsx.jsx(globalThis.YomikuiFloatingControls.Panel, {
-      React, jsx, columns, view, reading, hidden, canRefresh: columns.some(isHomeColumn), refreshText: summary(view), refreshDetails: details,
-      onRefresh: () => { if (!reader.current?.active) controller.current?.run(); },
-      onNavigate: action => { if (!controller.current?.active) reader.current?.move(action); },
+      React, jsx, columns, view, reading, hidden, kinds, workspaceId, onVisibleChange, canRefresh: columns.some(isHomeColumn), refreshText: summary(view), refreshDetails: details,
+      onRefresh: () => { if (store.getState().activeWorkspaceId === workspaceId && !reader.current?.active) controller.current?.run(); },
+      onNavigate: action => { if (store.getState().activeWorkspaceId === workspaceId && !controller.current?.active) reader.current?.move(action); },
     });
   }
 

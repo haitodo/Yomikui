@@ -44,9 +44,16 @@ function readingSetup({ quiet = false } = {}) {
   const state = { columns, activeWorkspaceId: 'workspace', columnComposing: {} };
   const visible = new Set(['one', 'two', 'live', 'history', 'following']);
   const frames = new Map(), messages = [], views = [], activity = [];
+  const kinds = new Map(columns.map(column => [column.id, column.type === 'following' ? 'following' : 'recommended']));
+  const contextRequests = [], contextViews = [];
   state.markColumnActivity = id => activity.push(id);
   for (const column of columns) {
     const frame = { postMessage(data, origin) {
+      if (data.type === PREFIX + 'describe') {
+        contextRequests.push(column.id);
+        env.window.emit('message', { source: frame, origin, data: { type: PREFIX + 'context', columnId: column.id, kind: kinds.get(column.id) } });
+        return;
+      }
       messages.push({ ...clone(data), origin });
       if (!quiet) env.clock.setTimeout(() => env.window.emit('message', {
         source: frame, origin, data: { ...data, type: PREFIX + 'navigated', status: 'moved' },
@@ -59,9 +66,65 @@ function readingSetup({ quiet = false } = {}) {
     getVisibleIds: () => visible,
     getFrame: id => ({ window: frames.get(id), origin: 'https://x.com' }),
     onChange: view => views.push(clone(view)),
+    onContext: value => contextViews.push(clone(value)),
   });
-  return { ...env, state, visible, frames, messages, views, activity, controller };
+  const report = (id, kind) => {
+    kinds.set(id, kind);
+    env.window.emit('message', { source: frames.get(id), origin: 'https://x.com', data: { type: PREFIX + 'context', columnId: id, kind } });
+  };
+  return { ...env, state, visible, frames, messages, views, activity, controller, kinds, contextRequests, contextViews, report };
 }
+
+test('reading groups address the current content instead of the saved column type', async () => {
+  const env = readingSetup();
+  env.report('two', 'search');
+  env.report('following', 'recommended');
+  const down = env.controller.move({ target: 'group:recommended', direction: 1, mode: 'post' });
+  assert.deepEqual(env.messages.map(message => message.columnId), ['one', 'following']);
+  assert.ok(env.messages.every(message => message.group === 'recommended'));
+  await env.clock.advance(300); await down;
+  env.report('one', 'following');
+  const up = env.controller.move({ target: 'group:following', direction: -1, mode: 'page' });
+  assert.deepEqual(env.messages.slice(2).map(message => message.columnId), ['one']);
+  await env.clock.advance(300); await up;
+  const top = env.controller.move({ target: 'group:search', mode: 'top' });
+  assert.deepEqual(env.messages.slice(3).map(message => message.columnId), ['two']);
+  assert.equal(env.messages[3].mode, 'top');
+  await env.clock.advance(300); await top;
+  env.visible.delete('two');
+  await env.controller.move({ target: 'group:search', mode: 'top' });
+  assert.equal(env.messages.length, 4, 'an empty group never falls back to all columns');
+  env.controller.dispose();
+});
+
+test('context reports validate the actual frame and unknown or replaced frames cannot join a group', async () => {
+  const env = readingSetup();
+  const data = { type: PREFIX + 'context', columnId: 'one', kind: 'search' };
+  for (const event of [
+    { source: {}, origin: 'https://x.com', data },
+    { source: env.frames.get('one'), origin: 'https://evil.example', data },
+    { source: env.frames.get('one'), origin: 'https://x.com', data: { ...data, kind: 'invented' } },
+    { source: env.frames.get('two'), origin: 'https://x.com', data },
+  ]) env.window.emit('message', event);
+  assert.equal(env.controller.kinds().one, 'recommended');
+  const requests = env.contextRequests.length;
+  env.controller.syncState();
+  assert.equal(env.contextRequests.length, requests, 'unchanged store updates do not keep querying frames');
+  const previous = env.frames.get('one');
+  env.frames.set('one', { postMessage() {} });
+  env.controller.syncState();
+  env.window.emit('message', { source: previous, origin: 'https://x.com', data });
+  assert.equal(env.controller.kinds().one, null);
+  await env.controller.move({ target: 'group:search', mode: 'top' });
+  assert.equal(env.messages.length, 0);
+  const replacement = env.frames.get('one');
+  replacement.postMessage = data => {
+    if (data.type === PREFIX + 'describe') env.window.emit('message', { source: replacement, origin: 'https://x.com', data: { type: PREFIX + 'context', columnId: 'one', kind: 'search' } });
+  };
+  env.window.emit('message', { source: replacement, origin: 'https://x.com', data: { type: 'yomikui-frame-ready', columnId: 'one' } });
+  assert.equal(env.controller.kinds().one, 'search', 'a later frame-ready signal recovers a probe sent before startup');
+  env.controller.dispose();
+});
 
 test('one reading action addresses only visible native columns and includes Following', async () => {
   const env = readingSetup();
@@ -280,8 +343,9 @@ test('panel preferences persist locally in order and normalize invalid values', 
 function panelTree(env, {
   collapsed = false, phase = 'idle', reading = false, target = 'all', mode = 'post', lastAction = 'reading',
   readingMessage = '', refreshText = '', transparency = 0, onNavigate = () => {}, onRefresh = () => {},
+  kinds = { one: 'recommended' }, workspaceId = 'workspace', selectedWorkspaceId = workspaceId, ready = true,
 } = {}) {
-  const states = [env.api.preferences({ collapsed, mode, transparency }), target, new Set(['one']), lastAction];
+  const states = [env.api.preferences({ collapsed, mode, transparency }), { workspaceId: selectedWorkspaceId, target, ready }, new Set(['one']), lastAction];
   const react = {
     useState: () => [states.shift(), () => {}], useRef: current => ({ current }), useCallback: fn => fn,
     useEffect() {}, useLayoutEffect() {},
@@ -291,7 +355,7 @@ function panelTree(env, {
     React: react, jsx: { jsx: element, jsxs: element },
     columns: [{ id: 'one', type: 'home', title: 'Home' }],
     view: { phase, done: 0, total: 1 }, reading: { busy: reading, results: [], message: readingMessage },
-    canRefresh: true, refreshText, onRefresh, onNavigate,
+    canRefresh: true, refreshText, onRefresh, onNavigate, kinds, workspaceId,
   });
   const nodes = [];
   const visit = node => {
@@ -302,6 +366,36 @@ function panelTree(env, {
   visit(tree);
   return nodes;
 }
+
+test('targets are saved independently per workspace without losing overlapping writes', async () => {
+  const env = setup();
+  assert.equal(await env.api.loadTarget('first'), 'all');
+  const one = env.api.saveTarget('first', 'group:recommended');
+  const two = env.api.saveTarget('second', 'group:search');
+  const latest = env.api.saveTarget('first', 'one');
+  const duringSave = env.api.loadTarget('first');
+  await Promise.all([one, two, latest]);
+  assert.equal(await duringSave, 'one', 'a fast workspace return waits for pending selection writes');
+  assert.equal(await env.api.loadTarget('first'), 'one');
+  assert.equal(await env.api.loadTarget('second'), 'group:search');
+  assert.equal(await env.api.loadTarget('third'), 'all');
+  const nodes = panelTree(env, { workspaceId: 'third' });
+  nodes.find(node => node.type === 'select' && node.props['aria-label'] === '閲覧する列').props.onChange({ target: { value: 'group:following' } });
+  await settle();
+  assert.equal(await env.api.loadTarget('third'), 'group:following');
+});
+
+test('group counts stay visible when folded; empty groups and a restoring workspace disable movement', () => {
+  const env = setup();
+  const grouped = panelTree(env, { collapsed: true, target: 'group:recommended' });
+  assert.match(grouped.find(node => node.props?.className === 'yf-summary').props.children, /おすすめ・1列/);
+  const empty = panelTree(env, { target: 'group:search' });
+  assert.ok(empty.filter(node => ['yf-up', 'yf-down', 'yf-top'].includes(node.props?.className)).every(node => node.props.disabled));
+  assert.equal(empty.find(node => node.type === 'select' && node.props['aria-label'] === '閲覧する列').props.value, 'group:search');
+  const switching = panelTree(env, { selectedWorkspaceId: 'previous', target: 'all' });
+  assert.ok(switching.filter(node => ['yf-up', 'yf-down', 'yf-top'].includes(node.props?.className)).every(node => node.props.disabled));
+  assert.equal(switching.find(node => node.type === 'select' && node.props['aria-label'] === '閲覧する列').props.disabled, true);
+});
 
 test('changing transparency saves it with the current mode and preserves it when folding', async () => {
   const env = setup();

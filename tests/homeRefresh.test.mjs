@@ -36,11 +36,13 @@ function setup(html = home()) {
   const observers = [];
   class MutationObserver {
     constructor(callback) {
+      this.callback = callback;
       this.inner = new dom.window.MutationObserver(callback);
       observers.push(this);
     }
     observe(...args) { this.connected = true; this.inner.observe(...args); }
     disconnect() { this.connected = false; this.inner.disconnect(); }
+    emit(records) { this.callback(records); }
   }
   const context = vm.createContext({
     ...clock.globals(), window, document, MutationObserver, AbortController, DOMException,
@@ -320,6 +322,107 @@ test('offscreen native frames reject reading commands', () => {
   assert.equal(env.messages.at(-1).data.reason, 'hidden');
   assert.equal(env.scroller.scrollTop, 800);
   env.installed.dispose();
+});
+
+test('native frames recheck the selected group at execution time', () => {
+  const env = readingFrameSetup();
+  env.document.getElementById('recommended').setAttribute('aria-selected', 'false');
+  env.document.getElementById('following').setAttribute('aria-selected', 'true');
+  env.send({ type: P + 'navigate', mode: 'top', group: 'recommended', requestId: 'stale' });
+  assert.equal(env.scroller.scrollTop, 800);
+  assert.equal(env.messages.at(-1).data.reason, 'target-changed');
+  env.send({ type: P + 'navigate', mode: 'top', group: 'following', requestId: 'following' });
+  assert.equal(env.scroller.scrollTop, 0);
+  env.scroller.scrollTop = 800;
+  env.window.location.pathname = '/search';
+  env.send({ type: P + 'navigate', mode: 'top', group: 'following', requestId: 'old-page' });
+  assert.equal(env.scroller.scrollTop, 800);
+  env.send({ type: P + 'navigate', mode: 'top', group: 'search', requestId: 'search' });
+  assert.equal(env.scroller.scrollTop, 0, 'the displayed search page wins over the saved home column type');
+  env.scroller.scrollTop = 800;
+  const messages = env.messages.length;
+  env.send({ type: P + 'navigate', mode: 'top', group: 'invented', requestId: 'invalid' });
+  assert.equal(env.scroller.scrollTop, 800);
+  assert.equal(env.messages.length, messages);
+  env.installed.dispose();
+});
+
+test('reading context tracks tabs and routes, ignores ordinary posts, and pauses in hidden columns', async () => {
+  const env = readingFrameSetup();
+  env.window.navigation = new Events();
+  const describe = { type: P + 'describe' };
+  env.send(describe, { source: {} });
+  env.send(describe, { origin: 'https://evil.example' });
+  env.send({ ...describe, columnId: 'another' });
+  assert.equal(env.messages.length, 0);
+  env.send(describe);
+  assert.equal(env.messages.at(-1).data.kind, 'recommended');
+  env.document.getElementById('recommended').setAttribute('aria-selected', 'false');
+  env.document.getElementById('following').setAttribute('aria-selected', 'true');
+  await settle(); env.clock.frame(16);
+  assert.equal(env.messages.at(-1).data.kind, 'following');
+  const messages = env.messages.length;
+  env.document.getElementById('tweets').innerHTML += tweet('202');
+  await settle();
+  assert.equal(env.clock.frames.size, 0, 'ordinary post insertions do not rescan the page');
+  assert.equal(env.messages.length, messages);
+  env.window.location.pathname = '/search';
+  env.window.navigation.emit('currententrychange');
+  env.clock.frame(16);
+  assert.equal(env.messages.at(-1).data.kind, 'search');
+  env.send({ type: 'yomikui-column-visibility', visible: false });
+  assert.equal(env.messages.at(-1).data.kind, null);
+  assert.ok(env.observers.every(observer => !observer.connected));
+  env.window.location.pathname = '/home';
+  env.document.getElementById('following').setAttribute('aria-selected', 'false');
+  env.document.getElementById('recommended').setAttribute('aria-selected', 'true');
+  await settle();
+  assert.equal(env.clock.frames.size, 0);
+  env.send({ type: 'yomikui-column-visibility', visible: true });
+  assert.equal(env.messages.at(-1).data.kind, 'recommended');
+  env.window.location.pathname = '/someone/status/123';
+  env.window.navigation.emit('currententrychange');
+  env.clock.frame(16);
+  assert.equal(env.messages.at(-1).data.kind, null);
+  env.installed.dispose();
+  assert.equal(env.clock.frames.size, 0);
+  assert.ok(env.observers.every(observer => !observer.connected));
+  assert.ok([...env.window.navigation.listeners.values()].every(listeners => listeners.length === 0));
+});
+
+test('reading context discovers late tabs and a replaced page, and releases work while the tab is hidden', async () => {
+  const env = setup(home({ loading: true }));
+  const installed = env.api.installFrame(env.options);
+  env.window.emit('message', { source: env.window.parent, origin: 'https://x.com', data: { type: P + 'describe', columnId: 'column1' } });
+  assert.equal(env.messages.at(-1).data.kind, null);
+  env.document.getElementById('tabs').innerHTML = tabs();
+  await settle(); env.clock.frame(16);
+  assert.equal(env.messages.at(-1).data.kind, 'recommended');
+  const selected = env.document.getElementById('recommended');
+  const observer = env.observers.at(-1);
+  selected.innerHTML = '<span>Loading</span>';
+  // Linkedom reports the observed root as a child-list target and does not
+  // emit native characterData records. Supply the browser's record shape.
+  observer.emit([{ type: 'childList', target: selected, addedNodes: [...selected.childNodes], removedNodes: [] }]);
+  await settle(); env.clock.frame(16);
+  assert.equal(env.messages.at(-1).data.kind, 'other');
+  selected.firstChild.firstChild.data = 'おすすめ';
+  observer.emit([{ type: 'characterData', target: selected.firstChild.firstChild, addedNodes: [], removedNodes: [] }]);
+  await settle(); env.clock.frame(16);
+  assert.equal(env.messages.at(-1).data.kind, 'recommended', 'late text hydration updates the group');
+  env.document.body.innerHTML = home({ selected: 'following' });
+  await settle(); env.clock.frame(16);
+  assert.equal(env.messages.at(-1).data.kind, 'following');
+  env.document.hidden = true;
+  env.document.dispatchEvent(new env.document.defaultView.Event('visibilitychange'));
+  assert.equal(env.messages.at(-1).data.kind, null);
+  assert.ok(env.observers.every(observer => !observer.connected));
+  env.document.hidden = false;
+  env.document.dispatchEvent(new env.document.defaultView.Event('visibilitychange'));
+  assert.equal(env.messages.at(-1).data.kind, 'following');
+  installed.dispose();
+  assert.equal(env.clock.frames.size, 0);
+  assert.equal(env.clock.timers.size, 0);
 });
 
 test('reading cannot interrupt a native refresh but cancels its remaining scroll correction afterwards', async () => {

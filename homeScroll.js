@@ -11,6 +11,81 @@
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
   const isReadingAction = ({ direction, mode }) => mode === 'top' ||
     ((direction === 1 || direction === -1) && ['post', 'page'].includes(mode));
+  const READING_GROUPS = ['recommended', 'following', 'search'];
+  function readingKind(getSettings) {
+    const settings = getSettings();
+    const path = window.location.pathname.replace(/\/$/, '');
+    if (!isReadableColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) || settings?.isTimelineColumn ||
+        /\/status\/\d+|^\/(?:compose|messages)(?:\/|$)|^\/i\/(?:chat|grok)(?:\/|$)/.test(path)) return null;
+    if (path === '/search') return 'search';
+    if (path !== '/home') return 'other';
+    const tab = primary()?.querySelector('[role="tab"][aria-selected="true"]');
+    if (!tab) return null;
+    if (recommended(tab)) return 'recommended';
+    const label = (tab.getAttribute('aria-label') || tab.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+    return ['following', 'フォロー中', 'フォロー'].includes(label) ? 'following' : 'other';
+  }
+
+  class ReadingContext {
+    constructor({ getSettings, onChange, visible = true }) {
+      Object.assign(this, { getSettings, onChange, visible });
+      this.listeners = [];
+      this.kind = undefined;
+      this.path = null;
+      this.observer = new MutationObserver(records => {
+        if (window.location.pathname !== this.path || records.some(record => {
+          const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+          if (target?.closest('[role="tab"], [role="tablist"]')) return true;
+          if (record.type !== 'childList' || target?.closest('article')) return false;
+          return [...record.addedNodes, ...record.removedNodes].some(node =>
+            node.nodeType === 1 && !node.matches('article, [data-testid="cellInnerDiv"]') &&
+            (node.matches('[role="tab"], [role="tablist"], [data-testid="primaryColumn"]') ||
+              node.querySelector('[role="tab"], [role="tablist"], [data-testid="primaryColumn"]')));
+        })) this.schedule();
+      });
+      const listen = (target, type, callback) => {
+        target?.addEventListener(type, callback);
+        this.listeners.push(() => target?.removeEventListener(type, callback));
+      };
+      listen(document, 'visibilitychange', () => this.sync());
+      listen(window, 'pagehide', () => { this.pageHidden = true; this.sync(); });
+      listen(window, 'pageshow', () => { this.pageHidden = false; this.sync(); });
+      for (const type of ['popstate', 'hashchange']) listen(window, type, () => this.schedule());
+      for (const type of ['currententrychange', 'navigatesuccess']) listen(window.navigation, type, () => this.schedule());
+      this.sync();
+    }
+
+    refresh(force = false) {
+      if (this.disposed) return;
+      this.path = window.location.pathname;
+      const kind = this.visible && !document.hidden && !this.pageHidden ? readingKind(this.getSettings) : null;
+      if (force || kind !== this.kind) { this.kind = kind; this.onChange(kind); }
+    }
+
+    schedule() {
+      if (this.disposed || !this.visible || document.hidden || this.pageHidden || this.frame != null) return;
+      this.frame = requestAnimationFrame(() => { this.frame = null; this.refresh(); });
+    }
+
+    sync() {
+      this.observer.disconnect();
+      if (this.frame != null) cancelAnimationFrame(this.frame);
+      this.frame = null;
+      if (this.visible && !document.hidden && !this.pageHidden) this.observer.observe(document.documentElement, {
+        childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-selected', 'aria-label'],
+      });
+      this.refresh(true);
+    }
+
+    setVisible(visible) { if (this.visible !== visible) { this.visible = visible; this.sync(); } }
+
+    dispose() {
+      this.disposed = true;
+      this.observer.disconnect();
+      if (this.frame != null) cancelAnimationFrame(this.frame);
+      this.listeners.forEach(remove => remove());
+    }
+  }
   const articles = () => [...primary()?.querySelectorAll('article[data-testid="tweet"]') ?? []];
   const tweetId = article => (article.querySelector('time')?.closest('a[href*="/status/"]') ??
     article.querySelector('a[href*="/status/"]'))?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1];
@@ -257,5 +332,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, navigate });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, navigate });
 })();

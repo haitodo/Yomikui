@@ -3,6 +3,8 @@
   if (globalThis.YomikuiFloatingControls) return;
   const PREFIX = 'yomikui-home-refresh-';
   const STORAGE_KEY = 'yomikui_floating_controls_v1';
+  const TARGETS_KEY = 'yomikui_reading_targets_v1';
+  const GROUPS = Object.freeze({ recommended: 'おすすめ', following: 'フォロー中', search: '検索結果' });
   const trusted = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
   const clamp = value => Math.max(0, Math.min(1, value));
   const readable = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
@@ -10,7 +12,34 @@
     hidden: '画面外・非表示', draft: '投稿を入力中', dialog: 'ダイアログを表示中',
     busy: '更新を処理中', 'not-timeline': '投稿一覧以外を表示中', unavailable: '投稿一覧を確認できませんでした',
     timeout: '列の応答を確認できませんでした', cancelled: '操作を中止しました', error: '移動操作に失敗しました',
+    'target-changed': '表示内容が対象から変わりました',
   };
+  const targetGroup = target => typeof target === 'string' && target.startsWith('group:') ? target.slice(6) : null;
+  const normalizeTarget = value => typeof value === 'string' && value.length > 0 && value.length <= 100 &&
+    (!value.startsWith('group:') || Object.hasOwn(GROUPS, targetGroup(value))) ? value : 'all';
+  const workspaceKey = id => typeof id === 'string' && id.length > 0 && id.length <= 100 ? id : 'default';
+  const matchesTarget = (column, target, kinds) => target === 'all' ||
+    (targetGroup(target) ? Object.hasOwn(GROUPS, targetGroup(target)) && kinds[column.id] === targetGroup(target) : column.id === target);
+
+  async function loadTarget(workspaceId) {
+    try {
+      await savingTargets;
+      return normalizeTarget((await chrome.storage.local.get(TARGETS_KEY))[TARGETS_KEY]?.[workspaceKey(workspaceId)]);
+    }
+    catch { return 'all'; }
+  }
+
+  let savingTargets = Promise.resolve();
+  function saveTarget(workspaceId, target) {
+    savingTargets = savingTargets.then(async () => {
+      try {
+        const value = (await chrome.storage.local.get(TARGETS_KEY))[TARGETS_KEY];
+        const previous = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+        await chrome.storage.local.set({ [TARGETS_KEY]: { ...previous, [workspaceKey(workspaceId)]: normalizeTarget(target) } });
+      } catch {}
+    });
+    return savingTargets;
+  }
 
   function preferences(value) {
     return {
@@ -54,9 +83,11 @@
   }
 
   class ReadingController {
-    constructor({ getState, getFrame, getVisibleIds = visibleColumnIds, onChange }) {
-      Object.assign(this, { getState, getFrame, getVisibleIds, onChange });
+    constructor({ getState, getFrame, getVisibleIds = visibleColumnIds, onChange, onContext = () => {} }) {
+      Object.assign(this, { getState, getFrame, getVisibleIds, onChange, onContext });
       this.pending = new Map();
+      this.contexts = new Map();
+      this.visible = new Set();
       this.active = null;
       this.receive = this.receive.bind(this);
       this.onVisibility = () => { if (document.hidden) this.cancel(); };
@@ -64,10 +95,22 @@
       window.addEventListener('message', this.receive);
       window.addEventListener('pagehide', this.onPageHide);
       document.addEventListener('visibilitychange', this.onVisibility);
+      this.syncState();
     }
 
     receive(event) {
       const data = event.data;
+      if (data?.type === PREFIX + 'context' || ['yomikui-frame-ready', 'yomikui-tab-change', 'yomikui-path-change'].includes(data?.type)) {
+        const column = this.getState().columns.find(column => column.id === data.columnId && readable(column));
+        const frame = column && this.getFrame(column.id);
+        if (!frame?.window || event.source !== frame.window || event.origin !== frame.origin || !trusted(event.origin)) return;
+        if (data.type === PREFIX + 'context') {
+          if (![...Object.keys(GROUPS), 'other', null].includes(data.kind)) return;
+          this.contexts.set(column.id, { ...frame, kind: data.kind });
+          this.publishContexts();
+        } else if (this.getVisibleIds().has(column.id)) this.requestContext(column, true);
+        return;
+      }
       const pending = this.pending.get(data?.requestId);
       if (!pending || data.type !== PREFIX + 'navigated' || data.columnId !== pending.columnId ||
           event.source !== pending.frame || event.origin !== pending.origin || !trusted(event.origin) ||
@@ -75,7 +118,38 @@
       pending.finish({ status: data.status, reason: data.reason });
     }
 
-    request(column, frame, direction, mode) {
+    kinds() {
+      return Object.fromEntries(this.getState().columns.filter(readable).flatMap(column => {
+        const entry = this.contexts.get(column.id), frame = this.getFrame(column.id);
+        return entry && entry.window === frame?.window && entry.origin === frame.origin ? [[column.id, entry.kind]] : [];
+      }));
+    }
+
+    publishContexts() {
+      const kinds = this.kinds(), signature = JSON.stringify(kinds);
+      if (!this.disposed && signature !== this.contextSignature) { this.contextSignature = signature; this.onContext(kinds); }
+    }
+
+    requestContext(column, force = false) {
+      const frame = this.getFrame(column.id);
+      if (!frame?.window || !trusted(frame.origin)) { this.contexts.delete(column.id); return; }
+      const previous = this.contexts.get(column.id);
+      if (previous?.window === frame.window && previous.origin === frame.origin) {
+        if (!force) return;
+      } else this.contexts.set(column.id, { ...frame, kind: null });
+      try { frame.window.postMessage({ type: PREFIX + 'describe', columnId: column.id }, frame.origin); } catch {}
+    }
+
+    syncVisible(ids = this.getVisibleIds()) {
+      if (this.disposed) return;
+      for (const column of this.getState().columns) {
+        if (readable(column) && ids.has(column.id)) this.requestContext(column, !this.visible.has(column.id));
+      }
+      this.visible = new Set(ids);
+      this.publishContexts();
+    }
+
+    request(column, frame, direction, mode, group) {
       return new Promise(resolve => {
         const id = crypto.randomUUID();
         const pending = { columnId: column.id, frame: frame.window, origin: frame.origin };
@@ -86,7 +160,7 @@
         };
         this.pending.set(id, pending);
         pending.timer = setTimeout(() => pending.finish({ status: 'failed', reason: 'timeout' }), 1200);
-        try { frame.window.postMessage({ type: PREFIX + 'navigate', requestId: id, columnId: column.id, direction, mode }, frame.origin); }
+        try { frame.window.postMessage({ type: PREFIX + 'navigate', requestId: id, columnId: column.id, direction, mode, ...(group ? { group } : {}) }, frame.origin); }
         catch { pending.finish({ status: 'failed', reason: 'error' }); }
       });
     }
@@ -95,7 +169,8 @@
       if (this.disposed || this.active || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ direction, mode })) return;
       const state = this.getState();
       const visible = this.getVisibleIds();
-      const columns = state.columns.filter(column => readable(column) && visible.has(column.id) && (target === 'all' || target === column.id));
+      const kinds = this.kinds();
+      const columns = state.columns.filter(column => readable(column) && visible.has(column.id) && matchesTarget(column, target, kinds));
       if (!columns.length) {
         this.onChange({ busy: false, results: [], message: '画面内に閲覧対象の列がありません' });
         return;
@@ -112,7 +187,7 @@
           if (state.columnComposing?.[column.id]) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'draft' };
           if (!frame?.window || !trusted(frame.origin)) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'unavailable' };
           state.markColumnActivity?.(column.id);
-          return this.request(column, frame, direction, mode);
+          return this.request(column, frame, direction, mode, targetGroup(target));
         }));
         // Bound rapid clicks without queuing steps or running a repeat timer.
         const remaining = 300 - (Date.now() - started);
@@ -131,9 +206,20 @@
     }
 
     syncState() {
-      if (!this.active) return;
       const state = this.getState();
-      if (state.activeWorkspaceId !== this.active.workspaceId) { this.cancel(); return; }
+      const changed = state.activeWorkspaceId !== this.workspaceId || state.columns !== this.columns;
+      if (state.activeWorkspaceId !== this.workspaceId) {
+        this.cancel(); this.contexts.clear(); this.visible.clear(); this.workspaceId = state.activeWorkspaceId;
+      }
+      this.columns = state.columns;
+      for (const id of this.contexts.keys()) if (!state.columns.some(column => column.id === id && readable(column))) this.contexts.delete(id);
+      if (changed) this.syncVisible();
+      else {
+        // Activity updates need not measure the rack again. Its scroll/resize
+        // listener supplies visibility changes; only replaced frames need a probe.
+        for (const column of state.columns) if (readable(column) && this.visible.has(column.id)) this.requestContext(column);
+        this.publishContexts();
+      }
       for (const pending of this.pending.values()) {
         if (!state.columns.some(column => column.id === pending.columnId && readable(column))) pending.finish({ status: 'skipped', reason: 'cancelled' });
       }
@@ -344,15 +430,17 @@
     return true;
   }
 
-  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onNavigate }) {
+  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onNavigate, workspaceId = 'default', kinds = {}, onVisibleChange }) {
     const [prefs, setPrefs] = React.useState(preferences);
-    const [target, setTarget] = React.useState('all');
+    const [selection, setSelection] = React.useState(() => ({ workspaceId, target: 'all', ready: false }));
     const [visible, setVisible] = React.useState(() => new Set());
     const [lastAction, setLastAction] = React.useState('reading');
     const prefsRef = React.useRef(prefs), dirty = React.useRef(false);
     const panelRef = React.useRef(null), handleRef = React.useRef(null), positionRef = React.useRef(null);
     const eligible = columns.filter(readable);
     const available = eligible.length > 0 || canRefresh;
+    const targetReady = selection.workspaceId === workspaceId && selection.ready;
+    const target = targetReady ? selection.target : '__loading__';
     const useLayoutEffect = React.useLayoutEffect ?? React.useEffect;
     const updatePrefs = React.useCallback(patch => {
       dirty.current = true;
@@ -377,14 +465,19 @@
     }, [hidden, available, updatePrefs]);
     useLayoutEffect(() => { positionRef.current?.setPosition(prefs); }, [prefs]);
     React.useEffect(() => {
-      if (target !== 'all' && !columns.some(column => column.id === target && readable(column))) setTarget('all');
-    }, [columns, target]);
+      let mounted = true;
+      loadTarget(workspaceId).then(target => {
+        if (mounted) { setSelection({ workspaceId, target, ready: true }); setLastAction('selection'); }
+      });
+      return () => { mounted = false; };
+    }, [workspaceId]);
     React.useEffect(() => {
       if (hidden || !available) return;
       let scheduled = null;
       const update = () => {
         scheduled = null;
         const ids = visibleColumnIds();
+        onVisibleChange?.(ids);
         setVisible(previous => previous.size === ids.size && [...previous].every(id => ids.has(id)) ? previous : ids);
       };
       const schedule = () => { if (scheduled === null) scheduled = requestAnimationFrame(update); };
@@ -400,12 +493,18 @@
         observer?.disconnect();
         if (scheduled !== null) cancelAnimationFrame(scheduled);
       };
-    }, [hidden, available, columns]);
+    }, [hidden, available, columns, onVisibleChange]);
     if (hidden || !available) return null;
     const busy = view.phase === 'running';
     const visibleColumns = eligible.filter(column => visible.has(column.id));
-    const selected = target === 'all' ? '表示中すべて' : columns.find(column => column.id === target)?.title || '選択した列';
-    const selectionVisible = target === 'all' ? visibleColumns.length > 0 : visibleColumns.some(column => column.id === target);
+    const selectedColumns = targetReady ? visibleColumns.filter(column => matchesTarget(column, target, kinds)) : [];
+    const selected = !targetReady ? '読み込み中' : target === 'all' ? '表示中すべて' : GROUPS[targetGroup(target)] || columns.find(column => column.id === target)?.title || '選択した列';
+    const selectionVisible = selectedColumns.length > 0;
+    const selectTarget = target => {
+      setSelection({ workspaceId, target, ready: true });
+      setLastAction('selection');
+      saveTarget(workspaceId, target);
+    };
     const icon = name => jsx.jsx('svg', {
       width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75,
       strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
@@ -419,8 +518,8 @@
       result.status === 'moved' ? '移動操作済み' : result.status === 'edge' ? '端に到達' : REASONS[result.reason] || '応答未確認'
     }`).join('\n');
     const showRefresh = busy || (lastAction === 'refresh' && !reading.busy);
-    const noSelection = !selectionVisible && !busy;
-    const statusText = noSelection ? '画面内に閲覧対象の列がありません' : showRefresh ? refreshText : reading.message;
+    const noSelection = targetReady && !selectionVisible && !busy;
+    const statusText = !targetReady ? '対象を読み込み中' : noSelection ? '画面内に閲覧対象の列がありません' : showRefresh ? refreshText : lastAction === 'reading' || reading.busy ? reading.message : '';
     const statusDetails = noSelection ? statusText : showRefresh ? refreshDetails || refreshText : details || reading.message;
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
@@ -430,15 +529,22 @@
         jsx.jsxs('div', { className: 'yf-header', children: [
           jsx.jsxs('button', { ref: handleRef, type: 'button', className: 'yf-handle', title: 'ドラッグして移動（矢印キーでも移動）', 'aria-label': '閲覧・更新パネルを移動。矢印キーでも移動できます', children: [
             icon('grip'), jsx.jsx('span', { className: 'yf-title', children: '閲覧・更新' }),
-            prefs.collapsed && jsx.jsx('span', { className: 'yf-summary', title: `${selected} · ${prefs.mode === 'page' ? '画面ごと' : '投稿ごと'}`, children: `${target === 'all' ? `表示中${visibleColumns.length}列` : selected} · ${prefs.mode === 'page' ? '画面' : '投稿'}` }),
+            prefs.collapsed && jsx.jsx('span', { className: 'yf-summary', title: `${selected}・${selectedColumns.length}列 · ${prefs.mode === 'page' ? '画面ごと' : '投稿ごと'}`, children: `${target === 'all' ? 'すべて' : selected}・${selectedColumns.length}列 · ${prefs.mode === 'page' ? '画面' : '投稿'}` }),
           ] }),
           jsx.jsx('button', { type: 'button', className: 'yf-collapse', 'aria-label': prefs.collapsed ? '設定を展開する' : '設定を折りたたむ', 'aria-expanded': !prefs.collapsed, 'aria-controls': 'yomikui-reading-settings', onClick: () => updatePrefs({ collapsed: !prefs.collapsed }), children: icon(prefs.collapsed ? 'down' : 'up') }),
         ] }),
         jsx.jsxs('div', { className: 'yf-body', children: [
           jsx.jsxs('div', { id: 'yomikui-reading-settings', className: 'yf-fields', hidden: prefs.collapsed, style: prefs.collapsed ? { display: 'none' } : undefined, children: [
-            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '閲覧する列' }), jsx.jsxs('select', { 'aria-label': '閲覧する列', title: '閲覧する列', value: target, disabled: busy || reading.busy, onChange: event => setTarget(event.target.value), children: [
-              jsx.jsx('option', { value: 'all', children: '表示中すべて' }),
-              ...eligible.map((column, index) => jsx.jsx('option', { value: column.id, disabled: !visible.has(column.id), children: `${index + 1}. ${column.title || '列'}${visible.has(column.id) ? '' : '（画面外）'}` }, column.id)),
+            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '閲覧する列' }), jsx.jsxs('select', { 'aria-label': '閲覧する列', title: `${selected}・${selectedColumns.length}列`, value: target, disabled: !targetReady || busy || reading.busy, onChange: event => selectTarget(event.target.value), children: [
+              !targetReady && jsx.jsx('option', { value: '__loading__', children: '読み込み中' }),
+              jsx.jsxs('optgroup', { label: '表示内容', children: [
+                jsx.jsx('option', { value: 'all', children: '表示中すべて' }),
+                ...Object.entries(GROUPS).map(([group, title]) => jsx.jsx('option', { value: `group:${group}`, children: `${title}（${visibleColumns.filter(column => kinds[column.id] === group).length}列）` }, group)),
+              ] }),
+              jsx.jsxs('optgroup', { label: '個別の列', children: [
+                ...eligible.map((column, index) => jsx.jsx('option', { value: column.id, disabled: !visible.has(column.id), children: `${index + 1}. ${column.title || '列'}${visible.has(column.id) ? '' : '（画面外）'}` }, column.id)),
+                targetReady && target !== 'all' && !targetGroup(target) && !eligible.some(column => column.id === target) && jsx.jsx('option', { value: target, disabled: true, children: '選択した列（対象なし）' }),
+              ] }),
             ] }), icon('down')] }),
             jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '移動方式' }), jsx.jsxs('select', { 'aria-label': '移動方式', title: '移動方式', value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.target.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] }), icon('down')] }),
             jsx.jsxs('label', { className: 'yf-transparency', htmlFor: 'yomikui-panel-transparency', title: '背景の透明度（0%で不透明）', children: [
@@ -468,5 +574,5 @@
     });
   }
 
-  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, visibleColumnIds, preferences, loadPreferences, savePreferences, readingSummary, installStyles });
+  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, visibleColumnIds, preferences, loadPreferences, savePreferences, loadTarget, saveTarget, matchesTarget, readingSummary, installStyles });
 })();
