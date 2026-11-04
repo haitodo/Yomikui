@@ -699,7 +699,23 @@
       });
       controller.current = batch;
       reader.current = navigation;
-      const sync = () => { navigation.syncState(); batch.syncState(); setWorkspaceId(store.getState().activeWorkspaceId); };
+      let prevSyncState = null;
+      const sync = () => {
+        const state = store.getState();
+        const activeWorkspaceId = state.activeWorkspaceId;
+        const columns = state.columns;
+        const columnComposing = state.columnComposing;
+        if (prevSyncState &&
+            prevSyncState.activeWorkspaceId === activeWorkspaceId &&
+            prevSyncState.columns === columns &&
+            prevSyncState.columnComposing === columnComposing) {
+          return;
+        }
+        prevSyncState = { activeWorkspaceId, columns, columnComposing };
+        navigation.syncState();
+        batch.syncState();
+        setWorkspaceId(activeWorkspaceId);
+      };
       const unsubscribe = store.subscribe(sync);
       sync();
       return () => { unsubscribe(); batch.dispose(); navigation.dispose(); controller.current = null; reader.current = null; };

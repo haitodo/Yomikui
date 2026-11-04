@@ -33,10 +33,10 @@
   "content_scripts": [
     {
       "matches": [
-        "https://twitter.com/*",
-        "https://*.twitter.com/*",
-        "https://x.com/*",
-        "https://*.x.com/*"
+        "https://twitter.com/yomikui*",
+        "https://*.twitter.com/yomikui*",
+        "https://x.com/yomikui*",
+        "https://*.x.com/yomikui*"
       ],
       "js": [
         "columnLayout.js",

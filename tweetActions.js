@@ -67,7 +67,11 @@
           tweetCounts.set(id, next);
         }
       }
-      for (const value of Object.values(node)) if (value && typeof value === 'object') stack.push(value);
+      for (const [key, value] of Object.entries(node)) {
+        if (!value || typeof value !== 'object') continue;
+        if (key === 'user_results' || key === 'feedbackInfo' || key === 'clientEventInfo' || key === 'responseObjects' || key === 'ext') continue;
+        stack.push(value);
+      }
     }
     while (tweetCounts.size > MAX_CACHED_TWEETS) tweetCounts.delete(tweetCounts.keys().next().value);
     if (changed.size) controller?.refreshCounts(changed);
@@ -236,6 +240,13 @@
       if (this.observer) return;
       this.observer = new MutationObserver(records => {
         for (const record of records) {
+          if (record.type === 'characterData') {
+            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+            if (!target?.closest?.('[data-testid="retweet"], [data-testid="unretweet"]')) continue;
+            const tweet = target.closest(TWEET);
+            if (tweet) this.pending.add(tweet);
+            continue;
+          }
           const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
           const tweet = target?.closest?.(TWEET);
           if (tweet) this.pending.add(tweet);

@@ -158,6 +158,7 @@
         for (let i = keep; i < nodes.length; i++) nodes[i].remove();
       };
       for (const id of STYLE_IDS) removeAfter(document, `#${id}`, 1);
+      if (!document.querySelector('.yomikui-cbv-overlay, .yomikui-fbv-overlay, .yomikui-ocb-wrapper, .yomikui-screenshot-wrapper, .yomikui-add-label-btn, .yomikui-edit-nickname-btn, .yomikui-label-badge, .yomikui-account-location-badge')) return;
       for (const tweet of document.querySelectorAll(TWEET)) {
         for (const [selector, keep] of DUPLICATES) removeAfter(tweet, selector, keep);
       }

@@ -40,6 +40,10 @@
       this.path = null;
       this.observer = new MutationObserver(records => {
         if (window.location.pathname !== this.path || records.some(record => {
+          if (record.type === 'characterData') {
+            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+            return !!target?.closest('[role="tab"], [role="tablist"]');
+          }
           const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
           if (target?.closest('[role="tab"], [role="tablist"]')) return true;
           if (record.type !== 'childList' || target?.closest('article')) return false;
