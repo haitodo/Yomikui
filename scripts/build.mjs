@@ -15,10 +15,7 @@ const EXTENSION_FILES = [
   "background.js",
   "contentDeck.js",
   "contentIframe.js",
-  "liveFeedShell.html",
-  "liveFeedShell.js",
   "mediaInterceptor.js",
-  "xTransactionBridge.js",
 ];
 
 const EXTENSION_DIRS = ["icons", "_locales"];

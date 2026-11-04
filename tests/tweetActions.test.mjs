@@ -285,7 +285,6 @@ test('column controls toggle all four settings independently and expose accessib
 
 for (const entry of [
   { file: 'contentIframe.js', component: 'oq', memo: 'SF', hooks: 'dt', state: 'Ho', defaults: 'w4', receive: 'WL', theme: 'YL', poll: 'P1', normalizeHandle: 'nq', date: 'ap', nickname: 'Ac', media: 'Ka', frame: 'iq', thread: 'tF', pointer: 'sp', count: 'op', revenue: 'eq', rawCount: 'fs', countParser: 'aY', afterParser: 'lY', placeholders: ['GZ', 'wp', 'YZ', 'XZ', 'Ec', 'S4', 'rF'] },
-  { file: 'liveFeedShell.js', component: 'RH', memo: 'b$', hooks: 'et', state: 'Yi', defaults: 'Tm', receive: 'KS', theme: 'jS', poll: 'V6', normalizeHandle: 'OH', date: 'Ed', nickname: 'pl', media: 'Zo', frame: 'CH', thread: 'GS', pointer: 'Dd', count: 'Td', revenue: 'LH', rawCount: 'Xl', countParser: 'BU', afterParser: 'jU', placeholders: ['kH', 'Bd', 'TH', 'EH', 'hl', 'Om', 'YS'] },
 ]) {
   test(`${entry.file} applies received preferences to its shipped Live Feed renderer`, () => {
     const { actions, context, window } = setup();
@@ -401,8 +400,6 @@ test('shared actions load before each UI entry point and translations are availa
     const scripts = manifest.content_scripts.find(entry => entry.js.includes(bundle)).js;
     assert.ok(scripts.indexOf('tweetActions.js') >= 0 && scripts.indexOf('tweetActions.js') < scripts.indexOf(bundle));
   }
-  const shell = readFileSync(new URL('../liveFeedShell.html', import.meta.url), 'utf8');
-  assert.ok(shell.indexOf('tweetActions.js') < shell.indexOf('liveFeedShell.js'));
   const { actions } = setup();
   const messages = JSON.parse(readFileSync(new URL('../_locales/ja/messages.json', import.meta.url), 'utf8'));
   for (const { label, description } of actions.SETTINGS) {

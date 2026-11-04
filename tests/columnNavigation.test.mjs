@@ -79,7 +79,7 @@ test('reset returns each column to its configured page and persists without chan
   assert.deepEqual(clone(loaded.workspaces[1]), untouched);
 });
 
-test('resetting a search result keeps a configured query and tab, including Live Feed settings', () => {
+test('resetting a search result keeps a configured query and tab, returning safe native URL', () => {
   const { store, buildUrl } = setup();
   const id = store.getState().columns[0].id;
   store.getState().updateColumn(id, {
@@ -89,13 +89,12 @@ test('resetting a search result keeps a configured query and tab, including Live
   store.getState().resetColumnPage(id);
   const column = store.getState().columns[0];
   const url = new URL(buildUrl(column, 'dim'));
-  assert.equal(url.protocol, 'chrome-extension:');
-  assert.equal(url.pathname, '/liveFeedShell.html');
-  assert.equal(url.searchParams.get('fp'), '/search');
-  assert.equal(url.searchParams.get('fs'), '?q=original&f=live');
+  assert.equal(url.protocol, 'https:');
+  assert.equal(url.pathname, '/search');
+  assert.equal(url.searchParams.get('q'), 'original');
+  assert.equal(url.searchParams.get('f'), 'live');
   assert.equal(column.liveFeedIntervalSec, 60);
   assert.equal(column.hideRetweets, true);
-  assert.ok(url.hash.includes('lf1'));
 });
 
 test('the reset UI callback reloads once using freshly reset state instead of the old lastPath', () => {

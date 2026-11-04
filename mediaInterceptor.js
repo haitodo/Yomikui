@@ -6,11 +6,7 @@
   window.__yomikuiMediaInterceptorInstalled = true;
 
   /** Live Feed カラムは React でツイートを描画するため、X 本体の SPA が大量の DOM を生成する前に除去する */
-  const isLiveFeedFeedSurface = () => {
-    if (!location.hash.includes('lf1')) return false;
-    if (/\/status\/\d+/.test(location.pathname)) return false;
-    return true;
-  };
+  const isLiveFeedFeedSurface = () => false;
 
   const suppressXSpaForLiveFeed = () => {
     if (window.__yomikuiLiveFeedSpaSuppress) return;

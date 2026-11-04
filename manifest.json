@@ -24,7 +24,6 @@
     "*://*.twitter.com/*",
     "*://x.com/*",
     "*://*.x.com/*",
-    "*://api.x.com/*",
     "*://*.twimg.com/*"
   ],
   "background": {
@@ -76,7 +75,6 @@
         "https://*.x.com/*"
       ],
       "js": [
-        "xTransactionBridge.js",
         "mediaInterceptor.js"
       ],
       "all_frames": true,
@@ -95,9 +93,7 @@
       "resources": [
         "icons/*",
         "mediaInterceptor.js",
-        "tweetActions.js",
-        "liveFeedShell.html",
-        "liveFeedShell.js"
+        "tweetActions.js"
       ]
     }
   ],
