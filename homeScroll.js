@@ -12,15 +12,20 @@
   const isReadingAction = ({ direction, mode, deltaY, deltaMode = 0 }) => mode === 'top' ||
     (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && [0, 1, 2].includes(deltaMode)) ||
     ((direction === 1 || direction === -1) && ['post', 'page'].includes(mode));
-  const READING_GROUPS = ['recommended', 'following', 'search'];
+  const READING_GROUPS = ['recommended', 'following', 'search', 'explore'];
+  const REFRESH_KINDS = ['recommended', 'following', 'explore'];
+  const isRefreshableKind = kind => REFRESH_KINDS.includes(kind);
+  const selectedTimelineTab = () => [...primary()?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
+    .find(tab => !tab.closest('article, [role="dialog"]'));
   function readingKind(getSettings) {
     const settings = getSettings();
     const path = window.location.pathname.replace(/\/$/, '');
     if (!isReadableColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) || settings?.isTimelineColumn ||
         /\/status\/\d+|^\/(?:compose|messages)(?:\/|$)|^\/i\/(?:chat|grok)(?:\/|$)/.test(path)) return null;
     if (path === '/search') return 'search';
+    if (/^\/explore(?:\/tabs\/[\w-]+)?$/.test(path)) return 'explore';
     if (path !== '/home') return 'other';
-    const tab = primary()?.querySelector('[role="tab"][aria-selected="true"]');
+    const tab = selectedTimelineTab();
     if (!tab) return null;
     if (recommended(tab)) return 'recommended';
     const label = (tab.getAttribute('aria-label') || tab.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
@@ -102,9 +107,8 @@
   }
 
   function isRecommendedHome(settings) {
-    return settings?.columnType === 'home' && !settings.isLiveFeedColumn &&
-      window.location.pathname.replace(/\/$/, '') === '/home' && !document.hidden &&
-      !document.querySelector('[role="dialog"]') && recommended(primary()?.querySelector('[role="tab"][aria-selected="true"]'));
+    return readingKind(() => settings) === 'recommended' && !document.hidden &&
+      !document.querySelector('[role="dialog"]');
   }
 
   // X keeps its header offset even when our CSS hides the tab bar. Give X the
@@ -157,7 +161,10 @@
       scroller === document.documentElement || scroller === document.body;
     const wheelScroller = rootScroller ? window : scroller;
     if (mode === 'wheel' && wheelScroller.scrollBy) {
-      if (!primary()?.querySelector('article[data-testid="tweet"]')) return { status: 'skipped', reason: 'unavailable' };
+      const itemSelector = readingKind(getSettings) === 'explore'
+        ? '[data-testid="cellInnerDiv"] a[href], [data-testid="trend"], article[data-testid="tweet"]'
+        : 'article[data-testid="tweet"]';
+      if (!primary()?.querySelector(itemSelector)) return { status: 'skipped', reason: 'unavailable' };
       let unit = 1;
       if (deltaMode === 1) unit = parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16;
       if (deltaMode === 2) {
@@ -175,6 +182,11 @@
     const rect = rootScroller ? null : scroller.getBoundingClientRect();
     const height = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
     let posts = articles();
+    if (readingKind(getSettings) === 'explore') {
+      const cells = [...primary()?.querySelectorAll('[data-testid="cellInnerDiv"]') ?? []]
+        .filter(cell => cell.querySelector('a[href], [data-testid="trend"], article[data-testid="tweet"]'));
+      posts = cells.length ? cells : [...primary()?.querySelectorAll('[data-testid="trend"]') ?? []];
+    }
     if (mode === 'post') posts = posts.filter(article => article.getBoundingClientRect().height > 0);
     const rendered = mode === 'post' ? posts.length > 0 : posts.some(article => article.getBoundingClientRect().height > 0);
     if (!rendered || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
@@ -356,5 +368,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, navigate });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, navigate, selectedTimelineTab, isRecommendedTab: recommended });
 })();

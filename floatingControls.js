@@ -4,7 +4,7 @@
   const PREFIX = 'yomikui-home-refresh-';
   const STORAGE_KEY = 'yomikui_floating_controls_v1';
   const TARGETS_KEY = 'yomikui_reading_targets_v1';
-  const GROUPS = Object.freeze({ recommended: 'おすすめ', following: 'フォロー中', search: '検索結果' });
+  const GROUPS = Object.freeze({ recommended: 'おすすめ', following: 'フォロー中', search: '検索結果', explore: '話題を検索' });
   const COLORS = Object.freeze({ bluegray: 'ブルーグレー', lavender: 'ラベンダー', sage: 'セージ', gray: 'グレー', theme: 'テーマに合わせる' });
   const trusted = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
   const clamp = value => Math.max(0, Math.min(1, value));
@@ -128,6 +128,11 @@
       }));
     }
 
+    selectedColumns(target = 'all', visible = this.getVisibleIds()) {
+      const kinds = this.kinds();
+      return this.getState().columns.filter(column => readable(column) && visible.has(column.id) && matchesTarget(column, target, kinds));
+    }
+
     publishContexts() {
       const kinds = this.kinds(), signature = JSON.stringify(kinds);
       if (!this.disposed && signature !== this.contextSignature) { this.contextSignature = signature; this.onContext(kinds); }
@@ -170,8 +175,8 @@
 
     wheel({ target = 'all', deltaY, deltaMode = 0 }) {
       if (this.disposed || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ mode: 'wheel', deltaY, deltaMode })) return false;
-      const state = this.getState(), kinds = this.kinds();
-      if (!state.columns.some(column => readable(column) && this.visible.has(column.id) && matchesTarget(column, target, kinds))) return false;
+      const state = this.getState();
+      if (!this.selectedColumns(target, this.visible).length) return false;
       if (this.active && !this.active.cancelled) { this.active.cancelledByWheel = true; this.cancel(); }
       const previous = this.wheelBuffer;
       if (previous && (previous.workspaceId !== state.activeWorkspaceId || previous.target !== target)) this.clearWheel();
@@ -198,9 +203,8 @@
       if (deltaY === 0) return;
       const state = this.getState();
       if (this.disposed || document.hidden || state.activeWorkspaceId !== buffer.workspaceId) return;
-      const visible = this.getVisibleIds(), kinds = this.kinds();
-      for (const column of state.columns) {
-        if (!readable(column) || !visible.has(column.id) || !matchesTarget(column, buffer.target, kinds) || state.columnComposing?.[column.id]) continue;
+      for (const column of this.selectedColumns(buffer.target)) {
+        if (state.columnComposing?.[column.id]) continue;
         const frame = this.getFrame(column.id);
         if (!frame?.window || !trusted(frame.origin)) continue;
         const now = Date.now();
@@ -227,9 +231,7 @@
       if (this.disposed || this.active || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ direction, mode })) return;
       this.clearWheel();
       const state = this.getState();
-      const visible = this.getVisibleIds();
-      const kinds = this.kinds();
-      const columns = state.columns.filter(column => readable(column) && visible.has(column.id) && matchesTarget(column, target, kinds));
+      const columns = this.selectedColumns(target);
       if (!columns.length) {
         this.onChange({ busy: false, results: [], message: '画面内に閲覧対象の列がありません' });
         return;
@@ -578,6 +580,11 @@
     const busy = view.phase === 'running';
     const visibleColumns = eligible.filter(column => visible.has(column.id));
     const selectedColumns = targetReady ? visibleColumns.filter(column => matchesTarget(column, target, kinds)) : [];
+    const refreshCounts = globalThis.YomikuiHomeScroll.REFRESH_KINDS.map(kind => ({
+      kind, count: selectedColumns.filter(column => kinds[column.id] === kind).length,
+    }));
+    const refreshCount = refreshCounts.reduce((total, item) => total + item.count, 0);
+    const refreshTargets = refreshCounts.filter(item => item.count).map(item => `${GROUPS[item.kind]} ${item.count}列`).join('・');
     const selected = !targetReady ? '読み込み中' : target === 'all' ? '表示中すべて' : GROUPS[targetGroup(target)] || columns.find(column => column.id === target)?.title || '選択した列';
     const selectionVisible = selectedColumns.length > 0;
     wheelRef.current = action => targetReady && selectionVisible && !busy && !positionRef.current?.drag && onWheel?.({ target, ...action }) === true;
@@ -617,7 +624,7 @@
         ] }),
         jsx.jsxs('div', { className: 'yf-body', children: [
           jsx.jsxs('div', { id: 'yomikui-reading-settings', className: 'yf-fields', hidden: prefs.collapsed, style: prefs.collapsed ? { display: 'none' } : undefined, children: [
-            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '閲覧する列' }), jsx.jsxs('select', { 'aria-label': '閲覧する列', title: `${selected}・${selectedColumns.length}列`, value: target, disabled: !targetReady || busy || reading.busy, onChange: event => selectTarget(event.target.value), children: [
+            jsx.jsxs('label', { children: [jsx.jsx('span', { className: 'yf-sr-only', children: '対象の列' }), jsx.jsxs('select', { 'aria-label': '対象の列', title: `${selected}・${selectedColumns.length}列（スクロール・更新の対象）`, value: target, disabled: !targetReady || busy || reading.busy, onChange: event => selectTarget(event.target.value), children: [
               !targetReady && jsx.jsx('option', { value: '__loading__', children: '読み込み中' }),
               jsx.jsxs('optgroup', { label: '表示内容', children: [
                 jsx.jsx('option', { value: 'all', children: '表示中すべて' }),
@@ -655,7 +662,13 @@
             }, direction)),
             ] }),
             canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
-              jsx.jsx('button', { type: 'button', className: 'yf-refresh', disabled: busy || reading.busy || view.phase === 'cooldown' || view.phase === 'cancelled', 'aria-label': 'ホームを一括更新', 'aria-busy': busy, title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}ホームを一括更新：閲覧する列の選択にかかわらず、ホーム列全体を順番に更新します`, onClick: () => { setLastAction('refresh'); onRefresh(); }, children: icon('refresh') }),
+              jsx.jsx('button', {
+                type: 'button', className: 'yf-refresh',
+                disabled: busy || reading.busy || !targetReady || refreshCount === 0 || view.phase === 'cooldown' || view.phase === 'cancelled',
+                'aria-label': '選択中の列を更新', 'aria-busy': busy,
+                title: `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を順番に更新します。おすすめ・フォロー中は新着読み込み、話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします` : '選択範囲内に更新対象の列がありません。キーワード検索の結果の更新には対応していません'}`,
+                onClick: () => { setLastAction('refresh'); onRefresh({ target }); }, children: icon('refresh'),
+              }),
             }),
           ] }),
           statusText && jsx.jsx('div', { id: 'yomikui-home-refresh-status', className: 'yf-status', role: 'status', 'aria-live': 'polite', title: statusDetails, children: statusText }),

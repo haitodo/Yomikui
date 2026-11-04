@@ -66,6 +66,29 @@ test('reading steps align a post and go back to a partially read post before its
   assert.equal(env.scroller.scrollTop, 100);
 });
 
+test('Explore classifies its current route and scrolls news or trend cards without requiring tweets', () => {
+  const env = readingSetup();
+  env.window.location.pathname = '/explore/tabs/news';
+  env.document.getElementById('posts').innerHTML = '<div data-testid="cellInnerDiv" data-y="100"><a href="/i/trending/1">News</a></div><div data-testid="cellInnerDiv" data-y="300"><a href="/search?q=topic">Trend</a></div>';
+  assert.equal(env.api.readingKind(() => env.settings), 'explore');
+  assert.equal(env.api.isRefreshableKind('explore'), true);
+  assert.equal(env.navigate().status, 'moved');
+  assert.equal(env.scroller.scrollTop, 300);
+  env.wheel(80);
+  assert.equal(env.scroller.scrollTop, 380);
+  env.navigate(-1, 'page');
+  assert.equal(env.scroller.scrollTop, 0);
+  env.scroller.scrollTop = 400;
+  env.navigate(undefined, 'top');
+  assert.equal(env.scroller.scrollTop, 0);
+  for (const path of ['/explore', '/explore/tabs/trending', '/explore/tabs/for-you', '/explore/tabs/for_you']) {
+    env.window.location.pathname = path;
+    assert.equal(env.api.readingKind(() => env.settings), 'explore');
+  }
+  env.window.location.pathname = '/explore/other/page';
+  assert.equal(env.api.readingKind(() => env.settings), 'other');
+});
+
 test('reading a tall post uses overlapping screenfuls in both directions', () => {
   const env = readingSetup();
   env.document.querySelector('[data-y="300"]').setAttribute('data-y', '1400');
@@ -270,6 +293,18 @@ test('preserve mode follows the same visible post across prep scrolling and new 
   await settle();
   await env.clock.advance(0);
   assert.equal(env.scroller.scrollTop, 700);
+  await env.clock.advance(1300);
+  assert.equal(env.clock.timers.size, 0);
+});
+
+test('scroll preservation also follows recommendations opened inside a search column', async () => {
+  const env = setup('preserve');
+  env.settings.columnType = 'search';
+  const job = env.tracker.begin();
+  env.scroller.scrollTop = 0;
+  env.tracker.request(job);
+  await prepend(env);
+  assert.equal(env.scroller.scrollTop, 600);
   await env.clock.advance(1300);
   assert.equal(env.clock.timers.size, 0);
 });

@@ -8,6 +8,7 @@ import { Clock, Events, settle } from './helpers.mjs';
 
 const source = readFileSync(new URL('../homeRefresh.js', import.meta.url), 'utf8');
 const scrollSource = readFileSync(new URL('../homeScroll.js', import.meta.url), 'utf8');
+const floatingSource = readFileSync(new URL('../floatingControls.js', import.meta.url), 'utf8');
 const P = 'yomikui-home-refresh-';
 const clone = value => JSON.parse(JSON.stringify(value));
 const tweet = id => `<article data-testid="tweet"><a href="/author/status/${id}"><time>Now</time></a></article>`;
@@ -21,7 +22,7 @@ const home = (options = {}) => `<main><div data-testid="primaryColumn">
   <div id="tweets">${tweet('101')}</div>${options.extra ?? ''}
 </div></main>`;
 
-function setup(html = home()) {
+function setup(html = home(), { storage = new Map(), path = '/home' } = {}) {
   const clock = new Clock();
   const dom = parseHTML(`<html><head></head><body>${html}</body></html>`);
   const { document } = dom;
@@ -29,7 +30,18 @@ function setup(html = home()) {
   const window = new Events();
   window.self = window;
   window.top = {};
-  window.location = { pathname: '/home', origin: 'https://x.com' };
+  const reloads = [];
+  window.location = { pathname: path, origin: 'https://x.com', search: '', hash: '', reload: () => reloads.push({ ...window.location }) };
+  window.history = { state: null, replaceState(state, _, value) {
+    const url = new URL(value, window.location.origin);
+    Object.assign(window.location, { pathname: url.pathname, search: url.search, hash: url.hash });
+    this.state = state;
+  } };
+  window.sessionStorage = {
+    getItem: key => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value),
+    removeItem: key => storage.delete(key),
+  };
   window.scrollTo = () => { throw new Error('A column scroller was supplied'); };
   const messages = [];
   window.parent = { postMessage: (data, origin) => messages.push({ data: clone(data), origin }) };
@@ -50,6 +62,7 @@ function setup(html = home()) {
     fetch() { throw new Error('Native home refresh must not call an API'); },
   });
   vm.runInContext(scrollSource, context);
+  vm.runInContext(floatingSource, context);
   vm.runInContext(source, context);
   const settings = { columnType: 'home', isLiveFeedColumn: false };
   const scroller = { scrollTop: 800 };
@@ -58,7 +71,7 @@ function setup(html = home()) {
     getOrigin: () => 'https://x.com', getColumnId: () => 'column1',
   };
   const api = context.YomikuiHomeRefresh;
-  return { api, context, window, document, settings, scroller, clock, messages, observers, options };
+  return { api, context, window, document, settings, scroller, clock, messages, observers, options, storage, reloads };
 }
 
 async function beginNative(env, refresher = new env.api.NativeRefresher(env.options), signal) {
@@ -85,6 +98,44 @@ test('a CSS-hidden selected recommendation tab refreshes once without exposing t
   await env.clock.advance(1400);
   assert.equal(env.observers.filter(observer => observer.connected).length, 0);
   assert.equal(env.clock.timers.size, 0);
+});
+
+for (const columnType of ['search', 'customUrl', 'following', 'explore', 'notifications', 'bookmarks']) {
+  test(`a ${columnType} column navigated to recommendations refreshes according to its current page`, async () => {
+    const env = setup();
+    env.settings.columnType = columnType;
+    let clicks = 0;
+    env.document.getElementById('recommended').addEventListener('click', () => {
+      clicks++;
+      env.document.getElementById('tweets').innerHTML = tweet('202');
+    });
+    assert.equal(env.context.YomikuiHomeScroll.readingKind(() => env.settings), 'recommended');
+    const { pending } = await beginNative(env);
+    await env.clock.advance(200);
+    assert.equal((await pending).status, 'updated');
+    assert.equal(clicks, 1);
+  });
+}
+
+test('a remembered tab still being restored prevents a refresh of a temporary default tab', async () => {
+  const env = setup();
+  const refresher = new env.api.NativeRefresher({ ...env.options, isTabRestoring: () => true });
+  const result = await refresher.refresh();
+  assert.equal(result.reason, 'unavailable');
+  assert.equal(env.scroller.scrollTop, 800);
+  assert.equal(env.clock.timers.size, 0);
+});
+
+test('a column leaving the visible area during preparation is not clicked', async () => {
+  const env = setup();
+  let visible = true, clicks = 0;
+  env.document.getElementById('recommended').addEventListener('click', () => clicks++);
+  const refresher = new env.api.NativeRefresher({ ...env.options, isVisible: () => visible });
+  const { pending } = await beginNative(env, refresher);
+  visible = false;
+  await env.clock.advance(200);
+  assert.equal((await pending).reason, 'hidden');
+  assert.equal(clicks, 0);
 });
 
 for (const banner of ['35件のポスト表示', '35件のポストを表示', '３５件のツイートを表示', 'Show 35 posts', 'Show new posts']) {
@@ -160,7 +211,6 @@ test('a real draft inside the X rich-text wrapper still prevents a refresh', asy
 });
 
 for (const scenario of [
-  { reason: 'following', html: home({ selected: 'following' }) },
   { reason: 'draft', html: home({ extra: '<div data-testid="tweetTextarea_0" contenteditable="true">Unsent post</div>' }) },
   { reason: 'draft', html: home({ extra: '<div data-testid="attachments"><img alt="Unsent photo"></div>' }) },
   { reason: 'dialog', html: home({ extra: '<div role="dialog">A composer</div>' }) },
@@ -208,8 +258,186 @@ test('user tab changes during preparation prevent the pending recommendation cli
   env.document.getElementById('recommended').setAttribute('aria-selected', 'false');
   env.document.getElementById('following').setAttribute('aria-selected', 'true');
   await env.clock.advance(200);
-  assert.equal((await pending).reason, 'following');
+  assert.equal((await pending).reason, 'target-changed');
   assert.equal(clicks, 0);
+});
+
+for (const banner of [null, '35件のポストを表示']) {
+  test(`Following refreshes its own selected tab or new-posts banner once: ${banner}`, async () => {
+    const env = setup(home({ selected: 'following', banner }));
+    env.settings.homeRefreshPosition = 'preserve';
+    const clicks = [];
+    env.document.getElementById('recommended').addEventListener('click', () => clicks.push('recommended'));
+    for (const id of ['following', 'new-posts']) env.document.getElementById(id)?.addEventListener('click', () => {
+      clicks.push(id);
+      env.document.getElementById('tweets').innerHTML = tweet('202');
+    });
+    const { pending } = await beginNative(env);
+    await env.clock.advance(200);
+    assert.deepEqual(clone(await pending), { status: 'updated', method: banner ? 'new-posts' : 'tab' });
+    assert.deepEqual(clicks, [banner ? 'new-posts' : 'following']);
+    assert.equal(env.scroller.scrollTop, 0, 'recommendation-only position preservation is not applied to Following');
+    assert.equal(env.clock.timers.size, 0);
+  });
+}
+
+const explore = (tab = 'news', { loading = false } = {}) => `<main data-testid="primaryColumn">
+  <div role="tablist">${['for_you', 'trending', 'news', 'sports', 'entertainment'].map(id =>
+    `<a role="tab" href="/explore/tabs/${id}" aria-selected="${id === tab}">${id}</a>`).join('')}</div>
+  ${loading ? '<div role="progressbar"></div>' : '<div data-testid="cellInnerDiv"><a href="/i/trending/123">A trend or news story</a></div>'}
+</main>`;
+const reloadKey = 'yomikui_explore_refresh_v1:column1';
+function exploreSetup(tab = 'news', options = {}) {
+  const env = setup(explore(tab, options), { ...options, path: `/explore/tabs/${tab}` });
+  env.settings.columnType = 'explore';
+  env.send = (data, event = {}) => env.window.emit('message', {
+    source: env.window.parent, origin: 'https://x.com', data: {
+      type: P + 'request', columnId: 'column1', requestId: 'reload1', target: 'explore', ...data,
+    }, ...event,
+  });
+  return env;
+}
+
+for (const tab of ['for_you', 'trending', 'news', 'sports', 'entertainment']) {
+  test(`Explore reload preserves the current ${tab} URL and completes after the replacement document renders`, async () => {
+    const env = exploreSetup(tab);
+    Object.assign(env.window.location, { search: '?test=1', hash: '#yomikui-cidcolumn1' });
+    env.settings.columnType = 'search'; // A column navigated away from its configured page.
+    let clicks = 0;
+    env.document.addEventListener('click', () => clicks++);
+    const installed = env.api.installFrame(env.options);
+    env.send({}, { source: {} });
+    env.send({}, { origin: 'https://untrusted.example' });
+    assert.equal(env.reloads.length, 0);
+    env.send();
+    env.send();
+    assert.equal(env.reloads.length, 1);
+    assert.equal(env.reloads[0].pathname, `/explore/tabs/${tab}`);
+    assert.equal(env.reloads[0].search, '?test=1');
+    assert.equal(env.reloads[0].hash, '#yomikui-cidcolumn1');
+    assert.equal(env.messages.at(-1).data.type, P + 'reloading');
+    assert.equal(clicks, 0, 'Explore refresh does not cycle through tabs');
+    env.document.hidden = true;
+    env.document.dispatchEvent(new env.document.defaultView.Event('visibilitychange'));
+    env.window.emit('pagehide');
+    assert.ok(env.storage.has(reloadKey), 'the deliberate unload must retain its one-shot receipt');
+
+    const replacement = exploreSetup(tab, { storage: env.storage, loading: true });
+    replacement.window.location.search = '?test=1';
+    const resumed = replacement.api.installFrame(replacement.options);
+    replacement.send();
+    await settle();
+    assert.equal(replacement.reloads.length, 0, 'a repeated request must not reload the replacement document');
+    assert.equal(replacement.messages.length, 0, 'rendering must be confirmed before completing');
+    replacement.document.body.innerHTML = explore(tab);
+    await settle();
+    await replacement.clock.advance(80);
+    assert.equal(replacement.messages.at(-1).data.status, 'reloaded');
+    assert.equal(replacement.messages.at(-1).data.method, 'reload');
+    assert.equal(replacement.scroller.scrollTop, 0);
+    assert.equal(replacement.storage.has(reloadKey), false);
+    replacement.send();
+    assert.equal(replacement.messages.at(-1).data.status, 'reloaded');
+    assert.equal(replacement.reloads.length, 0);
+    resumed.dispose();
+    installed.dispose();
+    assert.equal(replacement.clock.timers.size, 0);
+    assert.ok(replacement.observers.every(observer => !observer.connected));
+  });
+}
+
+test('Explore refuses drafts, dialogs, hidden columns, mismatched targets and unavailable storage', async () => {
+  for (const [reason, change] of [
+    ['draft', env => env.document.body.insertAdjacentHTML('beforeend', '<textarea data-testid="tweetTextarea_0">A draft</textarea>')],
+    ['dialog', env => env.document.body.insertAdjacentHTML('beforeend', '<div role="dialog">A dialog</div>')],
+    ['hidden', env => env.send({ type: 'yomikui-column-visibility', visible: false })],
+    ['target-changed', env => { env.window.location.pathname = '/home'; env.document.body.innerHTML = home(); }],
+    ['reload-unavailable', env => { env.window.sessionStorage.setItem = () => { throw new Error('Storage disabled'); }; }],
+  ]) {
+    const env = exploreSetup();
+    const installed = env.api.installFrame(env.options);
+    change(env);
+    env.send();
+    assert.equal(env.messages.at(-1).data.reason, reason);
+    assert.equal(env.reloads.length, 0);
+    installed.dispose();
+  }
+});
+
+test('Explore receipts are scoped to a column and origin, expire, and never cause a second reload', async () => {
+  for (const invalid of [{ origin: 'https://untrusted.example' }, { started: -21000 }, { started: 1 }, { id: '' }, { path: '/search?q=test' }]) {
+    const env = exploreSetup();
+    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path: '/explore/tabs/news', origin: 'https://x.com', started: 0, ...invalid }));
+    const installed = env.api.installFrame(env.options);
+    await settle();
+    assert.deepEqual(env.messages, []);
+    assert.deepEqual(env.reloads, []);
+    assert.equal(env.storage.has(reloadKey), false);
+    assert.equal(env.clock.timers.size, 0);
+    installed.dispose();
+  }
+  const env = exploreSetup();
+  env.storage.set('yomikui_explore_refresh_v1:other-column', JSON.stringify({ id: 'other', path: '/explore/tabs/news', origin: 'https://x.com', started: 0 }));
+  const installed = env.api.installFrame(env.options);
+  await settle();
+  assert.deepEqual(env.messages, []);
+  installed.dispose();
+});
+
+test('an Explore reload that never renders is reported as unconfirmed and releases observers', async () => {
+  const env = exploreSetup('news', { loading: true });
+  env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path: '/explore/tabs/news', origin: 'https://x.com', started: 0 }));
+  const installed = env.api.installFrame(env.options);
+  await env.clock.advance(20000);
+  assert.equal(env.messages.at(-1).data.status, 'requested');
+  assert.equal(env.messages.at(-1).data.method, 'reload');
+  assert.equal(env.reloads.length, 0);
+  assert.ok(env.observers.every(observer => !observer.connected));
+  assert.equal(env.clock.timers.size, 0);
+  installed.dispose();
+});
+
+test('Explore root and trailing-slash URLs resume without switching their current tab', async () => {
+  for (const path of ['/explore', '/explore/', '/explore/tabs/trending/']) {
+    const env = exploreSetup(path.includes('trending') ? 'trending' : 'for_you');
+    env.window.location.pathname = path;
+    env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path, origin: 'https://x.com', started: 0 }));
+    const installed = env.api.installFrame(env.options);
+    await settle();
+    assert.equal(env.messages.at(-1).data.status, 'reloaded');
+    assert.equal(env.reloads.length, 0);
+    installed.dispose();
+  }
+});
+
+test('an Explore page reached through SPA navigation retains column bootstrap settings when reloaded', () => {
+  const env = exploreSetup('trending');
+  env.window.location.hash = '#yomikui-cidcolumn1-ctsearch-hb1';
+  const installed = env.api.installFrame(env.options);
+  env.window.location.hash = '';
+  env.window.location.search = '?source=test';
+  env.send();
+  assert.equal(env.reloads.length, 1);
+  assert.equal(env.reloads[0].pathname, '/explore/tabs/trending');
+  assert.equal(env.reloads[0].search, '?source=test');
+  assert.equal(env.reloads[0].hash, '#yomikui-cidcolumn1-ctsearch-hb1');
+  installed.dispose();
+});
+
+test('cancelling an Explore operation clears its receipt or its replacement-document observer', async () => {
+  for (const resuming of [false, true]) {
+    const env = exploreSetup('news', { loading: resuming });
+    if (resuming) env.storage.set(reloadKey, JSON.stringify({ id: 'reload1', path: '/explore/tabs/news', origin: 'https://x.com', started: 0 }));
+    const installed = env.api.installFrame(env.options);
+    if (!resuming) env.send();
+    env.send({ type: P + 'cancel' });
+    await settle();
+    assert.equal(env.messages.at(-1).data.reason, 'cancelled');
+    assert.equal(env.storage.has(reloadKey), false);
+    assert.equal(env.clock.timers.size, 0);
+    assert.ok(env.observers.every(observer => !observer.connected));
+    installed.dispose();
+  }
 });
 
 test('cancellation releases readiness observers and timers without clicking', async () => {
@@ -238,7 +466,7 @@ test('the frame protocol validates sender, origin, column and target, and dedupl
   send({}, { source: {} });
   send({}, { origin: 'https://untrusted.example' });
   send({ columnId: 'another' });
-  send({ target: 'following' });
+  send({ target: 'invented' });
   assert.equal(env.messages.length, 0);
   send({ type: P + 'probe' });
   assert.equal(env.messages.at(-1).data.type, P + 'ready');
@@ -479,7 +707,7 @@ test('reading cannot interrupt a native refresh but cancels its remaining scroll
   assert.equal(env.clock.timers.size, 0);
 });
 
-function batchSetup({ columns, quiet, late } = {}) {
+function batchSetup({ columns, quiet, offscreen = [], currentKinds = {} } = {}) {
   const env = setup();
   const state = {
     activeWorkspaceId: 'workspace1',
@@ -491,38 +719,53 @@ function batchSetup({ columns, quiet, late } = {}) {
   const mounts = [];
   const views = [];
   const frames = new Map();
+  const kinds = new Map(state.columns.map(column => [column.id, currentKinds[column.id] ?? (column.type === 'home' ? 'recommended' : column.type === 'search' || column.type === 'following' ? 'search' : column.type === 'explore' ? 'explore' : 'other')]));
+  const visible = new Set(state.columns.filter(column => !offscreen.includes(column.id)).map(column => column.id));
   for (const column of state.columns) {
     const frame = { postMessage(data, origin) {
+      if (data.type === P + 'describe') {
+        env.window.emit('message', { source: frame, origin, data: { type: P + 'context', columnId: column.id, kind: kinds.get(column.id) } });
+        return;
+      }
       messages.push({ ...clone(data), origin });
       if (quiet?.(column.id, data.type)) return;
       if (data.type === P + 'probe') {
         env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'ready' } });
       } else if (data.type === P + 'request') {
-        env.clock.setTimeout(() => env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'result', status: 'updated', method: 'tab' } }), 30);
+        if (data.target === 'explore') env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'reloading' } });
+        env.clock.setTimeout(() => env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'result', status: data.target === 'explore' ? 'reloaded' : 'updated', method: data.target === 'explore' ? 'reload' : 'tab' } }), 30);
       }
     } };
     frames.set(column.id, frame);
   }
-  const unavailable = new Set(late ?? []);
+  const getFrame = id => frames.has(id) ? { window: frames.get(id), origin: 'https://x.com' } : null;
+  const reader = new env.context.YomikuiFloatingControls.ReadingController({
+    getState: () => state, getFrame, getVisibleIds: () => visible, onChange() {},
+  });
   const batch = new env.api.BatchRefresher({
     getState: () => state,
-    getFrame: id => unavailable.has(id) ? null : { window: frames.get(id), origin: 'https://x.com' },
-    setMounted(ids) {
-      mounts.push([...ids]);
-      for (const id of ids) if (unavailable.has(id)) env.clock.setTimeout(() => unavailable.delete(id), 150);
+    getFrame,
+    getTargets: target => {
+      const kinds = reader.kinds();
+      return reader.selectedColumns(target).map(column => ({ ...column, refreshKind: kinds[column.id] }));
     },
+    setMounted: ids => mounts.push([...ids]),
     onChange: value => views.push(clone(value)),
   });
-  return { ...env, batch, state, activity, messages, mounts, frames, views };
+  const report = (id, kind) => {
+    kinds.set(id, kind);
+    env.window.emit('message', { source: frames.get(id), origin: 'https://x.com', data: { type: P + 'context', columnId: id, kind } });
+  };
+  return { ...env, batch, reader, state, activity, messages, mounts, frames, views, visible, report };
 }
 
-test('one user action updates every native home sequentially, including an unmounted offscreen column', async () => {
+test('one user action updates visible recommendations sequentially and leaves offscreen columns alone', async () => {
   const env = batchSetup({
     columns: [
       { id: 'home1', type: 'home' }, { id: 'search', type: 'search' },
       { id: 'live', type: 'home', liveFeed: true }, { id: 'home2', type: 'home' },
       { id: 'draft', type: 'home' },
-    ], late: ['home2'],
+    ], offscreen: ['home2'],
   });
   env.state.columnComposing.draft = true;
   const run = env.batch.run();
@@ -530,18 +773,184 @@ test('one user action updates every native home sequentially, including an unmou
   assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home1']);
   await env.clock.advance(1500);
   await run;
-  assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home1', 'home2']);
-  assert.equal(env.views.at(-1).total, 3);
-  assert.deepEqual(env.views.at(-1).results.map(item => item.status), ['updated', 'updated', 'skipped']);
+  assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home1']);
+  assert.equal(env.views.at(-1).total, 2);
+  assert.deepEqual(env.views.at(-1).results.map(item => item.status), ['updated', 'skipped']);
   assert.equal(env.views.at(-1).results.at(-1).reason, 'draft');
-  assert.ok(env.mounts.every(ids => ids.length <= 1));
-  assert.deepEqual(env.mounts.at(-1), []);
-  assert.deepEqual(env.activity, ['home1', 'home2']);
+  assert.deepEqual(env.mounts, []);
+  assert.deepEqual(env.activity, ['home1']);
   const sent = env.messages.length;
   await env.batch.run();
   assert.equal(env.messages.length, sent, 'cooldown prevents another batch');
   await env.clock.advance(5000);
   assert.equal(env.clock.timers.size, 0, 'the idle control has no polling timers');
+  env.batch.dispose();
+});
+
+test('one batch dispatches each visible current page to its own refresh strategy in order', async () => {
+  const env = batchSetup({ columns: [
+    { id: 'recommendations', type: 'home' }, { id: 'following-tab', type: 'home' },
+    { id: 'news', type: 'customUrl' }, { id: 'keyword-search', type: 'search' },
+    { id: 'following-search', type: 'following' }, { id: 'offscreen', type: 'explore' },
+  ], currentKinds: { 'following-tab': 'following', news: 'explore' }, offscreen: ['offscreen'] });
+  const run = env.batch.run();
+  assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.target), ['recommended']);
+  await env.clock.advance(1500);
+  await run;
+  assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => [message.columnId, message.target]), [
+    ['recommendations', 'recommended'], ['following-tab', 'following'], ['news', 'explore'],
+  ]);
+  assert.deepEqual(env.views.at(-1).results.map(result => result.status), ['updated', 'updated', 'reloaded']);
+  assert.equal(env.api.summary(env.views.at(-1)), '表示更新 2列 ／ 再読み込み 1列');
+  assert.deepEqual(env.mounts, []);
+  env.batch.dispose();
+});
+
+test('an Explore reload tolerates its unloading context but waits for a trusted completion before advancing', async () => {
+  const env = batchSetup({ columns: [{ id: 'news', type: 'explore' }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
+  const run = env.batch.run({ target: 'all' });
+  const request = env.messages.find(message => message.type === P + 'request');
+  const emit = (type, status, changes = {}) => env.window.emit('message', {
+    source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + type, status, method: 'reload' }, ...changes,
+  });
+  emit('result', 'reloaded');
+  assert.equal(env.views.at(-1).done, 0, 'completion requires the reload-start acknowledgement');
+  emit('reloading');
+  env.report('news', null);
+  env.batch.syncState();
+  await env.clock.advance(1000);
+  assert.equal(env.views.at(-1).done, 0);
+  assert.equal(env.messages.filter(message => message.type === P + 'request').length, 1);
+  emit('result', 'reloaded', { source: {} });
+  emit('result', 'reloaded', { origin: 'https://untrusted.example' });
+  assert.equal(env.views.at(-1).done, 0);
+  env.report('news', 'explore');
+  emit('result', 'reloaded');
+  await settle();
+  await env.clock.advance(1000);
+  await run;
+  assert.deepEqual(env.views.at(-1).results.map(result => result.status), ['reloaded', 'updated']);
+  env.batch.dispose();
+  assert.equal(env.clock.timers.size, 0);
+});
+
+for (const change of ['offscreen', 'page', 'frame', 'workspace']) {
+  test(`an Explore reload is cancelled on ${change} without replaying it`, async () => {
+    const env = batchSetup({ columns: [{ id: 'news', type: 'explore' }, { id: 'home', type: 'home' }], quiet: (id, type) => id === 'news' && type === P + 'request' });
+    const run = env.batch.run();
+    const request = env.messages.find(message => message.type === P + 'request');
+    env.window.emit('message', { source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + 'reloading' } });
+    env.report('news', null);
+    if (change === 'offscreen') env.visible.delete('news');
+    if (change === 'page') env.report('news', 'search');
+    if (change === 'frame') env.frames.set('news', { postMessage() {} });
+    if (change === 'workspace') env.state.activeWorkspaceId = 'other';
+    env.batch.syncState();
+    await settle();
+    await env.clock.advance(1000);
+    await run;
+    assert.equal(env.views.at(-1).results[0].status, 'skipped');
+    assert.equal(env.messages.filter(message => message.type === P + 'request' && message.columnId === 'news').length, 1);
+    assert.equal(env.messages.filter(message => message.type === P + 'request' && message.columnId === 'home').length, change === 'workspace' ? 0 : 1);
+    env.batch.dispose();
+    assert.equal(env.clock.timers.size, 0);
+  });
+}
+
+test('changing the next Home tab during an all-visible batch does not silently refresh the new tab', async () => {
+  const env = batchSetup();
+  const run = env.batch.run();
+  env.report('home2', 'following');
+  await env.clock.advance(1000);
+  await run;
+  assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.columnId), ['home1']);
+  assert.equal(env.views.at(-1).results[1].reason, 'target-changed');
+  env.batch.dispose();
+});
+
+test('scrolling and updating recommendations select the same visible columns regardless of their initial type', async () => {
+  const env = batchSetup({ columns: [
+    { id: 'search-to-home', type: 'search', activeTab: '最新' },
+    { id: 'home-to-search', type: 'home', activeTab: 'おすすめ' },
+    { id: 'url-to-home', type: 'customUrl' },
+    { id: 'offscreen', type: 'home' },
+    { id: 'live', type: 'home', liveFeed: true },
+  ], currentKinds: { 'search-to-home': 'recommended', 'home-to-search': 'search', 'url-to-home': 'recommended' }, offscreen: ['offscreen'] });
+  const selected = Array.from(env.reader.selectedColumns('group:recommended'), column => column.id);
+  assert.deepEqual(selected, ['search-to-home', 'url-to-home']);
+  const run = env.batch.run({ target: 'group:recommended' });
+  await env.clock.advance(1000);
+  await run;
+  assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.columnId), selected);
+  assert.deepEqual(env.mounts, []);
+  env.batch.dispose();
+});
+
+test('refresh honors an individual selection, never falls back from an empty group, and rechecks queued columns', async () => {
+  const individual = batchSetup();
+  const one = individual.batch.run({ target: 'home2' });
+  await individual.clock.advance(1000);
+  await one;
+  assert.deepEqual(individual.messages.filter(message => message.type === P + 'request').map(message => message.columnId), ['home2']);
+  individual.batch.dispose();
+
+  const empty = batchSetup();
+  await empty.batch.run({ target: 'group:search' });
+  assert.deepEqual(empty.messages, []);
+  assert.equal(empty.batch.view.phase, 'idle');
+  empty.batch.dispose();
+
+  const changed = batchSetup();
+  const run = changed.batch.run({ target: 'group:recommended' });
+  changed.report('home2', 'search');
+  await changed.clock.advance(1000);
+  await run;
+  assert.deepEqual(changed.messages.filter(message => message.type === P + 'request').map(message => message.columnId), ['home1']);
+  assert.equal(changed.views.at(-1).results[1].reason, 'target-changed');
+  changed.batch.dispose();
+});
+
+test('a readiness reply cannot refresh a column that has left the selected group or viewport', async () => {
+  for (const change of [env => env.report('home1', 'search'), env => env.visible.delete('home1')]) {
+    const env = batchSetup({ quiet: (id, type) => id === 'home1' && type === P + 'probe' });
+    const run = env.batch.run();
+    const probe = env.messages[0];
+    change(env);
+    env.window.emit('message', { source: env.frames.get('home1'), origin: 'https://x.com', data: { ...probe, type: P + 'ready' } });
+    await settle();
+    await env.clock.advance(1000);
+    await run;
+    assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.columnId), ['home2']);
+    assert.equal(env.views.at(-1).results[0].reason, 'target-changed');
+    env.batch.dispose();
+  }
+});
+
+test('the floating control enables search-origin columns and forwards the selected target to the actual refresher', async () => {
+  const env = batchSetup({ columns: [
+    { id: 'search1', type: 'search' }, { id: 'search2', type: 'search' },
+  ], currentKinds: { search1: 'recommended', search2: 'recommended' } });
+  const api = env.context.YomikuiFloatingControls;
+  env.context.YomikuiFloatingControls = { ...api, ReadingController: class extends api.ReadingController {
+    constructor(options) { super({ ...options, getVisibleIds: () => env.visible }); }
+  } };
+  const cleanups = [];
+  const React = {
+    useState: value => [typeof value === 'function' ? value() : value, () => {}],
+    useRef: current => ({ current }), useCallback: fn => fn,
+    useEffect: fn => cleanups.push(fn()),
+  };
+  const store = { getState: () => env.state, subscribe: () => () => {} };
+  const element = (type, props) => ({ type, props });
+  const panel = env.api.FloatingControl({
+    React, jsx: { jsx: element }, store, columns: env.state.columns, frames: { current: env.frames },
+    origins: { current: new Map() }, onMountChange() {}, hidden: false,
+  });
+  assert.equal(panel.props.canRefresh, true);
+  panel.props.onRefresh({ target: 'search2' });
+  await env.clock.advance(1000);
+  assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.columnId), ['search2']);
+  cleanups.reverse().forEach(cleanup => cleanup?.());
   env.batch.dispose();
 });
 
@@ -565,19 +974,19 @@ test('spoofed and stale result messages cannot advance the batch', async () => {
   assert.equal(env.clock.timers.size, 0);
 });
 
-test('saved and recently selected Following tabs are skipped before mounting a frame', async () => {
+test('current tabs override stale saved labels and both selected Home tabs are refreshed', async () => {
   const env = batchSetup({ columns: [
     { id: 'home1', type: 'home', activeTab: 'フォロー中' },
     { id: 'home2', type: 'home', activeTab: 'おすすめ' },
     { id: 'home3', type: 'home', activeTab: 'For you' },
-  ] });
+  ], currentKinds: { home1: 'following', home2: 'following', home3: 'recommended' } });
   env.state.columnActiveTabs = { home2: 'Following' };
   const run = env.batch.run();
-  await env.clock.advance(1000);
+  await env.clock.advance(1500);
   await run;
-  assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home3']);
-  assert.deepEqual(env.views.at(-1).results.map(item => item.status), ['skipped', 'skipped', 'updated']);
-  assert.deepEqual(env.mounts.filter(ids => ids.length), [['home3']]);
+  assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => [item.columnId, item.target]), [['home1', 'following'], ['home2', 'following'], ['home3', 'recommended']]);
+  assert.deepEqual(env.views.at(-1).results.map(item => item.status), ['updated', 'updated', 'updated']);
+  assert.deepEqual(env.mounts, []);
   env.batch.dispose();
 });
 
@@ -619,21 +1028,19 @@ for (const cause of ['workspace', 'hidden', 'pagehide']) {
     await run;
     assert.equal(env.views.at(-1).phase, 'cancelled');
     assert.deepEqual(env.messages.filter(item => item.type === P + 'request').map(item => item.columnId), ['home1']);
-    assert.deepEqual(env.mounts.at(-1), []);
+    assert.deepEqual(env.mounts, []);
     env.batch.dispose();
     assert.equal(env.clock.timers.size, 0);
   });
 }
 
-test('disposing during a running batch clears timers and temporary mounts', async () => {
-  const env = batchSetup({ quiet: () => true, late: ['home1'] });
+test('disposing during a running batch clears request deadlines', async () => {
+  const env = batchSetup({ quiet: () => true });
   const run = env.batch.run();
   env.batch.dispose();
   await run;
-  // The fixture's delayed mount completion is independent of the controller.
-  await env.clock.advance(150);
   assert.equal(env.clock.timers.size, 0);
-  assert.deepEqual(env.mounts.at(-1), []);
+  assert.deepEqual(env.mounts, []);
 });
 
 test('a late native frame-ready event allows a new readiness probe but only one update', async () => {

@@ -500,7 +500,7 @@ test('targets are saved independently per workspace without losing overlapping w
   assert.equal(await env.api.loadTarget('second'), 'group:search');
   assert.equal(await env.api.loadTarget('third'), 'all');
   const nodes = panelTree(env, { workspaceId: 'third' });
-  nodes.find(node => node.type === 'select' && node.props['aria-label'] === '閲覧する列').props.onChange({ target: { value: 'group:following' } });
+  nodes.find(node => node.type === 'select' && node.props['aria-label'] === '対象の列').props.onChange({ target: { value: 'group:following' } });
   await settle();
   assert.equal(await env.api.loadTarget('third'), 'group:following');
 });
@@ -511,10 +511,10 @@ test('group counts stay visible when folded; empty groups and a restoring worksp
   assert.match(grouped.find(node => node.props?.className === 'yf-summary').props.children, /おすすめ・1列/);
   const empty = panelTree(env, { target: 'group:search' });
   assert.ok(empty.filter(node => ['yf-up', 'yf-down', 'yf-top'].includes(node.props?.className)).every(node => node.props.disabled));
-  assert.equal(empty.find(node => node.type === 'select' && node.props['aria-label'] === '閲覧する列').props.value, 'group:search');
+  assert.equal(empty.find(node => node.type === 'select' && node.props['aria-label'] === '対象の列').props.value, 'group:search');
   const switching = panelTree(env, { selectedWorkspaceId: 'previous', target: 'all' });
   assert.ok(switching.filter(node => ['yf-up', 'yf-down', 'yf-top'].includes(node.props?.className)).every(node => node.props.disabled));
-  assert.equal(switching.find(node => node.type === 'select' && node.props['aria-label'] === '閲覧する列').props.disabled, true);
+  assert.equal(switching.find(node => node.type === 'select' && node.props['aria-label'] === '対象の列').props.disabled, true);
 });
 
 test('background color and transparency are saved independently and preserved with the mode when folding', async () => {
@@ -540,21 +540,49 @@ test('background color and transparency are saved independently and preserved wi
   assert.equal(saved.collapsed, true);
 });
 
-test('collapsed controls retain top, step actions and the separate all-home refresh', () => {
+test('collapsed controls send the same selected target to reading and recommendation updates', () => {
   const env = setup();
   const actions = [];
-  let refreshed = 0;
-  const nodes = panelTree(env, { collapsed: true, target: 'one', mode: 'page', onNavigate: action => actions.push(clone(action)), onRefresh: () => refreshed++ });
+  const refreshes = [];
+  const nodes = panelTree(env, { collapsed: true, target: 'one', mode: 'page', onNavigate: action => actions.push(clone(action)), onRefresh: action => refreshes.push(clone(action)) });
   const byClass = name => nodes.find(node => node.props?.className === name);
   assert.equal(byClass('yf-fields').props.hidden, true);
   for (const name of ['yf-top', 'yf-up', 'yf-down', 'yf-refresh']) assert.equal(byClass(name).props.disabled, false);
   byClass('yf-top').props.onClick();
   byClass('yf-down').props.onClick();
   assert.deepEqual(actions, [{ target: 'one', mode: 'top' }, { target: 'one', direction: 1, mode: 'page' }]);
-  assert.equal(byClass('yf-refresh').props['aria-label'], 'ホームを一括更新', 'the icon-only refresh keeps an accessible name');
+  assert.equal(byClass('yf-refresh').props['aria-label'], '選択中の列を更新', 'the icon-only refresh keeps an accessible name');
   byClass('yf-refresh').props.onClick();
-  assert.equal(refreshed, 1);
-  assert.match(byClass('yf-refresh').props.title, /ホーム列全体/);
+  assert.deepEqual(refreshes, [{ target: 'one' }]);
+  assert.match(byClass('yf-refresh').props.title, /選択範囲内.*1列/);
+});
+
+test('refresh is disabled for unknown, offscreen or unsupported targets and while restoring a workspace', () => {
+  const env = setup();
+  for (const props of [
+    { target: 'group:search', kinds: { one: 'search' } },
+    { target: 'offscreen' }, { kinds: {} }, { selectedWorkspaceId: 'previous' }, { ready: false },
+  ]) {
+    const button = panelTree(env, props).find(node => node.props?.className === 'yf-refresh');
+    assert.equal(button.props.disabled, true);
+  }
+  const search = panelTree(env, { target: 'group:search', kinds: { one: 'search' } });
+  assert.match(search.find(node => node.props?.className === 'yf-refresh').props.title, /キーワード検索の結果の更新には対応していません/);
+});
+
+test('Following and Explore can be selected and refreshed from folded controls with the correct explanation', () => {
+  const env = setup();
+  for (const [kind, label] of [['following', 'フォロー中'], ['explore', '話題を検索']]) {
+    const actions = [];
+    const nodes = panelTree(env, { target: `group:${kind}`, kinds: { one: kind }, collapsed: true, onRefresh: action => actions.push(clone(action)) });
+    const button = nodes.find(node => node.props?.className === 'yf-refresh');
+    assert.equal(button.props.disabled, false);
+    assert.match(button.props.title, new RegExp(`${label} 1列`));
+    assert.match(button.props.title, /現在のページを再読み込み/);
+    assert.ok(nodes.some(node => node.type === 'option' && node.props.value === `group:${kind}`));
+    button.props.onClick();
+    assert.deepEqual(actions, [{ target: `group:${kind}` }]);
+  }
 });
 
 test('one status line shows the latest operation and keeps full results available as a tooltip', () => {
