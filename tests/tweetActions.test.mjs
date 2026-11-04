@@ -12,7 +12,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const keys = ['showQuoteList', 'showRetweetList', 'hideViews', 'hideShare'];
 const allEnabled = Object.fromEntries(keys.map(key => [key, true]));
 const allDisabled = Object.fromEntries(keys.map(key => [key, false]));
-const defaultSettings = { showQuoteList: false, showRetweetList: false, hideViews: true, hideShare: true };
+const defaultSettings = { showQuoteList: true, showRetweetList: true, hideViews: true, hideShare: true };
 const element = (type, props, key) => ({ type, props, key });
 const jsx = { jsx: element, jsxs: element, Fragment: 'Fragment' };
 
@@ -83,14 +83,15 @@ test('native links use the main tweet, preserve column navigation, and leave rep
   }
   controller.update(allEnabled);
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 4);
-  controller.update({ showQuoteList: true });
+  controller.update({ showQuoteList: true, showRetweetList: false });
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action="quotes"]').length, 2);
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action="retweets"]').length, 0);
   controller.update({});
-  assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 0);
+  assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 4);
   assert.match(document.getElementById('yomikui-tweet-action-styles').textContent, /analytics/);
   controller.update(allDisabled);
   assert.equal(document.getElementById('yomikui-tweet-action-styles'), null);
+  assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 0);
 });
 
 test('native text-only tweet counts arrive through the shipped response consumer and update without media', async () => {
@@ -205,7 +206,7 @@ test('native observation stops in hidden columns and resumes with current tweet 
   document.dispatchEvent(new Event('visibilitychange'));
   assert.equal(observers.at(-1).connected, false);
   await clock.advance(1000);
-  controller.update({ hideViews: true, hideShare: true });
+  controller.update({ ...allDisabled, hideViews: true, hideShare: true });
   document.hidden = false;
   document.dispatchEvent(new Event('visibilitychange'));
   assert.equal(observers.at(-1).connected, false, 'hiding native buttons requires no observer');
@@ -273,7 +274,7 @@ test('list links show numbers to the right only for known counts of at least one
 test('column controls toggle all four settings independently and expose accessible labels', () => {
   const { actions } = setup();
   const changes = [];
-  const tree = actions.SettingsControls({ column: { showQuoteList: true }, onChange: change => changes.push(clone(change)), Switch: 'Switch', Label: 'Label', jsx, t: key => key });
+  const tree = actions.SettingsControls({ column: { showRetweetList: false }, onChange: change => changes.push(clone(change)), Switch: 'Switch', Label: 'Label', jsx, t: key => key });
   for (const [index, row] of tree.props.children.entries()) {
     const [label, toggle] = row.props.children;
     assert.equal(toggle.props['aria-label'], label.props.label);
@@ -345,6 +346,7 @@ for (const entry of [
     assert.equal(enabledTree.some(node => node.props?.title === '42 Views'), false);
     context.receive({});
     assert.equal(nodes(render()).some(node => node.props?.title === '42 Views'), false, 'views are hidden by default');
+    assert.equal(actions.ListLinks(nodes(render()).find(node => node.type === actions.ListLinks).props).props.children.filter(Boolean).length, 2, 'list links are shown by default');
     context.receive(allDisabled);
     const disabledTree = nodes(render());
     assert.equal(disabledTree.some(node => node.props?.title === '42 Views'), true);
@@ -386,10 +388,14 @@ test('legacy column defaults and persisted workspace settings survive schema val
   }
   const workspace = { id: 'workspace', name: 'workspace', columns: [column], createdAt: 0, updatedAt: 0 };
   store.setState({ activeWorkspaceId: workspace.id, columns: [column], workspaces: [workspace] });
-  store.getState().updateColumn(column.id, allEnabled);
+  store.getState().updateColumn(column.id, allDisabled);
   await clock.advance(280);
   const loaded = (await loadWorkspaces()).workspaces[0].columns[0];
-  for (const key of keys) assert.equal(loaded[key], true);
+  for (const key of keys) assert.equal(loaded[key], false);
+  store.getState().updateColumn(column.id, allEnabled);
+  await clock.advance(280);
+  const reloaded = (await loadWorkspaces()).workspaces[0].columns[0];
+  for (const key of keys) assert.equal(reloaded[key], true);
   store.getState().duplicateColumn(column.id);
   for (const key of keys) assert.equal(store.getState().columns[1][key], true);
 });

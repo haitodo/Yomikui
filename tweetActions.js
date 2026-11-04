@@ -9,8 +9,8 @@
   const COUNT = 'data-yomikui-action-count';
   const STYLE_ID = 'yomikui-tweet-action-styles';
   const SETTINGS = Object.freeze([
-    { key: 'showQuoteList', label: 'column_settings_show_quote_list', description: 'column_settings_show_quote_list_desc' },
-    { key: 'showRetweetList', label: 'column_settings_show_retweet_list', description: 'column_settings_show_retweet_list_desc' },
+    { key: 'showQuoteList', label: 'column_settings_show_quote_list', description: 'column_settings_show_quote_list_desc', defaultValue: true },
+    { key: 'showRetweetList', label: 'column_settings_show_retweet_list', description: 'column_settings_show_retweet_list_desc', defaultValue: true },
     { key: 'hideViews', label: 'column_settings_hide_views', description: 'column_settings_hide_views_desc', defaultValue: true },
     { key: 'hideShare', label: 'column_settings_hide_share', description: 'column_settings_hide_share_desc', defaultValue: true },
   ]);
