@@ -18,6 +18,7 @@
     { key: 'showQuoteList', kind: 'quotes', label: 'tweet_action_quote_list', fallback: '引用リツイート一覧', path: 'M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4v4h2v2H6v-4a2 2 0 0 1 1-2Zm7 0v4h2v2h-3v-4a2 2 0 0 1 1-2Z' },
     { key: 'showRetweetList', kind: 'retweets', label: 'tweet_action_retweet_list', fallback: 'リツイート一覧', path: 'm5 2 4 4-1.4 1.4L6 5.8V15a2 2 0 0 0 2 2h3v2H8a4 4 0 0 1-4-4V5.8L2.4 7.4 1 6l4-4Zm11 3a4 4 0 0 1 4 4v9.2l1.6-1.6L23 18l-4 4-4-4 1.4-1.4 1.6 1.6V9a2 2 0 0 0-2-2h-3V5h3ZM9 10h6v2H9v-2Zm0 4h6v2H9v-2Z' },
   ]);
+  const IGNORED_RESPONSE_KEYS = new Set(['user_results', 'feedbackInfo', 'clientEventInfo', 'responseObjects', 'ext']);
 
   function normalizeSettings(value = {}) {
     return Object.fromEntries(SETTINGS.map(({ key, defaultValue = false }) => [key, typeof value[key] === 'boolean' ? value[key] : defaultValue]));
@@ -69,7 +70,7 @@
       }
       for (const [key, value] of Object.entries(node)) {
         if (!value || typeof value !== 'object') continue;
-        if (key === 'user_results' || key === 'feedbackInfo' || key === 'clientEventInfo' || key === 'responseObjects' || key === 'ext') continue;
+        if (IGNORED_RESPONSE_KEYS.has(key)) continue;
         stack.push(value);
       }
     }
@@ -108,13 +109,14 @@
   }
 
   function SettingsControls({ column, onChange, Switch, Label, jsx, t, rowClassName, disabled = false }) {
+    const settings = normalizeSettings(column);
     return jsx.jsx(jsx.Fragment, {
       children: SETTINGS.map(setting => jsx.jsxs('div', {
         className: rowClassName,
         children: [
           jsx.jsx(Label, { label: t(setting.label), description: t(setting.description) }),
           jsx.jsx(Switch, {
-            checked: normalizeSettings(column)[setting.key],
+            checked: settings[setting.key],
             disabled,
             'aria-label': t(setting.label),
             onCheckedChange: checked => onChange({ [setting.key]: checked === true }),

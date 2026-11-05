@@ -626,7 +626,6 @@
     if (typeof template !== "string") return "";
     let out = template;
     for (let i = 0; i < args.length; i++) {
-      const token = `$${i + 1}`;
       out = out.replace(new RegExp(`\\$${i + 1}\\$?`, "g"), String(args[i]));
     }
     return out;
