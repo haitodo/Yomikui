@@ -631,24 +631,67 @@
     return out;
   }
 
+  function LinkIcon({ jsx }) {
+    return jsx.jsxs("svg", {
+      xmlns: "http://www.w3.org/2000/svg",
+      width: 14,
+      height: 14,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: 2,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      className: "shrink-0 text-muted-foreground",
+      "aria-hidden": true,
+      focusable: "false",
+      children: [
+        jsx.jsx("path", { d: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" }),
+        jsx.jsx("path", { d: "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" }),
+      ],
+    });
+  }
+
   // --- Settings UI Component (placed in Column Settings -> General) ---
-  function SettingsControls({ column, columns, onChange, formatColumnName, jsx, t, disabled = false }) {
+  // Rendered as a compact row matching other settings items: label on the left,
+  // segmented mode buttons on the right ([この列] [右隣] [指定…]).
+  // Selecting "指定…" reveals an inline target column picker chip-row directly beneath it.
+  function SettingsControls({
+    column,
+    columns,
+    onChange,
+    formatColumnName,
+    jsx,
+    t,
+    Label,
+    rowClassName = "flex min-h-9 items-center justify-between gap-4",
+    disabled = false,
+  }) {
     if (!column || !isSourceEligible(column)) return null;
+
+    const tr = (key, fallback) => {
+      if (typeof t !== "function") return fallback;
+      const val = t(key);
+      return val && typeof val === "string" && val !== key && !val.startsWith("column_settings_")
+        ? val
+        : fallback;
+    };
+
     const cols = Array.isArray(columns) ? columns : [];
     const nameOf = col => (typeof formatColumnName === "function" ? formatColumnName(col) : col?.title) || "";
     const formatItem = (idx, col) => {
-      const msg = t("column_settings_link_target_col_item", [idx + 1, nameOf(col)]);
-      return msg && !msg.includes("$1") ? msg : replacePlaceholders(msg || "$1列目: $2", [idx + 1, nameOf(col)]);
+      const msg = tr("column_settings_link_target_col_item", "$1列目: $2");
+      return replacePlaceholders(msg, [idx + 1, nameOf(col)]);
     };
 
     const nextInfo = resolveNextColumn(column.id, cols);
-    const nextOptionLabel = nextInfo
+    const nextOptionTitle = nextInfo
       ? (() => {
           const itemLabel = formatItem(nextInfo.index, nextInfo.column);
-          const msg = t("column_settings_link_target_next_with_name", [itemLabel]);
-          return msg && !msg.includes("$1") ? msg : replacePlaceholders(msg || "右隣の列（$1）", [itemLabel]);
+          const msg = tr("column_settings_link_target_next_with_name", "右隣の列（$1）");
+          return replacePlaceholders(msg, [itemLabel]);
         })()
-      : t("column_settings_link_target_next_unavailable");
+      : tr("column_settings_link_target_next_unavailable", "右隣の列（現在対象なし）");
 
     const eligibleTargets = [];
     for (let i = 0; i < cols.length; i++) {
@@ -661,44 +704,147 @@
     const effectiveValue =
       rawValue === "next" || eligibleTargets.some(item => item.id === rawValue) ? rawValue : "";
 
-    const selectId = `yomikui-link-target-${column.id}`;
-    const descId = `${selectId}-desc`;
+    const isCustom = effectiveValue !== "" && effectiveValue !== "next";
+    const currentMode = effectiveValue === "" ? "self" : effectiveValue === "next" ? "next" : "custom";
+
+    const defaultDesc = tr(
+      "column_settings_link_target_desc",
+      "ツイート・一覧・ユーザー・ハッシュタグ等の遷移先を開く列を指定します。"
+    );
     const descText =
       effectiveValue === "next" && !nextInfo
-        ? `${t("column_settings_link_target_desc")} ${t("column_settings_link_target_next_missing_note")}`
-        : t("column_settings_link_target_desc");
+        ? `${defaultDesc} ${tr("column_settings_link_target_next_missing_note", "※右隣に表示可能な列がない間は、この列で開きます。")}`
+        : defaultDesc;
 
-    return jsx.jsxs("div", {
-      className: "flex flex-col gap-2 py-1",
+    const labelText = tr("column_settings_link_target", "リンクの表示先");
+
+    const labelNode = jsx.jsxs("span", {
+      className: "shrink-0 flex items-center gap-1.5 text-sm text-foreground whitespace-nowrap",
+      title: descText,
       children: [
-        jsx.jsx("label", {
-          htmlFor: selectId,
-          className: "text-sm text-foreground",
-          children: t("column_settings_link_target"),
-        }),
-        jsx.jsxs("select", {
-          id: selectId,
-          value: effectiveValue,
-          disabled,
-          "aria-describedby": descId,
-          className: "h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground",
-          onChange: event => {
-            onChange({ linkTarget: event.currentTarget.value || "" });
-          },
+        jsx.jsx(LinkIcon, { jsx }),
+        jsx.jsx("span", { className: "whitespace-nowrap", children: labelText }),
+      ],
+    });
+
+    const selfLabel = tr("column_settings_link_target_mode_self", "この列");
+    const nextLabel = tr("column_settings_link_target_mode_next", "右隣");
+    const customLabel = tr("column_settings_link_target_mode_custom", "指定…");
+
+    const buttonBaseClass =
+      "flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium whitespace-nowrap transition-colors";
+    const activeClass = "bg-accent text-accent-foreground";
+    const inactiveClass = "text-muted-foreground hover:bg-muted/50";
+
+    const primaryRow = jsx.jsxs("div", {
+      className: rowClassName,
+      children: [
+        labelNode,
+        jsx.jsxs("div", {
+          role: "group",
+          "aria-label": labelText,
+          className: "flex shrink-0 overflow-hidden rounded-lg border border-border",
           children: [
-            jsx.jsx("option", { value: "", children: t("column_settings_link_target_self") }, "self"),
-            jsx.jsx("option", { value: "next", children: nextOptionLabel }, "next"),
-            ...eligibleTargets.map(item =>
-              jsx.jsx("option", { value: item.id, children: item.label }, item.id)
-            ),
+            jsx.jsx("button", {
+              type: "button",
+              "aria-pressed": currentMode === "self",
+              disabled,
+              title: tr("column_settings_link_target_self", "この列で開く（標準）"),
+              className: `${buttonBaseClass} ${currentMode === "self" ? activeClass : inactiveClass}`,
+              onClick: () => {
+                if (currentMode !== "self") onChange({ linkTarget: "" });
+              },
+              children: selfLabel,
+            }, "self"),
+            jsx.jsx("button", {
+              type: "button",
+              "aria-pressed": currentMode === "next",
+              disabled: disabled || !nextInfo,
+              title: nextOptionTitle,
+              className: `${buttonBaseClass} ${
+                currentMode === "next"
+                  ? activeClass
+                  : !nextInfo
+                    ? "opacity-50 cursor-not-allowed text-muted-foreground"
+                    : inactiveClass
+              }`,
+              onClick: () => {
+                if (nextInfo && currentMode !== "next") onChange({ linkTarget: "next" });
+              },
+              children: nextLabel,
+            }, "next"),
+            jsx.jsx("button", {
+              type: "button",
+              "aria-pressed": currentMode === "custom",
+              disabled: disabled || eligibleTargets.length === 0,
+              title: tr("column_settings_link_target_desc", "特定の列を指定して開きます"),
+              className: `${buttonBaseClass} ${
+                currentMode === "custom"
+                  ? activeClass
+                  : eligibleTargets.length === 0
+                    ? "opacity-50 cursor-not-allowed text-muted-foreground"
+                    : inactiveClass
+              }`,
+              onClick: () => {
+                if (eligibleTargets.length > 0 && currentMode !== "custom") {
+                  onChange({ linkTarget: eligibleTargets[0].id });
+                }
+              },
+              children: customLabel,
+            }, "custom"),
           ],
         }),
-        jsx.jsx("p", {
-          id: descId,
-          className: "text-xs text-muted-foreground",
-          children: descText,
-        }),
       ],
+    });
+
+    const customRow = isCustom && eligibleTargets.length > 0
+      ? jsx.jsxs("div", {
+          className: "flex flex-wrap items-center gap-1.5 pl-5 pb-1",
+          children: [
+            jsx.jsx("span", {
+              className: "text-xs text-muted-foreground shrink-0 mr-0.5 whitespace-nowrap",
+              children: tr("column_settings_link_target_select_col", "送り先:"),
+            }),
+            ...eligibleTargets.map(item => {
+              const isSelected = effectiveValue === item.id;
+              return jsx.jsx("button", {
+                type: "button",
+                "aria-pressed": isSelected,
+                disabled,
+                title: item.label,
+                className:
+                  "rounded-md border px-2 py-1 text-xs font-medium whitespace-nowrap transition-colors " +
+                  (isSelected
+                    ? "border-primary bg-primary text-primary-foreground shadow-xs"
+                    : "border-border bg-background text-foreground hover:bg-muted/60"),
+                onClick: () => {
+                  if (!isSelected) onChange({ linkTarget: item.id });
+                },
+                children: item.label,
+              }, item.id);
+            }),
+          ],
+        })
+      : null;
+
+    const nextMissingNote =
+      currentMode === "next" && !nextInfo
+        ? jsx.jsx("p", {
+            className: "text-xs text-muted-foreground pl-5 pb-1",
+            children: tr(
+              "column_settings_link_target_next_missing_note",
+              "※右隣に表示可能な列がない間は、この列で開きます。"
+            ),
+          })
+        : null;
+
+    if (!customRow && !nextMissingNote) {
+      return primaryRow;
+    }
+
+    return jsx.jsxs("div", {
+      className: "flex flex-col gap-1.5",
+      children: [primaryRow, customRow, nextMissingNote].filter(Boolean),
     });
   }
 

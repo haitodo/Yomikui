@@ -256,6 +256,21 @@
   "column_settings_link_target_self": {
     "message": "この列で開く（標準）"
   },
+  "column_settings_link_target_mode_self": {
+    "message": "この列"
+  },
+  "column_settings_link_target_mode_next": {
+    "message": "右隣"
+  },
+  "column_settings_link_target_mode_custom": {
+    "message": "指定…"
+  },
+  "column_settings_link_target_select_col": {
+    "message": "送り先:"
+  },
+  "column_settings_link_target_no_targets": {
+    "message": "指定可能な列がありません"
+  },
   "column_settings_link_target_next_with_name": {
     "message": "右隣の列（$1$）",
     "placeholders": {

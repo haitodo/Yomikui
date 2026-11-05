@@ -294,7 +294,7 @@ test("openInPlace detects SPA arrival for user profiles as well as tweets and re
   assert.equal(hrefReloads, 0);
 });
 
-test("SettingsControls renders per-column dropdown with self, right-neighbor, and numbered columns", () => {
+test("SettingsControls renders compact segmented buttons (self, next, custom) and inline target chips", () => {
   const { routing } = setup();
   const element = (type, props, key) => ({ type, props, key });
   const jsx = { jsx: element, jsxs: element, Fragment: "Fragment" };
@@ -302,6 +302,10 @@ test("SettingsControls renders per-column dropdown with self, right-neighbor, an
     column_settings_link_target: "リンクの表示先の列",
     column_settings_link_target_desc: "説明",
     column_settings_link_target_self: "この列で開く（標準）",
+    column_settings_link_target_mode_self: "この列",
+    column_settings_link_target_mode_next: "右隣",
+    column_settings_link_target_mode_custom: "指定…",
+    column_settings_link_target_select_col: "送り先:",
     column_settings_link_target_next_with_name: "右隣の列（$1$）",
     column_settings_link_target_next_unavailable: "右隣の列（現在対象なし）",
     column_settings_link_target_col_item: "$1$列目: $2$",
@@ -317,6 +321,7 @@ test("SettingsControls renders per-column dropdown with self, right-neighbor, an
   ];
 
   const changes = [];
+  // cols[1] は linkTarget: "c3" なので custom モード、ピル行が展開される
   const tree = routing.SettingsControls({
     column: cols[1], // 2列目
     columns: cols,
@@ -326,21 +331,58 @@ test("SettingsControls renders per-column dropdown with self, right-neighbor, an
     t,
   });
 
-  const select = tree.props.children[1];
-  assert.equal(select.type, "select");
-  assert.equal(select.props.value, "c3");
+  // custom モードなので [primaryRow, customRow] のコンテナ
+  assert.equal(tree.type, "div");
+  const [primaryRow, customRow] = tree.props.children;
 
-  const options = Array.from(select.props.children, opt => ({ value: opt.props.value, label: opt.props.children }));
-  assert.deepEqual(options, [
-    { value: "", label: "この列で開く（標準）" },
-    { value: "next", label: "右隣の列（3列目: 検索）" },
-    { value: "c1", label: "1列目: 通知" },
-    { value: "c3", label: "3列目: 検索" },
-    { value: "c4", label: "4列目: プロフィール用" },
-  ]);
+  const segGroup = primaryRow.props.children[1];
+  assert.equal(segGroup.props.role, "group");
+  const buttons = segGroup.props.children;
+  assert.equal(buttons.length, 3);
+  assert.equal(buttons[0].props["aria-pressed"], false); // この列
+  assert.equal(buttons[1].props["aria-pressed"], false); // 右隣
+  assert.equal(buttons[2].props["aria-pressed"], true); // 指定…
 
-  select.props.onChange({ currentTarget: { value: "next" } });
+  // 「右隣」ボタンをクリック
+  buttons[1].props.onClick();
   assert.equal(changes[0].linkTarget, "next");
+
+  // 「この列」ボタンをクリック
+  buttons[0].props.onClick();
+  assert.equal(changes[1].linkTarget, "");
+
+  // customRow のピル一覧を検証
+  const chips = customRow.props.children.slice(1); // 先頭の "送り先:" を除く
+  assert.equal(chips.length, 3);
+  assert.equal(chips[0].key, "c1");
+  assert.equal(chips[0].props.children, "1列目: 通知");
+  assert.equal(chips[0].props["aria-pressed"], false);
+
+  assert.equal(chips[1].key, "c3");
+  assert.equal(chips[1].props.children, "3列目: 検索");
+  assert.equal(chips[1].props["aria-pressed"], true);
+
+  assert.equal(chips[2].key, "c4");
+  assert.equal(chips[2].props.children, "4列目: プロフィール用");
+  assert.equal(chips[2].props["aria-pressed"], false);
+
+  // ピル c1 をクリック
+  chips[0].props.onClick();
+  assert.equal(changes[2].linkTarget, "c1");
+
+  // 通常モード（linkTarget: ""）では単一の行のみが返されることを検証
+  const selfTree = routing.SettingsControls({
+    column: cols[0],
+    columns: cols,
+    onChange: patch => changes.push(patch),
+    formatColumnName: col => col.title,
+    jsx,
+    t,
+  });
+  // customRow がないので primaryRow 自体が返る
+  assert.equal(selfTree.props.className, "flex min-h-9 items-center justify-between gap-4");
+  const selfButtons = selfTree.props.children[1].props.children;
+  assert.equal(selfButtons[0].props["aria-pressed"], true); // この列が active
 });
 
 test("installFrame dynamically attaches click listener only while enabled and validates message origin", () => {
