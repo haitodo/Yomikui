@@ -943,10 +943,153 @@
     }
   }
 
+  // --- Auto-select /all tab on profile navigation ---
+  let userSelectedTab = false;
+  let activeProfileHandle = null;
+  let autoTabObserver = null;
+
+  function getCurrentProfileHandle() {
+    if (typeof window === "undefined" || !window.location) return null;
+    const pathname = withoutTrailingSlashes(window.location.pathname || "");
+    if (!pathname) return null;
+    const match = pathname.match(/^\/([A-Za-z0-9_]+)(?:\/(all|with_replies|highlights|articles|media))?$/i);
+    if (!match) return null;
+    const handle = match[1];
+    if (RESERVED_ROOT_PATHS.has(handle.toLowerCase()) || EXCLUDED_ROOT_ROUTE_RE.test(`/${handle}`)) {
+      return null;
+    }
+    const subtab = match[2] ? match[2].toLowerCase() : "";
+    return { handle: handle.toLowerCase(), subtab };
+  }
+
+  function tryClickAllTab() {
+    const profile = getCurrentProfileHandle();
+    if (!profile) {
+      activeProfileHandle = null;
+      userSelectedTab = false;
+      return false;
+    }
+
+    if (activeProfileHandle !== profile.handle) {
+      activeProfileHandle = profile.handle;
+      userSelectedTab = false;
+    }
+
+    if (profile.subtab === "all" || userSelectedTab) {
+      return true;
+    }
+
+    const root = document.querySelector?.('[data-testid="primaryColumn"]') || document;
+    if (!root || typeof root.querySelectorAll !== "function") return false;
+
+    const tabs = root.querySelectorAll('a[role="tab"]');
+    for (let i = 0; i < tabs.length; i++) {
+      const tab = tabs[i];
+      const href = (tab.getAttribute?.("href") || "").toLowerCase();
+      const text = (tab.textContent || "").trim();
+      const isAllTab =
+        href.endsWith("/all") ||
+        href.includes(`/${profile.handle}/all`) ||
+        text === "すべて" ||
+        text === "All";
+
+      if (isAllTab) {
+        if (tab.getAttribute?.("aria-selected") !== "true") {
+          tab.click?.();
+        }
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function startAutoTabObserver() {
+    if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
+    if (autoTabObserver) return;
+
+    autoTabObserver = new MutationObserver(() => {
+      tryClickAllTab();
+    });
+
+    const attach = () => {
+      const target = document.documentElement || document.body;
+      if (!target || typeof autoTabObserver.observe !== "function") return false;
+      try {
+        autoTabObserver.observe(target, { childList: true, subtree: true });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (!attach()) {
+      document.addEventListener?.(
+        "DOMContentLoaded",
+        () => {
+          attach();
+          tryClickAllTab();
+        },
+        { once: true }
+      );
+    }
+
+    tryClickAllTab();
+  }
+
+  function hookHistoryForProfileNavigation() {
+    if (typeof window === "undefined" || !window.history) return;
+
+    const onNavChange = () => {
+      const profile = getCurrentProfileHandle();
+      if (!profile) {
+        activeProfileHandle = null;
+        userSelectedTab = false;
+      } else if (activeProfileHandle !== profile.handle) {
+        activeProfileHandle = profile.handle;
+        userSelectedTab = false;
+      }
+      tryClickAllTab();
+    };
+
+    try {
+      const origPush = window.history.pushState?.bind(window.history);
+      if (origPush) {
+        window.history.pushState = function(...args) {
+          const res = origPush(...args);
+          onNavChange();
+          return res;
+        };
+      }
+      const origReplace = window.history.replaceState?.bind(window.history);
+      if (origReplace) {
+        window.history.replaceState = function(...args) {
+          const res = origReplace(...args);
+          onNavChange();
+          return res;
+        };
+      }
+    } catch {}
+
+    window.addEventListener?.("popstate", onNavChange);
+    document.addEventListener?.(
+      "click",
+      (e) => {
+        const tab = e.target?.closest?.('a[role="tab"], [role="tab"]');
+        if (tab) {
+          userSelectedTab = true;
+        }
+      },
+      true
+    );
+  }
+
   function initProfileLinkRewriter() {
     if (typeof document === "undefined" || typeof document.addEventListener !== "function") return;
     document.addEventListener("pointerdown", handleProfileLinkInteraction, true);
     document.addEventListener("click", handleProfileLinkInteraction, true);
+    hookHistoryForProfileNavigation();
+    startAutoTabObserver();
   }
 
   initProfileLinkRewriter();
@@ -957,6 +1100,8 @@
     toProfileAllPath,
     rewriteProfileAnchor,
     handleProfileLinkInteraction,
+    getCurrentProfileHandle,
+    tryClickAllTab,
     normalizeStatusPath,
     normalizeRoutePath,
     isTargetEligible,

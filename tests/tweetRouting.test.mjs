@@ -614,3 +614,43 @@ test("profile links default to /all while preserving reserved routes and explici
   await clock.advance(100);
   assert.equal(obs.connected, false);
 });
+
+test("auto-selects /all tab on profile navigation while respecting manual tab clicks", () => {
+  const html = `
+    <div data-testid="primaryColumn" id="primary">
+      <div role="tablist">
+        <a role="tab" href="/eve" aria-selected="true" id="tab-posts">Posts</a>
+        <a role="tab" href="/eve/with_replies" aria-selected="false" id="tab-replies">Replies</a>
+        <a role="tab" href="/eve/all" aria-selected="false" id="tab-all">All</a>
+      </div>
+    </div>
+  `;
+  const { routing, document, window, Event } = setup(html);
+
+  window.location.pathname = "/eve";
+  window.location.href = "https://x.com/eve";
+
+  let clicked = false;
+  document.getElementById("tab-all").click = () => { clicked = true; };
+
+  // Navigating to /eve should trigger auto-click on the /all tab
+  assert.equal(routing.tryClickAllTab(), true);
+  assert.equal(clicked, true);
+
+  // If user explicitly clicks another tab (e.g. posts), manual override is preserved
+  clicked = false;
+  const clickEvent = new Event("click", { bubbles: true });
+  document.getElementById("tab-posts").dispatchEvent(clickEvent);
+
+  // Subsequent check should NOT auto-click /all because user chose a tab manually
+  assert.equal(routing.tryClickAllTab(), true);
+  assert.equal(clicked, false);
+
+  // Navigating to another user's profile resets manual override and auto-clicks /all
+  window.location.pathname = "/frank";
+  window.location.href = "https://x.com/frank";
+  document.getElementById("tab-all").setAttribute("href", "/frank/all");
+
+  assert.equal(routing.tryClickAllTab(), true);
+  assert.equal(clicked, true);
+});
