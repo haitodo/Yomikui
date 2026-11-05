@@ -232,18 +232,30 @@ test("resolveClickTarget handles tweets, UserCell rows, profiles, hashtags, and 
   assert.equal(routing.resolveClickTarget(click("quote-card")), "/quoted_user/status/202");
   assert.equal(routing.resolveClickTarget(click("rt-list-btn")), "/tweet_author/status/101/retweets");
 
-  // Author profile, @mention, #hashtag
-  assert.equal(routing.resolveClickTarget(click("author-avatar")), "/tweet_author");
-  assert.equal(routing.resolveClickTarget(click("mention")), "/mentioned_user");
+  // Author profile, @mention, #hashtag -> profiles default to /all, hashtag remains
+  assert.equal(routing.resolveClickTarget(click("author-avatar")), "/tweet_author/all");
+  assert.equal(routing.resolveClickTarget(click("mention")), "/mentioned_user/all");
   assert.equal(routing.resolveClickTarget(click("hashtag")), "/hashtag/Yomikui?src=hashtag_click");
 
-  // UserCell in Retweet list: avatar, name, plain bio/row background -> /cell_owner; bio @mention -> /bio_friend; Follow button -> null!
-  assert.equal(routing.resolveClickTarget(click("cell-avatar")), "/cell_owner");
-  assert.equal(routing.resolveClickTarget(click("cell-name")), "/cell_owner");
-  assert.equal(routing.resolveClickTarget(click("cell-bio-plain")), "/cell_owner");
-  assert.equal(routing.resolveClickTarget(click("user-cell")), "/cell_owner");
-  assert.equal(routing.resolveClickTarget(click("cell-bio-mention")), "/bio_friend");
+  // UserCell in Retweet list: avatar, name, plain bio/row background -> /cell_owner/all; bio @mention -> /bio_friend/all; Follow button -> null!
+  assert.equal(routing.resolveClickTarget(click("cell-avatar")), "/cell_owner/all");
+  assert.equal(routing.resolveClickTarget(click("cell-name")), "/cell_owner/all");
+  assert.equal(routing.resolveClickTarget(click("cell-bio-plain")), "/cell_owner/all");
+  assert.equal(routing.resolveClickTarget(click("user-cell")), "/cell_owner/all");
+  assert.equal(routing.resolveClickTarget(click("cell-bio-mention")), "/bio_friend/all");
   assert.equal(routing.resolveClickTarget(click("cell-follow-btn")), null);
+
+  // In-place anchor rewriting on interaction (for standard navigation, middle-click, new tab)
+  routing.handleProfileLinkInteraction(click("author-avatar"));
+  assert.equal(document.getElementById("author-avatar").getAttribute("href"), "/tweet_author/all");
+
+  routing.handleProfileLinkInteraction(click("user-cell"));
+  assert.equal(document.getElementById("cell-avatar").getAttribute("href"), "/cell_owner/all");
+  assert.equal(document.getElementById("cell-name").getAttribute("href"), "/cell_owner/all");
+
+  // Profile tabs inside role="tablist" must NEVER be rewritten to /all (preserving user's explicit tab selection)
+  routing.handleProfileLinkInteraction(click("profile-tab"));
+  assert.equal(document.getElementById("profile-tab").getAttribute("href"), "/target_user/with_replies");
 
   // Excluded UI controls (tabs, search bar, header nav, back button, t.co external link, show-more, like button, action bar padding)
   assert.equal(routing.resolveClickTarget(click("profile-tab")), null);
@@ -547,4 +559,58 @@ test("extension bundle and manifests integrate per-column link routing in Genera
     assert.ok(jaLocale[key], `_locales/ja/messages.json contains ${key}`);
     assert.ok(deck.includes(`"${key}":`), `contentDeck.js contains ${key}`);
   }
+});
+
+test("profile links default to /all while preserving reserved routes and explicit tab switches", async () => {
+  const { routing, document, window, observers, clock } = setup(`
+    <div data-testid="primaryColumn" id="primary">
+      <div data-testid="UserName" id="old-username">@charlie</div>
+      <a role="tab" href="/charlie/all" id="old-tab">All</a>
+    </div>
+  `);
+
+  // isProfilePath validation
+  assert.equal(routing.isProfilePath("/user_123"), true);
+  assert.equal(routing.isProfilePath("/alice"), true);
+  assert.equal(routing.isProfilePath("/home"), false);
+  assert.equal(routing.isProfilePath("/explore"), false);
+  assert.equal(routing.isProfilePath("/notifications"), false);
+  assert.equal(routing.isProfilePath("/messages"), false);
+  assert.equal(routing.isProfilePath("/settings"), false);
+  assert.equal(routing.isProfilePath("/search"), false);
+  assert.equal(routing.isProfilePath("/hashtag"), false);
+  assert.equal(routing.isProfilePath("/i/chat"), false);
+  assert.equal(routing.isProfilePath("/author/status/123"), false);
+
+  // toProfileAllPath converts only user profiles to /all
+  assert.equal(routing.toProfileAllPath("/alice"), "/alice/all");
+  assert.equal(routing.toProfileAllPath("/user_123/"), "/user_123/all");
+  assert.equal(routing.toProfileAllPath("/home"), "/home");
+  assert.equal(routing.toProfileAllPath("/author/status/123"), "/author/status/123");
+
+  // openInPlace detects SPA arrival for /all routes
+  let currentHref = "https://x.com/charlie/all#yomikui-col1";
+  window.location = {
+    get href() { return currentHref; },
+    set href(val) { currentHref = val; },
+    pathname: "/charlie/all",
+    hash: "#yomikui-col1",
+  };
+  window.history.pushState = (_s, _t, url) => {
+    currentHref = `https://x.com${url}`;
+    window.location.pathname = url.split("?")[0].split("#")[0];
+  };
+
+  routing.openInPlace("/david/all");
+  const obs = observers.at(-1);
+  assert.equal(obs.connected, true);
+  obs.emit([{}]);
+  await clock.advance(100);
+  assert.equal(obs.connected, true);
+
+  // Arrival detected when UserName updates to David (@david)
+  document.getElementById("old-username").textContent = "David (@david)";
+  obs.emit([{}]);
+  await clock.advance(100);
+  assert.equal(obs.connected, false);
 });

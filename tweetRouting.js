@@ -15,6 +15,47 @@
   const EXCLUDED_INTERNAL_ROUTE_RE = /^\/i\/(?:flow|chat|grok|keyboard_shortcuts|display|verified-choose|premium_sign_up|spaces|broadcasts)(?:\/|$)/i;
   const PROFILE_PATH_RE = /^\/[A-Za-z0-9_]+$/;
 
+  const RESERVED_ROOT_PATHS = new Set([
+    "home",
+    "explore",
+    "notifications",
+    "messages",
+    "search",
+    "hashtag",
+    "settings",
+    "compose",
+    "intent",
+    "login",
+    "logout",
+    "signup",
+    "account",
+    "privacy",
+    "tos",
+    "yomikui",
+    "i",
+    "about",
+    "jobs",
+    "help",
+    "x",
+  ]);
+
+  function isProfilePath(pathname) {
+    if (!pathname || typeof pathname !== "string") return false;
+    const clean = withoutTrailingSlashes(pathname);
+    if (!PROFILE_PATH_RE.test(clean)) return false;
+    const segment = clean.slice(1).toLowerCase();
+    return !RESERVED_ROOT_PATHS.has(segment) && !EXCLUDED_ROOT_ROUTE_RE.test(clean);
+  }
+
+  function toProfileAllPath(pathname) {
+    if (!pathname || typeof pathname !== "string") return pathname;
+    const clean = withoutTrailingSlashes(pathname);
+    if (isProfilePath(clean)) {
+      return `${clean}/all`;
+    }
+    return pathname;
+  }
+
   const IGNORED_CONTAINERS_SELECTOR = [
     '[role="dialog"]',
     '[role="menu"]',
@@ -358,9 +399,10 @@
     let fallback = null;
     for (const link of links) {
       const path = normalizeRoutePath(link.getAttribute("href"));
-      if (!path || !PROFILE_PATH_RE.test(path)) continue;
-      if (!link.closest?.('[data-testid="UserDescription"]')) return path;
-      if (!fallback) fallback = path;
+      if (!path || !isProfilePath(path)) continue;
+      const allPath = toProfileAllPath(path);
+      if (!link.closest?.('[data-testid="UserDescription"]')) return allPath;
+      if (!fallback) fallback = allPath;
     }
     return fallback;
   }
@@ -422,7 +464,12 @@
 
       if (node.tagName?.toUpperCase?.() === "A" && node.hasAttribute?.("href")) {
         if (node.hasAttribute?.("download")) return null;
-        return normalizeRoutePath(node.getAttribute("href"));
+        const normalized = normalizeRoutePath(node.getAttribute("href"));
+        if (!normalized) return null;
+        if (isProfilePath(normalized)) {
+          return toProfileAllPath(normalized);
+        }
+        return normalized;
       }
 
       if (
@@ -532,8 +579,15 @@
     const tweetId = idMatch ? idMatch[1] : null;
     const listMatch = cleanPath.match(/\/status\/\d+\/(quotes|retweets|likes)$/i);
     const listKind = listMatch ? listMatch[1].toLowerCase() : null;
-    const isProfile = !tweetId && PROFILE_PATH_RE.test(cleanPath);
-    const handleLower = isProfile ? cleanPath.slice(1).toLowerCase() : null;
+    const profileMatch =
+      !tweetId &&
+      cleanPath.match(/^\/([A-Za-z0-9_]+)(?:\/(?:all|with_replies|highlights|media|articles))?$/i);
+    const isProfile = Boolean(
+      profileMatch &&
+        !RESERVED_ROOT_PATHS.has(profileMatch[1].toLowerCase()) &&
+        !EXCLUDED_ROOT_ROUTE_RE.test(`/${profileMatch[1]}`)
+    );
+    const handleLower = isProfile ? profileMatch[1].toLowerCase() : null;
 
     const checkArrival = () => {
       const root = document.querySelector?.('[data-testid="primaryColumn"]') || document;
@@ -848,8 +902,61 @@
     });
   }
 
+  function rewriteProfileAnchor(node) {
+    if (!node || typeof node.closest !== "function") return null;
+    if (node.closest('[role="tablist"], [role="tab"]')) return null;
+    const anchor =
+      node.tagName?.toUpperCase?.() === "A" && node.hasAttribute?.("href")
+        ? node
+        : node.closest("a[href]");
+    if (!anchor || anchor.hasAttribute("download")) return null;
+
+    const href = anchor.getAttribute("href");
+    if (!href) return null;
+
+    const parsed = parseInternalUrl(href);
+    if (!parsed) return null;
+    const pathname = withoutTrailingSlashes(parsed.pathname);
+    if (!isProfilePath(pathname)) return null;
+
+    const targetPath = `${pathname}/all`;
+    const search = parsed.search || "";
+    const hash = anchor.hash || "";
+    const newHref = `${targetPath}${search}${hash}`;
+
+    if (anchor.getAttribute("href") !== newHref) {
+      anchor.setAttribute("href", newHref);
+    }
+    return targetPath;
+  }
+
+  function handleProfileLinkInteraction(event) {
+    const target = event?.target?.nodeType === 1 ? event.target : event?.target?.parentElement;
+    if (!target) return;
+    rewriteProfileAnchor(target);
+    const userCell = target.closest?.('[data-testid="UserCell"]');
+    if (userCell && typeof userCell.querySelectorAll === "function") {
+      const cellLinks = userCell.querySelectorAll("a[href]");
+      for (let i = 0; i < cellLinks.length; i++) {
+        rewriteProfileAnchor(cellLinks[i]);
+      }
+    }
+  }
+
+  function initProfileLinkRewriter() {
+    if (typeof document === "undefined" || typeof document.addEventListener !== "function") return;
+    document.addEventListener("pointerdown", handleProfileLinkInteraction, true);
+    document.addEventListener("click", handleProfileLinkInteraction, true);
+  }
+
+  initProfileLinkRewriter();
+
   globalThis.YomikuiTweetRouting = Object.freeze({
     isAllowedOrigin,
+    isProfilePath,
+    toProfileAllPath,
+    rewriteProfileAnchor,
+    handleProfileLinkInteraction,
     normalizeStatusPath,
     normalizeRoutePath,
     isTargetEligible,
