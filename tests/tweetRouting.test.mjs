@@ -51,9 +51,25 @@ function setup(html = "") {
   });
   vm.runInContext(navSource, context);
   vm.runInContext(actionsSource, context);
+  const captureListeners = new Map();
+  const addListener = document.addEventListener.bind(document);
+  document.addEventListener = (type, listener, options) => {
+    if (options === true) captureListeners.set(type, listener);
+    addListener(type, listener, options);
+  };
   vm.runInContext(routingSource, context);
 
-  return { clock, document, window, observers, Event, context, routing: context.YomikuiTweetRouting };
+  // Linkedom dispatches bubbling listeners only. Exercise the registered capture handler.
+  const activate = (id, options = {}, type = "click") => {
+    const event = Object.assign(new Event(type, { cancelable: true }), {
+      button: type === "auxclick" ? 1 : 0,
+      target: document.getElementById(id),
+      ...options,
+    });
+    captureListeners.get(type)?.(event);
+    return event;
+  };
+  return { clock, document, window, observers, activate, context, routing: context.YomikuiTweetRouting };
 }
 
 test("normalizeRoutePath accepts X internal browseable pages and rejects modals/external URLs", () => {
@@ -245,18 +261,6 @@ test("resolveClickTarget handles tweets, UserCell rows, profiles, hashtags, and 
   assert.equal(routing.resolveClickTarget(click("cell-bio-mention")), "/bio_friend/all");
   assert.equal(routing.resolveClickTarget(click("cell-follow-btn")), null);
 
-  // In-place anchor rewriting on interaction (for standard navigation, middle-click, new tab)
-  routing.handleProfileLinkInteraction(click("author-avatar"));
-  assert.equal(document.getElementById("author-avatar").getAttribute("href"), "/tweet_author/all");
-
-  routing.handleProfileLinkInteraction(click("user-cell"));
-  assert.equal(document.getElementById("cell-avatar").getAttribute("href"), "/cell_owner/all");
-  assert.equal(document.getElementById("cell-name").getAttribute("href"), "/cell_owner/all");
-
-  // Profile tabs inside role="tablist" must NEVER be rewritten to /all (preserving user's explicit tab selection)
-  routing.handleProfileLinkInteraction(click("profile-tab"));
-  assert.equal(document.getElementById("profile-tab").getAttribute("href"), "/target_user/with_replies");
-
   // Excluded UI controls (tabs, search bar, header nav, back button, t.co external link, show-more, like button, action bar padding)
   assert.equal(routing.resolveClickTarget(click("profile-tab")), null);
   assert.equal(routing.resolveClickTarget(click("search-form-link")), null);
@@ -397,28 +401,21 @@ test("SettingsControls renders compact segmented buttons (self, next, custom) an
   assert.equal(selfButtons[0].props["aria-pressed"], true); // この列が active
 });
 
-test("installFrame dynamically attaches click listener only while enabled and validates message origin", () => {
-  const { routing, document, window } = setup();
-  let addCount = 0;
-  let removeCount = 0;
-  const origAdd = document.addEventListener.bind(document);
-  const origRemove = document.removeEventListener.bind(document);
-  document.addEventListener = (type, fn, opts) => {
-    if (type === "click") addCount++;
-    return origAdd(type, fn, opts);
-  };
-  document.removeEventListener = (type, fn, opts) => {
-    if (type === "click") removeCount++;
-    return origRemove(type, fn, opts);
-  };
-
+test("installFrame routes clicks while enabled and validates message origin", () => {
+  const { routing, activate, window } = setup(`
+    <main role="main"><a id="tweet" href="/alice/status/123">Tweet</a></main>
+  `);
+  const messages = [];
+  window.parent.postMessage = (message, origin) => messages.push({ ...message, origin });
   routing.installFrame({ getColumnId: () => "col2", getParentOrigin: () => "https://x.com" });
-  assert.equal(addCount, 0);
-
+  assert.equal(activate("tweet").defaultPrevented, false);
   routing.setFrameEnabled(true);
-  assert.equal(addCount, 1);
+  assert.equal(activate("tweet").defaultPrevented, true);
   routing.setFrameEnabled(false);
-  assert.equal(removeCount, 1);
+  assert.equal(activate("tweet").defaultPrevented, false);
+  assert.deepEqual(messages, [{
+    type: "yomikui-open-tweet", statusPath: "/alice/status/123", columnId: "col2", origin: "https://x.com",
+  }]);
 
   let pushedUrl = null;
   window.history.pushState = (_s, _t, url) => { pushedUrl = url; };
@@ -561,96 +558,74 @@ test("extension bundle and manifests integrate per-column link routing in Genera
   }
 });
 
-test("profile links default to /all while preserving reserved routes and explicit tab switches", async () => {
-  const { routing, document, window, observers, clock } = setup(`
-    <div data-testid="primaryColumn" id="primary">
-      <div data-testid="UserName" id="old-username">@charlie</div>
-      <a role="tab" href="/charlie/all" id="old-tab">All</a>
-    </div>
-  `);
-
-  // isProfilePath validation
-  assert.equal(routing.isProfilePath("/user_123"), true);
-  assert.equal(routing.isProfilePath("/alice"), true);
-  assert.equal(routing.isProfilePath("/home"), false);
-  assert.equal(routing.isProfilePath("/explore"), false);
-  assert.equal(routing.isProfilePath("/notifications"), false);
-  assert.equal(routing.isProfilePath("/messages"), false);
-  assert.equal(routing.isProfilePath("/settings"), false);
-  assert.equal(routing.isProfilePath("/search"), false);
-  assert.equal(routing.isProfilePath("/hashtag"), false);
-  assert.equal(routing.isProfilePath("/i/chat"), false);
-  assert.equal(routing.isProfilePath("/author/status/123"), false);
-
-  // toProfileAllPath converts only user profiles to /all
-  assert.equal(routing.toProfileAllPath("/alice"), "/alice/all");
-  assert.equal(routing.toProfileAllPath("/user_123/"), "/user_123/all");
-  assert.equal(routing.toProfileAllPath("/home"), "/home");
-  assert.equal(routing.toProfileAllPath("/author/status/123"), "/author/status/123");
-
-  // openInPlace detects SPA arrival for /all routes
-  let currentHref = "https://x.com/charlie/all#yomikui-col1";
-  window.location = {
-    get href() { return currentHref; },
-    set href(val) { currentHref = val; },
-    pathname: "/charlie/all",
-    hash: "#yomikui-col1",
-  };
-  window.history.pushState = (_s, _t, url) => {
-    currentHref = `https://x.com${url}`;
-    window.location.pathname = url.split("?")[0].split("#")[0];
-  };
-
-  routing.openInPlace("/david/all");
-  const obs = observers.at(-1);
-  assert.equal(obs.connected, true);
-  obs.emit([{}]);
-  await clock.advance(100);
-  assert.equal(obs.connected, true);
-
-  // Arrival detected when UserName updates to David (@david)
-  document.getElementById("old-username").textContent = "David (@david)";
-  obs.emit([{}]);
-  await clock.advance(100);
-  assert.equal(obs.connected, false);
-});
-
-test("auto-selects /all tab on profile navigation while respecting manual tab clicks", () => {
-  const html = `
-    <div data-testid="primaryColumn" id="primary">
+test("profile links use native /all navigation while preserving modifiers and explicit tab switches", () => {
+  const { document, activate } = setup(`
+    <div data-testid="primaryColumn">
+      <a href="/Alice_123/?s=20#bio"><span id="name">Alice</span></a>
+      <a href="https://twitter.com/bob?ref=src#bio" id="middle">Bob</a>
+      <a href="/charlie" target="_blank" id="new-tab">Charlie</a>
+      <a href="/home" id="home">Home</a>
+      <a href="https://example.com/alice" id="external">External</a>
+      <a href="/alice/status/123" id="status">Post</a>
       <div role="tablist">
-        <a role="tab" href="/eve" aria-selected="true" id="tab-posts">Posts</a>
-        <a role="tab" href="/eve/with_replies" aria-selected="false" id="tab-replies">Replies</a>
-        <a role="tab" href="/eve/all" aria-selected="false" id="tab-all">All</a>
+        <a role="tab" href="/alice" id="tab-posts">Posts</a>
+        <a role="tab" href="/alice/with_replies" id="tab-replies">Replies</a>
       </div>
     </div>
-  `;
-  const { routing, document, window, Event } = setup(html);
+  `);
+  const nameLink = document.getElementById("name").closest("a");
+  for (const options of [{}, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
+    const click = activate("name", options);
+    assert.equal(click.cancelBubble, true);
+    assert.equal(click.defaultPrevented, false);
+    assert.equal(nameLink.getAttribute("href"), "https://x.com/Alice_123/all?s=20#bio");
+  }
+  const middle = activate("middle", {}, "auxclick");
+  assert.equal(middle.cancelBubble, true);
+  assert.equal(middle.defaultPrevented, false);
+  assert.equal(document.getElementById("middle").getAttribute("href"), "https://twitter.com/bob/all?ref=src#bio");
+  assert.equal(activate("new-tab").defaultPrevented, false);
+  assert.equal(document.getElementById("new-tab").getAttribute("href"), "https://x.com/charlie/all");
+  for (const id of ["home", "external", "status", "tab-posts", "tab-replies"]) {
+    const link = document.getElementById(id);
+    const href = link.getAttribute("href");
+    assert.equal(activate(id).cancelBubble, false);
+    assert.equal(link.getAttribute("href"), href);
+  }
+});
 
-  window.location.pathname = "/eve";
-  window.location.href = "https://x.com/eve";
+test("profile clicks and routed arrivals load /all with the destination column metadata", () => {
+  const { routing, activate, window } = setup(`
+    <main role="main">
+      <div data-testid="UserCell" role="button">
+        <a href="/eve?s=20" id="name">Eve</a>
+        <span id="bio">Bio text</span>
+        <button id="follow">Follow</button>
+      </div>
+    </main>
+  `);
+  const messages = [];
+  window.parent.postMessage = (message, origin) => messages.push({ ...message, origin });
+  window.location.href = "https://x.com/home?yomikui=1#yomikui-col1";
+  window.history.pushState = () => assert.fail("Profile routing must load the X page directly");
+  routing.installFrame({ getColumnId: () => "col1", getParentOrigin: () => "https://x.com" });
 
-  let clicked = false;
-  document.getElementById("tab-all").click = () => { clicked = true; };
+  const click = activate("name");
+  assert.equal(click.cancelBubble, true);
+  assert.equal(click.defaultPrevented, true);
+  assert.equal(window.location.href, "https://x.com/eve/all?s=20&yomikui=1#yomikui-col1");
+  assert.equal(activate("follow").defaultPrevented, false);
+  assert.equal(activate("bio").defaultPrevented, true);
+  assert.equal(messages.length, 0);
 
-  // Navigating to /eve should trigger auto-click on the /all tab
-  assert.equal(routing.tryClickAllTab(), true);
-  assert.equal(clicked, true);
-
-  // If user explicitly clicks another tab (e.g. posts), manual override is preserved
-  clicked = false;
-  const clickEvent = new Event("click", { bubbles: true });
-  document.getElementById("tab-posts").dispatchEvent(clickEvent);
-
-  // Subsequent check should NOT auto-click /all because user chose a tab manually
-  assert.equal(routing.tryClickAllTab(), true);
-  assert.equal(clicked, false);
-
-  // Navigating to another user's profile resets manual override and auto-clicks /all
-  window.location.pathname = "/frank";
-  window.location.href = "https://x.com/frank";
-  document.getElementById("tab-all").setAttribute("href", "/frank/all");
-
-  assert.equal(routing.tryClickAllTab(), true);
-  assert.equal(clicked, true);
+  routing.setFrameEnabled(true);
+  assert.equal(activate("name").defaultPrevented, true);
+  assert.deepEqual(messages, [{
+    type: "yomikui-open-tweet", statusPath: "/eve/all?s=20", columnId: "col1", origin: "https://x.com",
+  }]);
+  window.dispatchEvent({
+    type: "message", source: window.parent, origin: "https://x.com",
+    data: { type: "yomikui-tweet-route-open", path: "/frank/all" },
+  });
+  assert.equal(window.location.href, "https://x.com/frank/all?yomikui=1#yomikui-col1");
 });

@@ -47,13 +47,15 @@
     return !RESERVED_ROOT_PATHS.has(segment) && !EXCLUDED_ROOT_ROUTE_RE.test(clean);
   }
 
-  function toProfileAllPath(pathname) {
-    if (!pathname || typeof pathname !== "string") return pathname;
-    const clean = withoutTrailingSlashes(pathname);
-    if (isProfilePath(clean)) {
-      return `${clean}/all`;
+  function getProfileAllPath(value) {
+    const parsed = parseInternalUrl(value);
+    if (!parsed) return null;
+    const pathname = withoutTrailingSlashes(parsed.pathname);
+    if (isProfilePath(pathname)) return `${pathname}/all${parsed.search}`;
+    if (pathname.endsWith("/all") && isProfilePath(pathname.slice(0, -4))) {
+      return pathname + parsed.search;
     }
-    return pathname;
+    return null;
   }
 
   const IGNORED_CONTAINERS_SELECTOR = [
@@ -376,7 +378,6 @@
   // --- iframe frame-level handling ---
   let frameEnabled = false;
   let frameInstalled = false;
-  let clickListenerAttached = false;
   let getColumnIdFn = null;
   let getParentOriginFn = null;
 
@@ -398,9 +399,8 @@
     const links = cell.querySelectorAll("a[href]");
     let fallback = null;
     for (const link of links) {
-      const path = normalizeRoutePath(link.getAttribute("href"));
-      if (!path || !isProfilePath(path)) continue;
-      const allPath = toProfileAllPath(path);
+      const allPath = getProfileAllPath(normalizeRoutePath(link.getAttribute("href")));
+      if (!allPath) continue;
       if (!link.closest?.('[data-testid="UserDescription"]')) return allPath;
       if (!fallback) fallback = allPath;
     }
@@ -431,7 +431,7 @@
   }
 
   function resolveClickTarget(event) {
-    if (!frameEnabled || !event) return null;
+    if (!event) return null;
     if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.defaultPrevented) {
       return null;
     }
@@ -464,12 +464,8 @@
 
       if (node.tagName?.toUpperCase?.() === "A" && node.hasAttribute?.("href")) {
         if (node.hasAttribute?.("download")) return null;
-        const normalized = normalizeRoutePath(node.getAttribute("href"));
-        if (!normalized) return null;
-        if (isProfilePath(normalized)) {
-          return toProfileAllPath(normalized);
-        }
-        return normalized;
+        const path = normalizeRoutePath(node.getAttribute("href"));
+        return getProfileAllPath(path) ?? path;
       }
 
       if (
@@ -488,36 +484,52 @@
     return null;
   }
 
-  function onDocumentClick(event) {
-    const path = resolveClickTarget(event);
+  function onLinkInteraction(event) {
+    const click = event.type === "click";
+    if (event.defaultPrevented || (click && event.button !== 0) || (event.type === "auxclick" && event.button !== 1)) return;
+    const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+    const anchor = target?.closest?.("a[href]");
+    const linkTarget = anchor?.getAttribute("target")?.toLowerCase();
+    const sameTab = click && !(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) &&
+      (!linkTarget || linkTarget === "_self");
+    const route = sameTab && frameInstalled && frameEnabled ? resolveClickTarget(event) : null;
+    if (route) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const columnId = typeof getColumnIdFn === "function" ? getColumnIdFn() : null;
+      const origin = (typeof getParentOriginFn === "function" ? getParentOriginFn() : null) || "*";
+      try {
+        window.parent.postMessage({ type: "yomikui-open-tweet", statusPath: route, columnId }, origin);
+      } catch {
+        window.parent.postMessage({ type: "yomikui-open-tweet", statusPath: route, columnId }, "*");
+      }
+      return;
+    }
+
+    if (anchor) {
+      const url = getProfileAllUrl(anchor);
+      if (!url) return;
+      // X's click handler can navigate using the original React link props.
+      if (event.type !== "contextmenu") event.stopImmediatePropagation();
+      if (sameTab && frameInstalled) {
+        event.preventDefault();
+        openInPlace(url.pathname + url.search);
+      } else {
+        anchor.setAttribute("href", url.href);
+      }
+      return;
+    }
+
+    if (!sameTab || !target?.closest?.('[data-testid="UserCell"]')) return;
+    const path = getProfileAllPath(resolveClickTarget(event));
     if (!path) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    const columnId = typeof getColumnIdFn === "function" ? getColumnIdFn() : null;
-    const origin = (typeof getParentOriginFn === "function" ? getParentOriginFn() : null) || "*";
-    try {
-      window.parent.postMessage({ type: "yomikui-open-tweet", statusPath: path, columnId }, origin);
-    } catch {
-      window.parent.postMessage({ type: "yomikui-open-tweet", statusPath: path, columnId }, "*");
-    }
-  }
-
-  function syncClickListener() {
-    const shouldAttach = frameInstalled && frameEnabled;
-    if (shouldAttach === clickListenerAttached) return;
-    clickListenerAttached = shouldAttach;
-    if (shouldAttach) {
-      document.addEventListener("click", onDocumentClick, true);
-    } else {
-      document.removeEventListener("click", onDocumentClick, true);
-    }
+    openInPlace(path);
   }
 
   function setFrameEnabled(enabled) {
-    const next = enabled === true;
-    if (frameEnabled === next) return;
-    frameEnabled = next;
-    syncClickListener();
+    frameEnabled = enabled === true;
   }
 
   function isFrameEnabled() {
@@ -553,6 +565,12 @@
     }
 
     cleanupPendingNavigation();
+
+    if (getProfileAllPath(cleanPath) === cleanPath) {
+      // Load X's All timeline directly, even when its profile tabs link to Posts.
+      window.location.href = withPendingPath(window.location.href, cleanPath);
+      return;
+    }
 
     const ARRIVAL_NODES_SELECTOR = [
       'article[data-testid="tweet"]',
@@ -662,7 +680,6 @@
     frameInstalled = true;
     getColumnIdFn = getColumnId;
     getParentOriginFn = getParentOrigin;
-    syncClickListener();
 
     window.addEventListener("pagehide", cleanupPendingNavigation);
 
@@ -902,206 +919,31 @@
     });
   }
 
-  function rewriteProfileAnchor(node) {
-    if (!node || typeof node.closest !== "function") return null;
-    if (node.closest('[role="tablist"], [role="tab"]')) return null;
-    const anchor =
-      node.tagName?.toUpperCase?.() === "A" && node.hasAttribute?.("href")
-        ? node
-        : node.closest("a[href]");
-    if (!anchor || anchor.hasAttribute("download")) return null;
-
-    const href = anchor.getAttribute("href");
-    if (!href) return null;
-
-    const parsed = parseInternalUrl(href);
-    if (!parsed) return null;
-    const pathname = withoutTrailingSlashes(parsed.pathname);
-    if (!isProfilePath(pathname)) return null;
-
-    const targetPath = `${pathname}/all`;
-    const search = parsed.search || "";
-    const hash = anchor.hash || "";
-    const newHref = `${targetPath}${search}${hash}`;
-
-    if (anchor.getAttribute("href") !== newHref) {
-      anchor.setAttribute("href", newHref);
-    }
-    return targetPath;
-  }
-
-  function handleProfileLinkInteraction(event) {
-    const target = event?.target?.nodeType === 1 ? event.target : event?.target?.parentElement;
-    if (!target) return;
-    rewriteProfileAnchor(target);
-    const userCell = target.closest?.('[data-testid="UserCell"]');
-    if (userCell && typeof userCell.querySelectorAll === "function") {
-      const cellLinks = userCell.querySelectorAll("a[href]");
-      for (let i = 0; i < cellLinks.length; i++) {
-        rewriteProfileAnchor(cellLinks[i]);
-      }
-    }
-  }
-
-  // --- Auto-select /all tab on profile navigation ---
-  let userSelectedTab = false;
-  let activeProfileHandle = null;
-  let autoTabObserver = null;
-
-  function getCurrentProfileHandle() {
-    if (typeof window === "undefined" || !window.location) return null;
-    const pathname = withoutTrailingSlashes(window.location.pathname || "");
-    if (!pathname) return null;
-    const match = pathname.match(/^\/([A-Za-z0-9_]+)(?:\/(all|with_replies|highlights|articles|media))?$/i);
-    if (!match) return null;
-    const handle = match[1];
-    if (RESERVED_ROOT_PATHS.has(handle.toLowerCase()) || EXCLUDED_ROOT_ROUTE_RE.test(`/${handle}`)) {
+  function getProfileAllUrl(anchor) {
+    if (anchor.hasAttribute("download") || anchor.closest('[role="tablist"], [role="tab"]')) return null;
+    const href = anchor.getAttribute("href").trim();
+    if (!href || href.startsWith("#") || href.startsWith("?")) return null;
+    try {
+      const url = new URL(anchor.href, window.location.href);
+      if (url.protocol !== "https:" || !ALLOWED_HOSTS.has(url.hostname)) return null;
+      const path = getProfileAllPath(url.pathname);
+      if (!path) return null;
+      url.pathname = path;
+      return url;
+    } catch {
       return null;
     }
-    const subtab = match[2] ? match[2].toLowerCase() : "";
-    return { handle: handle.toLowerCase(), subtab };
   }
 
-  function tryClickAllTab() {
-    const profile = getCurrentProfileHandle();
-    if (!profile) {
-      activeProfileHandle = null;
-      userSelectedTab = false;
-      return false;
-    }
-
-    if (activeProfileHandle !== profile.handle) {
-      activeProfileHandle = profile.handle;
-      userSelectedTab = false;
-    }
-
-    if (profile.subtab === "all" || userSelectedTab) {
-      return true;
-    }
-
-    const root = document.querySelector?.('[data-testid="primaryColumn"]') || document;
-    if (!root || typeof root.querySelectorAll !== "function") return false;
-
-    const tabs = root.querySelectorAll('a[role="tab"]');
-    for (let i = 0; i < tabs.length; i++) {
-      const tab = tabs[i];
-      const href = (tab.getAttribute?.("href") || "").toLowerCase();
-      const text = (tab.textContent || "").trim();
-      const isAllTab =
-        href.endsWith("/all") ||
-        href.includes(`/${profile.handle}/all`) ||
-        text === "すべて" ||
-        text === "All";
-
-      if (isAllTab) {
-        if (tab.getAttribute?.("aria-selected") !== "true") {
-          tab.click?.();
-        }
-        return true;
-      }
-    }
-
-    return false;
+  if (typeof document !== "undefined") {
+    document.addEventListener("click", onLinkInteraction, true);
+    document.addEventListener("auxclick", onLinkInteraction, true);
+    document.addEventListener("contextmenu", onLinkInteraction, true);
   }
-
-  function startAutoTabObserver() {
-    if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
-    if (autoTabObserver) return;
-
-    autoTabObserver = new MutationObserver(() => {
-      tryClickAllTab();
-    });
-
-    const attach = () => {
-      const target = document.documentElement || document.body;
-      if (!target || typeof autoTabObserver.observe !== "function") return false;
-      try {
-        autoTabObserver.observe(target, { childList: true, subtree: true });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    if (!attach()) {
-      document.addEventListener?.(
-        "DOMContentLoaded",
-        () => {
-          attach();
-          tryClickAllTab();
-        },
-        { once: true }
-      );
-    }
-
-    tryClickAllTab();
-  }
-
-  function hookHistoryForProfileNavigation() {
-    if (typeof window === "undefined" || !window.history) return;
-
-    const onNavChange = () => {
-      const profile = getCurrentProfileHandle();
-      if (!profile) {
-        activeProfileHandle = null;
-        userSelectedTab = false;
-      } else if (activeProfileHandle !== profile.handle) {
-        activeProfileHandle = profile.handle;
-        userSelectedTab = false;
-      }
-      tryClickAllTab();
-    };
-
-    try {
-      const origPush = window.history.pushState?.bind(window.history);
-      if (origPush) {
-        window.history.pushState = function(...args) {
-          const res = origPush(...args);
-          onNavChange();
-          return res;
-        };
-      }
-      const origReplace = window.history.replaceState?.bind(window.history);
-      if (origReplace) {
-        window.history.replaceState = function(...args) {
-          const res = origReplace(...args);
-          onNavChange();
-          return res;
-        };
-      }
-    } catch {}
-
-    window.addEventListener?.("popstate", onNavChange);
-    document.addEventListener?.(
-      "click",
-      (e) => {
-        const tab = e.target?.closest?.('a[role="tab"], [role="tab"]');
-        if (tab) {
-          userSelectedTab = true;
-        }
-      },
-      true
-    );
-  }
-
-  function initProfileLinkRewriter() {
-    if (typeof document === "undefined" || typeof document.addEventListener !== "function") return;
-    document.addEventListener("pointerdown", handleProfileLinkInteraction, true);
-    document.addEventListener("click", handleProfileLinkInteraction, true);
-    hookHistoryForProfileNavigation();
-    startAutoTabObserver();
-  }
-
-  initProfileLinkRewriter();
 
   globalThis.YomikuiTweetRouting = Object.freeze({
     isAllowedOrigin,
     isProfilePath,
-    toProfileAllPath,
-    rewriteProfileAnchor,
-    handleProfileLinkInteraction,
-    getCurrentProfileHandle,
-    tryClickAllTab,
     normalizeStatusPath,
     normalizeRoutePath,
     isTargetEligible,
