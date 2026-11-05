@@ -247,6 +247,27 @@
   "column_settings_hide_share_desc": {
     "message": "各ツイートの下部の共有ボタンを非表示にします。"
   },
+  "column_settings_tweet_target": {
+    "message": "ツイートの表示先にする"
+  },
+  "column_settings_tweet_target_desc": {
+    "message": "ほかの列で開いたツイートを、この列に表示します。ワークスペースにつき1列です。"
+  },
+  "column_settings_open_in_target": {
+    "message": "ツイートを表示先の列で開く"
+  },
+  "column_settings_open_in_target_desc": {
+    "message": "「$1$」で開きます。",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "ツイート詳細"
+      }
+    }
+  },
+  "column_settings_open_in_target_none": {
+    "message": "表示先の列が設定されていません。"
+  },
   "tweet_action_quote_list": {
     "message": "引用リツイート一覧"
   },

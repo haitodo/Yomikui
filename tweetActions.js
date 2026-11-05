@@ -185,6 +185,46 @@
     return rules.join('\n');
   }
 
+  function resolveTweetStatusPath(tweet, actionGroup) {
+    if (!tweet || typeof tweet.querySelector !== 'function') return null;
+    let group = actionGroup;
+    if (group === undefined) {
+      const reply = tweet.querySelector('[data-testid="reply"]');
+      const candidate = reply?.closest('[role="group"]');
+      group = candidate?.closest(TWEET) === tweet ? candidate : null;
+    }
+    // The first status link in a tweet can belong to quoted media. Prefer
+    // the action row's analytics URL, then the main author's timestamp.
+    let path = group ? getStatusPath(group.querySelector('a[href*="/analytics"]')?.getAttribute('href')) : null;
+    if (path) return path;
+
+    const statusLinks = tweet.querySelectorAll('a[href*="/status/"]');
+    for (const link of statusLinks) {
+      if (!link.closest('[data-testid="User-Name"]') || !link.querySelector('time')) continue;
+      if (link.closest('[role="link"], [data-testid="quoteTweet"], [data-testid="tweetQuote"]')) continue;
+      path = getStatusPath(link.getAttribute('href'));
+      if (path) return path;
+    }
+
+    // Detail / permalink view: the author timestamp is placed below the text
+    // (outside User-Name), and analytics links sit next to the date.
+    const pagePath = getStatusPath(window.location?.pathname) || getStatusPath(window.location?.href);
+    const pageId = pagePath?.match(/\/status\/(\d+)$/)?.[1];
+    if (pageId && tweet.querySelector(`a[href*="/status/${pageId}"]`)) {
+      return pagePath;
+    }
+    path = getStatusPath(tweet.querySelector('a[href*="/analytics"]')?.getAttribute('href'));
+    if (path) return path;
+
+    for (const link of statusLinks) {
+      if (!link.querySelector('time')) continue;
+      if (link.closest('[role="link"], [data-testid="quoteTweet"], [data-testid="tweetQuote"]')) continue;
+      path = getStatusPath(link.getAttribute('href'));
+      if (path) return path;
+    }
+    return null;
+  }
+
   class NativeActionsController {
     constructor() {
       this.settings = normalizeSettings();
@@ -288,36 +328,7 @@
       const reply = tweet.querySelector('[data-testid="reply"]');
       const group = reply?.closest('[role="group"]');
       if (!group || group.closest(TWEET) !== tweet) return;
-      // The first status link in a tweet can belong to quoted media. Prefer
-      // the action row's analytics URL, then the main author's timestamp.
-      let path = getStatusPath(group.querySelector('a[href*="/analytics"]')?.getAttribute('href'));
-      if (!path) {
-        for (const link of tweet.querySelectorAll('a[href*="/status/"]')) {
-          if (!link.closest('[data-testid="User-Name"]') || !link.querySelector('time')) continue;
-          if (link.closest('[role="link"], [data-testid="quoteTweet"], [data-testid="tweetQuote"]')) continue;
-          path = getStatusPath(link.getAttribute('href'));
-          if (path) break;
-        }
-      }
-      if (!path) {
-        // Detail / permalink view: the author timestamp is placed below the text
-        // (outside User-Name), and analytics links sit next to the date.
-        const pagePath = getStatusPath(window.location?.pathname) || getStatusPath(window.location?.href);
-        const pageId = pagePath?.match(/\/status\/(\d+)$/)?.[1];
-        if (pageId && tweet.querySelector(`a[href*="/status/${pageId}"]`)) {
-          path = pagePath;
-        } else {
-          path = getStatusPath(tweet.querySelector('a[href*="/analytics"]')?.getAttribute('href'));
-        }
-        if (!path) {
-          for (const link of tweet.querySelectorAll('a[href*="/status/"]')) {
-            if (!link.querySelector('time')) continue;
-            if (link.closest('[role="link"], [data-testid="quoteTweet"], [data-testid="tweetQuote"]')) continue;
-            path = getStatusPath(link.getAttribute('href'));
-            if (path) break;
-          }
-        }
-      }
+      const path = resolveTweetStatusPath(tweet, group);
       const id = path?.match(/\/status\/(\d+)$/)?.[1];
       const counts = getCounts(id);
       for (const list of LISTS) {
@@ -366,6 +377,6 @@
 
   globalThis.YomikuiTweetActions = Object.freeze({
     SETTINGS, normalizeSettings, readCount, formatCount, captureResponse, getCounts, getStatusPath, getListPath, getNativeCss,
-    SettingsControls, ListLinks, NativeActionsController, updateNative,
+    resolveTweetStatusPath, SettingsControls, ListLinks, NativeActionsController, updateNative,
   });
 })();
