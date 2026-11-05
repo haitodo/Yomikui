@@ -660,6 +660,7 @@
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
       ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
+      translate: 'no', lang: 'ja',
       style: { '--yf-surface-base': prefs.color === 'theme' ? 'var(--popover)' : `var(--yf-${prefs.color})`, '--yf-surface-opacity': `${100 - prefs.transparency}%` },
       children: [
         jsx.jsxs('div', { className: 'yf-header', children: [
@@ -704,7 +705,7 @@
             ] }),
             canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
               jsx.jsx('button', {
-                type: 'button', className: 'yf-refresh',
+                type: 'button', className: 'yf-refresh', translate: 'no',
                 disabled: busy ? !onCancelRefresh : reading.busy || !targetReady || refreshCount === 0 || view.phase === 'cooldown' || view.phase === 'cancelled',
                 'aria-label': busy ? '更新を中止する' : '選択中の列を更新', 'aria-busy': busy,
                 title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を先頭へ戻してから順番に更新します。おすすめ・フォロー中は新着読み込み、累計200件以上の警告がある列と検索結果・話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします。検索語・タブ・絞り込み条件を維持します` : '選択範囲内に更新対象の列がありません'}`,

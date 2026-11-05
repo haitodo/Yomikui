@@ -149,6 +149,10 @@ test('reading, wheel scope and refresh use the same group selection and scroll m
 
 test('results stay inside the refresh button with a live announcement and no layout row', () => {
   const env = setup();
+  const initial = panel(env);
+  assert.equal(initial.byClass('yf-refresh').props.children[1], '更新');
+  assert.equal(initial.byClass('yf-refresh').props.translate, 'no');
+  assert.equal(initial.find(node => node.props?.className === 'yomikui-floating-panel').props.translate, 'no');
   for (const [status, label] of [['updated', '完了'], ['reloaded', '完了'], ['requested', '未確認'], ['failed', '未確認'], ['skipped', '対象外']]) {
     const ui = panel(env, { lastAction: 'refresh', phase: 'cooldown', results: [{ status }] });
     assert.equal(ui.byClass('yf-refresh').props.children[1], label);
