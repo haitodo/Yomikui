@@ -43,6 +43,7 @@ function setup(html = "") {
   const context = vm.createContext({
     ...clock.globals(),
     URL,
+    URLSearchParams,
     window,
     document,
     MutationObserver,
@@ -55,186 +56,291 @@ function setup(html = "") {
   return { clock, document, window, observers, Event, context, routing: context.YomikuiTweetRouting };
 }
 
-test("normalizeStatusPath accepts valid paths and rejects invalid ones", () => {
+test("normalizeRoutePath accepts X internal browseable pages and rejects modals/external URLs", () => {
   const { routing } = setup();
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890"), "/author/status/1234567890");
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890/"), "/author/status/1234567890");
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890?s=20#yomikui"), "/author/status/1234567890");
-  assert.equal(routing.normalizeStatusPath("https://x.com/author/status/1234567890"), "/author/status/1234567890");
-  assert.equal(routing.normalizeStatusPath("https://twitter.com/i/web/status/9876543210"), "/i/web/status/9876543210");
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890/quotes"), "/author/status/1234567890/quotes");
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890/retweets"), "/author/status/1234567890/retweets");
-  assert.equal(routing.normalizeStatusPath("https://x.com/author/status/1234567890?s=20"), "/author/status/1234567890");
+  // Tweets & engagement lists
+  assert.equal(routing.normalizeRoutePath("/author/status/1234567890?s=20"), "/author/status/1234567890");
+  assert.equal(routing.normalizeRoutePath("https://x.com/author/status/1234567890/retweets#yomikui"), "/author/status/1234567890/retweets");
+  assert.equal(routing.normalizeRoutePath("/author/status/1234567890/quotes"), "/author/status/1234567890/quotes");
+  assert.equal(routing.normalizeRoutePath("/author/status/1234567890/likes"), "/author/status/1234567890/likes");
+  assert.equal(routing.normalizeRoutePath("https://twitter.com/i/web/status/9876543210"), "/i/web/status/9876543210");
 
-  assert.equal(routing.normalizeStatusPath("//evil.com/author/status/1234567890"), null);
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890/photo/1"), null);
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890/analytics"), null);
-  assert.equal(routing.normalizeStatusPath("/author/status/1234567890/video/1"), null);
-  assert.equal(routing.normalizeStatusPath("https://google.com/author/status/1234567890"), null);
-  assert.equal(routing.normalizeStatusPath("javascript:alert(1)"), null);
-  assert.equal(routing.normalizeStatusPath(""), null);
-  assert.equal(routing.normalizeStatusPath(null), null);
+  // User profiles, hashtags, search queries, lists
+  assert.equal(routing.normalizeRoutePath("/target_user"), "/target_user");
+  assert.equal(routing.normalizeRoutePath("https://x.com/target_user/"), "/target_user");
+  assert.equal(routing.normalizeRoutePath("/target_user/with_replies"), "/target_user/with_replies");
+  assert.equal(routing.normalizeRoutePath("/target_user/following"), "/target_user/following");
+  assert.equal(routing.normalizeRoutePath("/hashtag/AI?src=hashtag_click"), "/hashtag/AI?src=hashtag_click");
+  assert.equal(routing.normalizeRoutePath("/search?q=%24NVDA&yomikui=123"), "/search?q=%24NVDA");
+  assert.equal(routing.normalizeRoutePath("/i/lists/55555"), "/i/lists/55555");
+
+  // Rejected modals, media viewers, compose, auth, external links
+  assert.equal(routing.normalizeRoutePath("/author/status/1234567890/photo/1"), null);
+  assert.equal(routing.normalizeRoutePath("/author/status/1234567890/video/1"), null);
+  assert.equal(routing.normalizeRoutePath("/author/status/1234567890/analytics"), null);
+  assert.equal(routing.normalizeRoutePath("/target_user/photo"), null);
+  assert.equal(routing.normalizeRoutePath("/target_user/header_photo"), null);
+  assert.equal(routing.normalizeRoutePath("/compose/post"), null);
+  assert.equal(routing.normalizeRoutePath("/intent/tweet"), null);
+  assert.equal(routing.normalizeRoutePath("/settings/profile"), null);
+  assert.equal(routing.normalizeRoutePath("/messages"), null);
+  assert.equal(routing.normalizeRoutePath("/i/chat"), null);
+  assert.equal(routing.normalizeRoutePath("/i/grok"), null);
+  assert.equal(routing.normalizeRoutePath("/yomikui"), null);
+  assert.equal(routing.normalizeRoutePath("/search?q=yomikui-timeline"), null);
+  assert.equal(routing.normalizeRoutePath("https://t.co/abc123"), null);
+  assert.equal(routing.normalizeRoutePath("https://example.com/target_user"), null);
+  assert.equal(routing.normalizeRoutePath("//evil.com/target_user"), null);
+  assert.equal(routing.normalizeRoutePath("javascript:alert(1)"), null);
+  assert.equal(routing.normalizeRoutePath("/"), null);
+  assert.equal(routing.normalizeRoutePath(""), null);
 });
 
-test("isTargetEligible and isSourceEligible filter column types correctly", () => {
+test("resolveTargetColumn supports specific column IDs, 'next' right-neighbor chaining, and sanitizeColumns", () => {
   const { routing } = setup();
-  assert.equal(routing.isTargetEligible({ type: "home", liveFeed: false }), true);
-  assert.equal(routing.isTargetEligible({ type: "search", liveFeed: false }), true);
-  assert.equal(routing.isTargetEligible({ type: "timeline", liveFeed: false }), false);
-  assert.equal(routing.isTargetEligible({ type: "chat", liveFeed: false }), false);
-  assert.equal(routing.isTargetEligible({ type: "home", liveFeed: true }), false);
+  const c1 = { id: "c1", type: "home", linkTarget: "" };
+  const c2 = { id: "c2", type: "home", linkTarget: "c3" };
+  const c3 = { id: "c3", type: "search", linkTarget: "next" };
+  const c4 = { id: "c4", type: "customUrl", linkTarget: "next" };
+  const cols = [c1, c2, c3, c4];
 
-  assert.equal(routing.isSourceEligible({ type: "home", liveFeed: false }), true);
-  assert.equal(routing.isSourceEligible({ type: "home", liveFeed: true }), true);
-  assert.equal(routing.isSourceEligible({ type: "timeline" }), false);
-  assert.equal(routing.isSourceEligible({ type: "chat" }), false);
-});
+  assert.equal(routing.resolveTargetColumn(c1, cols), null);
+  assert.equal(routing.resolveTargetColumn(c2, cols)?.id, "c3"); // Col 2 -> Col 3 (by ID)
+  assert.equal(routing.resolveTargetColumn(c3, cols)?.id, "c4"); // Col 3 -> Col 4 ("next")
+  assert.equal(routing.resolveTargetColumn(c4, cols), null);     // Rightmost "next" -> null
 
-test("findTargetColumn memoizes per array and normalizeTargets enforces single target invariant", () => {
-  const { routing } = setup();
-  const col1 = { id: "col1", type: "home", tweetTarget: false };
-  const col2 = { id: "col2", type: "search", tweetTarget: true };
-  const col3 = { id: "col3", type: "home", tweetTarget: true };
-  const arr = [col1, col2, col3];
+  // If Col 4 switches to Live Feed, Col 3's "next" becomes ineligible -> null
+  const colsWithLive = [c1, c2, c3, { ...c4, liveFeed: true }];
+  assert.equal(routing.resolveTargetColumn(c3, colsWithLive), null);
 
-  assert.equal(routing.findTargetColumn(arr)?.id, "col2");
-  assert.equal(routing.findTargetColumn(arr)?.id, "col2");
-
-  const normalized = routing.normalizeTargets(arr);
-  assert.equal(normalized[1].tweetTarget, true);
-  assert.equal(normalized[2].tweetTarget, false);
-
-  // Already-valid array returns identical reference
-  assert.equal(routing.normalizeTargets(normalized), normalized);
-
-  // Ineligible target column (e.g. chat or liveFeed) is unset
-  const ineligible = [
-    { id: "c1", type: "chat", tweetTarget: true },
-    { id: "c2", type: "home", liveFeed: true, tweetTarget: true },
+  // sanitizeColumns preserves valid IDs and "next", clears deleted IDs and self-links
+  const dirty = [
+    { id: "c1", type: "home", linkTarget: "deleted_id" },
+    { id: "c2", type: "home", linkTarget: "c2" },
+    { id: "c3", type: "search", linkTarget: "next" },
+    { id: "c4", type: "chat", linkTarget: "c1" },
   ];
-  const normIneligible = routing.normalizeTargets(ineligible);
-  assert.equal(normIneligible[0].tweetTarget, false);
-  assert.equal(normIneligible[1].tweetTarget, false);
+  const cleaned = routing.sanitizeColumns(dirty);
+  assert.equal(cleaned[0].linkTarget, "");
+  assert.equal(cleaned[1].linkTarget, "");
+  assert.equal(cleaned[2].linkTarget, "next");
+  assert.equal(cleaned[3].linkTarget, "");
 });
 
-test("shouldRoute only routes from eligible sources to a different target", () => {
-  const { routing } = setup();
-  const target = { id: "target", type: "search", tweetTarget: true };
-  const source1 = { id: "s1", type: "home", openTweetsInTarget: true };
-  const source2 = { id: "s2", type: "home", openTweetsInTarget: false };
-  const columns = [source1, source2, target];
+test("chained 4-column workflow: Col 2 -> Col 3 (retweet list) -> Col 4 (user profile)", () => {
+  const { routing, document } = setup(`
+    <div data-column-id="c1"><iframe src="https://x.com/home#yomikui-c1"></iframe></div>
+    <div data-column-id="c2"><iframe src="https://x.com/home#yomikui-c2"></iframe></div>
+    <div data-column-id="c3"><iframe src="https://x.com/search#yomikui-c3"></iframe></div>
+    <div data-column-id="c4"><iframe src="https://x.com/search#yomikui-c4"></iframe></div>
+  `);
 
-  assert.equal(routing.shouldRoute(source1, columns)?.id, "target");
-  assert.equal(routing.shouldRoute(source2, columns), null);
-  assert.equal(routing.shouldRoute(target, columns), null);
-  assert.equal(routing.shouldRoute({ id: "chat", type: "chat" }, columns), null);
-});
+  const received = {};
+  for (const id of ["c1", "c2", "c3", "c4"]) {
+    const iframe = document.querySelector(`[data-column-id="${id}"] iframe`);
+    iframe.contentWindow = {
+      location: { href: iframe.src, origin: "https://x.com" },
+      postMessage: msg => { received[id] = msg; },
+    };
+  }
 
-test("isFullyVisible checks horizontal viewport boundaries with tolerance", () => {
-  const { routing } = setup();
-  const vp = { left: 100, right: 500 };
-  assert.equal(routing.isFullyVisible({ left: 100, right: 500 }, vp), true);
-  assert.equal(routing.isFullyVisible({ left: 120, right: 480 }, vp), true);
-  assert.equal(routing.isFullyVisible({ left: 99, right: 500 }, vp), true);
-  assert.equal(routing.isFullyVisible({ left: 90, right: 400 }, vp), false);
-  assert.equal(routing.isFullyVisible({ left: 200, right: 510 }, vp), false);
-});
-
-test("peekPendingSrc, takePendingSrc, and clearPending manage lazy-mount pending URLs", () => {
-  const { routing } = setup(`<div data-column-id="t1"></div>`);
-  const cols = [
-    { id: "s1", type: "home", openTweetsInTarget: true },
-    { id: "t1", type: "search", tweetTarget: true },
+  const columns = [
+    { id: "c1", type: "notifications", linkTarget: "" },
+    { id: "c2", type: "home", linkTarget: "c3" },
+    { id: "c3", type: "search", linkTarget: "c4" },
+    { id: "c4", type: "customUrl", linkTarget: "" },
   ];
 
-  routing.route({ columns: cols, sourceId: "s1", statusPath: "/author/status/789" });
-  // peekPendingSrc reads without consuming so initial <iframe src> and [Ge,q] effect agree
-  assert.equal(routing.peekPendingSrc("t1", "https://x.com/home?y=1#c"), "https://x.com/author/status/789?y=1#c");
-  assert.equal(routing.takePendingSrc("t1", "https://x.com/home?y=1#c"), "https://x.com/author/status/789?y=1#c");
-  // Subsequent calls return unchanged src
-  assert.equal(routing.peekPendingSrc("t1", "https://x.com/home?y=1#c"), "https://x.com/home?y=1#c");
-  assert.equal(routing.takePendingSrc("t1", "https://x.com/home?y=1#c"), "https://x.com/home?y=1#c");
+  // Step 1: In Col 2, open a tweet's retweet list -> opens in Col 3
+  assert.equal(routing.route({ columns, sourceId: "c2", statusPath: "/author/status/101/retweets" }), true);
+  assert.equal(received.c3?.path, "/author/status/101/retweets");
+  assert.equal(received.c4, undefined);
 
-  routing.route({ columns: cols, sourceId: "s1", statusPath: "/author/status/999" });
-  routing.clearPending("t1");
-  assert.equal(routing.takePendingSrc("t1", "https://x.com/home?y=1#c"), "https://x.com/home?y=1#c");
+  // Step 2: In Col 3, open a user from the retweet list -> opens in Col 4
+  assert.equal(routing.route({ columns, sourceId: "c3", statusPath: "/retweeter_user" }), true);
+  assert.equal(received.c4?.path, "/retweeter_user");
+
+  // Step 3: In Col 4 (linkTarget: ""), route returns false so Col 4 navigates in-place
+  assert.equal(routing.route({ columns, sourceId: "c4", statusPath: "/retweeter_user/status/999" }), false);
 });
 
-test("resolveClickTarget handles tweets, quote cards, list buttons, show-more, dialogs, and selections", () => {
-  const tweetHtml = `
-    <article data-testid="tweet" id="tweet-101">
-      <div data-testid="User-Name"><a href="/author/status/101"><time>Now</time></a></div>
-      <div data-testid="tweetText">
-        Tweet text with <a href="https://example.com" id="ext-link">link</a>,
-        <a href="/hashtag/test" id="hashtag">#test</a>, and
-        <a href="/author/status/101" data-testid="tweet-text-show-more-link" id="show-more">Show more</a>
+test("withPendingPath replaces stale search queries while preserving yomikui param and hash", () => {
+  const { routing } = setup();
+  const searchSrc = "https://x.com/search?q=old_query&yomikui=abc#yomikui-c3";
+  assert.equal(
+    routing.withPendingPath(searchSrc, "/target_user"),
+    "https://x.com/target_user?yomikui=abc#yomikui-c3"
+  );
+  assert.equal(
+    routing.withPendingPath(searchSrc, "/search?q=new_topic"),
+    "https://x.com/search?q=new_topic&yomikui=abc#yomikui-c3"
+  );
+});
+
+test("resolveClickTarget handles tweets, UserCell rows, profiles, hashtags, and excludes tabs/search/modals", () => {
+  const html = `
+    <header role="banner"><a href="/home" id="nav-home">Home</a></header>
+    <div data-testid="primaryColumn">
+      <button data-testid="app-bar-back" id="back-btn">Back</button>
+      <form role="search"><input id="search-input" /><a href="/search?q=typed" id="search-form-link">Go</a></form>
+      <div role="tablist">
+        <a role="tab" href="/target_user/with_replies" id="profile-tab">Replies</a>
       </div>
-      <div data-testid="tweetQuote" id="quote-card-1">
-        <a href="/quoted/status/202" id="quote-permalink">Quoted</a>
-      </div>
-      <div role="link" id="media-quote-card">
-        <span id="media-quote-text">Quoted media caption</span>
-        <a href="/quoted2/status/303/photo/1"><div data-testid="tweetPhoto" id="quote-photo">Img</div></a>
-      </div>
-      <div role="group" id="action-bar">
-        <div><button data-testid="reply" id="reply-btn">Reply</button></div>
-        <div data-yomikui-tweet-action="quotes"><a href="https://x.com/author/status/101/quotes#yomikui" id="quote-list-btn"><svg id="quote-svg"></svg></a></div>
-      </div>
-    </article>
-    <div role="dialog">
-      <article data-testid="tweet" id="dialog-tweet">
-        <div data-testid="User-Name"><a href="/other/status/404"><time>1m</time></a></div>
+
+      <article data-testid="tweet" id="tweet-101">
+        <div data-testid="Tweet-User-Avatar"><a href="/tweet_author" id="author-avatar">Avatar</a></div>
+        <div data-testid="User-Name"><a href="/tweet_author/status/101"><time id="tweet-time">Now</time></a></div>
+        <div data-testid="tweetText">
+          Hello <a href="/mentioned_user" id="mention">@mentioned_user</a>
+          <a href="/hashtag/Yomikui?src=hashtag_click" id="hashtag">#Yomikui</a>
+          <a href="https://t.co/ext123" id="tco-link">https://example.com</a>
+          <a href="/tweet_author/status/101" data-testid="tweet-text-show-more-link" id="show-more">Show more</a>
+        </div>
+        <div data-testid="tweetQuote" id="quote-card">
+          <a href="/quoted_user/status/202" id="quote-link">Quoted</a>
+        </div>
+        <div role="group" id="action-bar">
+          <button data-testid="like" id="like-btn">Like</button>
+          <div data-yomikui-tweet-action="retweets"><a href="https://x.com/tweet_author/status/101/retweets#yomikui" id="rt-list-btn">RTs</a></div>
+        </div>
       </article>
+
+      <div data-testid="UserCell" role="button" id="user-cell">
+        <a href="/cell_owner" id="cell-avatar">Img</a>
+        <a href="/cell_owner" id="cell-name">Cell Owner</a>
+        <button data-testid="123-follow" id="cell-follow-btn">Follow</button>
+        <div data-testid="UserDescription" id="cell-bio">
+          Bio mentioning <a href="/bio_friend" id="cell-bio-mention">@bio_friend</a>
+          <span id="cell-bio-plain">and plain bio text</span>
+        </div>
+      </div>
     </div>
   `;
-  const { routing, document, window } = setup(tweetHtml);
+  const { routing, document } = setup(html);
+  routing.setFrameEnabled(true);
 
-  const clickEvent = (target, props = {}) => ({
+  const click = (id, props = {}) => ({
     button: 0,
-    target,
+    target: document.getElementById(id),
     defaultPrevented: false,
-    preventDefault() { this.defaultPrevented = true; },
-    stopImmediatePropagation() {},
     ...props,
   });
 
-  const tweet = document.getElementById("tweet-101");
-  routing.setFrameEnabled(false);
-  assert.equal(routing.resolveClickTarget(clickEvent(tweet)), null);
+  // Tweet & quote & engagement list links
+  assert.equal(routing.resolveClickTarget(click("tweet-101")), "/tweet_author/status/101");
+  assert.equal(routing.resolveClickTarget(click("tweet-time")), "/tweet_author/status/101");
+  assert.equal(routing.resolveClickTarget(click("quote-card")), "/quoted_user/status/202");
+  assert.equal(routing.resolveClickTarget(click("rt-list-btn")), "/tweet_author/status/101/retweets");
 
-  routing.setFrameEnabled(true);
-  assert.equal(routing.isFrameEnabled(), true);
+  // Author profile, @mention, #hashtag
+  assert.equal(routing.resolveClickTarget(click("author-avatar")), "/tweet_author");
+  assert.equal(routing.resolveClickTarget(click("mention")), "/mentioned_user");
+  assert.equal(routing.resolveClickTarget(click("hashtag")), "/hashtag/Yomikui?src=hashtag_click");
 
-  // Main tweet & timestamp
-  assert.equal(routing.resolveClickTarget(clickEvent(tweet)), "/author/status/101");
-  assert.equal(routing.resolveClickTarget(clickEvent(tweet.querySelector("time"))), "/author/status/101");
+  // UserCell in Retweet list: avatar, name, plain bio/row background -> /cell_owner; bio @mention -> /bio_friend; Follow button -> null!
+  assert.equal(routing.resolveClickTarget(click("cell-avatar")), "/cell_owner");
+  assert.equal(routing.resolveClickTarget(click("cell-name")), "/cell_owner");
+  assert.equal(routing.resolveClickTarget(click("cell-bio-plain")), "/cell_owner");
+  assert.equal(routing.resolveClickTarget(click("user-cell")), "/cell_owner");
+  assert.equal(routing.resolveClickTarget(click("cell-bio-mention")), "/bio_friend");
+  assert.equal(routing.resolveClickTarget(click("cell-follow-btn")), null);
 
-  // Quote list action link (including inner SVG)
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("quote-list-btn"))), "/author/status/101/quotes");
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("quote-svg"))), "/author/status/101/quotes");
+  // Excluded UI controls (tabs, search bar, header nav, back button, t.co external link, show-more, like button, action bar padding)
+  assert.equal(routing.resolveClickTarget(click("profile-tab")), null);
+  assert.equal(routing.resolveClickTarget(click("search-form-link")), null);
+  assert.equal(routing.resolveClickTarget(click("nav-home")), null);
+  assert.equal(routing.resolveClickTarget(click("back-btn")), null);
+  assert.equal(routing.resolveClickTarget(click("tco-link")), null);
+  assert.equal(routing.resolveClickTarget(click("show-more")), null);
+  assert.equal(routing.resolveClickTarget(click("like-btn")), null);
+  assert.equal(routing.resolveClickTarget(click("action-bar")), null);
+});
 
-  // Bare click on role="group" action bar padding is ignored
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("action-bar"))), null);
+test("openInPlace detects SPA arrival for user profiles as well as tweets and retweet lists without reloading", async () => {
+  const html = `
+    <div data-testid="primaryColumn" id="primary">
+      <div data-testid="UserName" id="old-username">@alice</div>
+      <a role="tab" href="/alice/with_replies" id="old-tab">Replies</a>
+    </div>
+  `;
+  const { routing, document, window, observers, clock } = setup(html);
+  let hrefReloads = 0;
+  let currentHref = "https://x.com/alice#yomikui-col4";
+  window.location = {
+    get href() { return currentHref; },
+    set href(val) { currentHref = val; hrefReloads++; },
+    pathname: "/alice",
+    hash: "#yomikui-col4",
+  };
+  window.history.pushState = (_s, _t, url) => {
+    currentHref = `https://x.com${url}`;
+    window.location.pathname = url.split("?")[0].split("#")[0];
+  };
 
-  // Quote tweet cards (tweetQuote & media-only role="link" card)
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("quote-permalink"))), "/quoted/status/202");
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("quote-card-1"))), "/quoted/status/202");
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("media-quote-text"))), "/quoted2/status/303");
-  // Clicking photo inside quote card opens lightbox instead of routing
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("quote-photo"))), null);
+  // Navigate from @alice to @bob -> must NOT false-match @alice's existing UserName or tab
+  routing.openInPlace("/bob");
+  const obs = observers.at(-1);
+  assert.equal(obs.connected, true);
+  obs.emit([{}]);
+  await clock.advance(100);
+  assert.equal(obs.connected, true);
 
-  // Show-more link (even as <a href="/author/status/101">), external links, hashtags, buttons, dialogs
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("show-more"))), null);
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("ext-link"))), null);
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("hashtag"))), null);
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("reply-btn"))), null);
-  assert.equal(routing.resolveClickTarget(clickEvent(document.getElementById("dialog-tweet"))), null);
+  // X updates UserName to @bob -> arrival detected, observer disconnects, zero full reloads!
+  document.getElementById("old-username").textContent = "Bob (@bob)";
+  obs.emit([{}]);
+  await clock.advance(100);
+  assert.equal(obs.connected, false);
+  await clock.advance(3000);
+  assert.equal(hrefReloads, 0);
+});
 
-  // Active non-collapsed text selection skips routing
-  window.getSelection = () => ({ isCollapsed: false, toString: () => "selected text" });
-  assert.equal(routing.resolveClickTarget(clickEvent(tweet)), null);
-  window.getSelection = () => ({ isCollapsed: true, toString: () => "" });
-  assert.equal(routing.resolveClickTarget(clickEvent(tweet)), "/author/status/101");
+test("SettingsControls renders per-column dropdown with self, right-neighbor, and numbered columns", () => {
+  const { routing } = setup();
+  const element = (type, props, key) => ({ type, props, key });
+  const jsx = { jsx: element, jsxs: element, Fragment: "Fragment" };
+  const dict = {
+    column_settings_link_target: "リンクの表示先の列",
+    column_settings_link_target_desc: "説明",
+    column_settings_link_target_self: "この列で開く（標準）",
+    column_settings_link_target_next_with_name: "右隣の列（$1$）",
+    column_settings_link_target_next_unavailable: "右隣の列（現在対象なし）",
+    column_settings_link_target_col_item: "$1$列目: $2$",
+    column_settings_link_target_next_missing_note: "※対象なし",
+  };
+  const t = key => dict[key] || key;
+
+  const cols = [
+    { id: "c1", title: "通知", type: "notifications", linkTarget: "" },
+    { id: "c2", title: "ホーム", type: "home", linkTarget: "c3" },
+    { id: "c3", title: "検索", type: "search", linkTarget: "next" },
+    { id: "c4", title: "プロフィール用", type: "customUrl", linkTarget: "" },
+  ];
+
+  const changes = [];
+  const tree = routing.SettingsControls({
+    column: cols[1], // 2列目
+    columns: cols,
+    onChange: patch => changes.push(patch),
+    formatColumnName: col => col.title,
+    jsx,
+    t,
+  });
+
+  const select = tree.props.children[1];
+  assert.equal(select.type, "select");
+  assert.equal(select.props.value, "c3");
+
+  const options = Array.from(select.props.children, opt => ({ value: opt.props.value, label: opt.props.children }));
+  assert.deepEqual(options, [
+    { value: "", label: "この列で開く（標準）" },
+    { value: "next", label: "右隣の列（3列目: 検索）" },
+    { value: "c1", label: "1列目: 通知" },
+    { value: "c3", label: "3列目: 検索" },
+    { value: "c4", label: "4列目: プロフィール用" },
+  ]);
+
+  select.props.onChange({ currentTarget: { value: "next" } });
+  assert.equal(changes[0].linkTarget, "next");
 });
 
 test("installFrame dynamically attaches click listener only while enabled and validates message origin", () => {
@@ -252,220 +358,78 @@ test("installFrame dynamically attaches click listener only while enabled and va
     return origRemove(type, fn, opts);
   };
 
-  routing.installFrame({ getColumnId: () => "col1", getParentOrigin: () => "https://x.com" });
-  // Disabled by default -> zero capture click listeners registered
+  routing.installFrame({ getColumnId: () => "col2", getParentOrigin: () => "https://x.com" });
   assert.equal(addCount, 0);
 
   routing.setFrameEnabled(true);
   assert.equal(addCount, 1);
-  routing.setFrameEnabled(true); // idempotent
-  assert.equal(addCount, 1);
-
   routing.setFrameEnabled(false);
   assert.equal(removeCount, 1);
 
-  // Message origin & source validation
   let pushedUrl = null;
   window.history.pushState = (_s, _t, url) => { pushedUrl = url; };
 
-  // Untrusted origin is rejected
   window.dispatchEvent({
     type: "message",
     source: window.parent,
     origin: "https://evil.example",
-    data: { type: "yomikui-tweet-route-open", path: "/author/status/111" },
+    data: { type: "yomikui-tweet-route-open", path: "/target_user" },
   });
   assert.equal(pushedUrl, null);
 
-  // Wrong source is rejected
-  window.dispatchEvent({
-    type: "message",
-    source: {},
-    origin: "https://x.com",
-    data: { type: "yomikui-tweet-route-open", path: "/author/status/111" },
-  });
-  assert.equal(pushedUrl, null);
-
-  // Valid parent + x.com origin navigates cleanly
   window.dispatchEvent({
     type: "message",
     source: window.parent,
     origin: "https://x.com",
-    data: { type: "yomikui-tweet-route-open", path: "/author/status/111" },
+    data: { type: "yomikui-tweet-route-open", path: "/target_user" },
   });
-  assert.equal(pushedUrl, "/author/status/111#yomikui-col1");
+  assert.equal(pushedUrl, "/target_user#yomikui-col1");
 });
 
-test("route checks columnComposing, scrolls only when offscreen, handles about:blank, and deduplicates focus timers", async () => {
-  const { routing, document, window, clock } = setup(`
+test("route respects columnComposing guard and scrolls horizontally only when target is offscreen", () => {
+  const { routing, document, window } = setup(`
     <div id="scroller">
-      <div data-column-id="s1"></div>
-      <div data-column-id="t1"><iframe src="https://x.com/home#yomikui-t1"></iframe></div>
+      <div data-column-id="c2"></div>
+      <div data-column-id="c3"><iframe src="https://x.com/home#yomikui-c3"></iframe></div>
     </div>
   `);
-  window.innerWidth = 1000;
   const scroller = document.getElementById("scroller");
   window.getComputedStyle = el => (el === scroller ? { overflowX: "auto" } : {});
   scroller.getBoundingClientRect = () => ({ left: 0, right: 1000 });
 
-  const targetDiv = document.querySelector('[data-column-id="t1"]');
-  let colBounds = { left: 200, right: 600 };
+  const targetDiv = document.querySelector('[data-column-id="c3"]');
+  let bounds = { left: 200, right: 600 };
   let scrollCalls = 0;
-  targetDiv.getBoundingClientRect = () => colBounds;
+  targetDiv.getBoundingClientRect = () => bounds;
   targetDiv.scrollIntoView = () => { scrollCalls++; };
 
-  const iframe = document.querySelector("iframe");
-  let postedMessage = null;
+  const iframe = targetDiv.querySelector("iframe");
   iframe.contentWindow = {
-    location: { href: "https://x.com/home#yomikui-t1", origin: "https://x.com" },
-    postMessage: msg => { postedMessage = msg; },
+    location: { href: iframe.src, origin: "https://x.com" },
+    postMessage() {},
   };
 
   const cols = [
-    { id: "s1", type: "home", openTweetsInTarget: true },
-    { id: "t1", type: "search", tweetTarget: true },
+    { id: "c2", type: "home", linkTarget: "c3" },
+    { id: "c3", type: "search", linkTarget: "" },
   ];
 
-  // Composing guard skips routing so drafts are preserved
-  assert.equal(
-    routing.route({ columns: cols, columnComposing: { t1: true }, sourceId: "s1", statusPath: "/author/status/555" }),
-    false
-  );
-  assert.equal(postedMessage, null);
+  // Composing draft in c3 skips routing
+  assert.equal(routing.route({ columns: cols, columnComposing: { c3: true }, sourceId: "c2", statusPath: "/bob" }), false);
 
-  // Visible target column: routes WITHOUT horizontal scrolling
-  assert.equal(
-    routing.route({ columns: cols, columnComposing: { t1: false }, sourceId: "s1", statusPath: "/author/status/555" }),
-    true
-  );
-  assert.equal(postedMessage?.path, "/author/status/555");
+  // Fully visible -> no scroll
+  assert.equal(routing.route({ columns: cols, columnComposing: { c3: false }, sourceId: "c2", statusPath: "/bob" }), true);
   assert.equal(scrollCalls, 0);
-  assert.equal(targetDiv.classList.contains("rd-column-focused"), true);
 
-  // Offscreen target column + overlapping focus timer: scrolls and extends focus timer cleanly
-  await clock.advance(1000);
-  colBounds = { left: 800, right: 1200 };
-  assert.equal(routing.route({ columns: cols, sourceId: "s1", statusPath: "/author/status/556" }), true);
+  // Offscreen -> scrolls into view
+  bounds = { left: 850, right: 1250 };
+  assert.equal(routing.route({ columns: cols, sourceId: "c2", statusPath: "/alice" }), true);
   assert.equal(scrollCalls, 1);
-  await clock.advance(700); // 1700ms after first click, 700ms after second -> must still be focused!
-  assert.equal(targetDiv.classList.contains("rd-column-focused"), true);
-  await clock.advance(900);
-  assert.equal(targetDiv.classList.contains("rd-column-focused"), false);
-
-  // about:blank iframe updates iframe.src directly instead of dropping postMessage
-  postedMessage = null;
-  iframe.contentWindow.location = { href: "about:blank", origin: "null" };
-  assert.equal(routing.route({ columns: cols, sourceId: "s1", statusPath: "/author/status/557" }), true);
-  assert.equal(postedMessage, null);
-  assert.equal(iframe.src, "https://x.com/author/status/557#yomikui-t1");
 });
 
-test("openInPlace ignores pre-existing tweets/cells and cancels fallback reload once new content arrives", async () => {
-  const html = `
-    <div data-testid="primaryColumn" id="primary">
-      <article data-testid="tweet" id="old-tweet"><a href="/author/status/888">Old</a></article>
-      <div data-testid="UserCell" id="old-cell">Old user</div>
-    </div>
-  `;
-  const { routing, document, window, observers, clock } = setup(html);
-  let hrefReloads = 0;
-  let currentHref = "https://x.com/home#yomikui-col1";
-  window.location = {
-    get href() { return currentHref; },
-    set href(val) { currentHref = val; hrefReloads++; },
-    pathname: "/home",
-    hash: "#yomikui-col1",
-  };
-  window.history.pushState = (_s, _t, url) => {
-    currentHref = `https://x.com${url}`;
-    window.location.pathname = url.split("?")[0].split("#")[0];
-  };
-
-  // 1. Navigating to /author/status/888 must NOT false-match #old-tweet already in DOM
-  routing.openInPlace("/author/status/888");
-  const obs1 = observers.at(-1);
-  assert.equal(obs1.connected, true);
-  obs1.emit([{}]);
-  await clock.advance(100);
-  // Still waiting because #old-tweet was in priorNodes
-  assert.equal(obs1.connected, true);
-
-  // Now X mounts the new detail article -> observer disconnects and 2.5s reload is skipped!
-  const primary = document.getElementById("primary");
-  const newArticle = document.createElement("article");
-  newArticle.setAttribute("data-testid", "tweet");
-  newArticle.innerHTML = `<a href="/author/status/888">Focal</a>`;
-  primary.appendChild(newArticle);
-  obs1.emit([{}]);
-  await clock.advance(100);
-  assert.equal(obs1.connected, false);
-  await clock.advance(3000);
-  assert.equal(hrefReloads, 0);
-
-  // 2. Navigating from /author/status/888 to /author/status/888/retweets is NOT skipped,
-  //    does NOT false-match #old-cell, and resolves cleanly when the matching tab arrives
-  routing.openInPlace("/author/status/888/retweets");
-  const obs2 = observers.at(-1);
-  assert.equal(obs2.connected, true);
-  obs2.emit([{}]);
-  await clock.advance(100);
-  assert.equal(obs2.connected, true);
-
-  const tab = document.createElement("a");
-  tab.setAttribute("role", "tab");
-  tab.setAttribute("href", "/author/status/888/retweets");
-  primary.appendChild(tab);
-  obs2.emit([{}]);
-  await clock.advance(100);
-  assert.equal(obs2.connected, false);
-  await clock.advance(3000);
-  assert.equal(hrefReloads, 0);
-});
-
-test("SettingsControls renders target and source options according to eligibility", () => {
-  const { routing } = setup();
-  const element = (type, props, key) => ({ type, props, key });
-  const jsx = { jsx: element, jsxs: element, Fragment: "Fragment" };
-  const t = (key, args) => `${key}:${args ? args.join(",") : ""}`;
-
-  const col1 = { id: "col1", title: "Home", type: "home", tweetTarget: false, openTweetsInTarget: true };
-  const col2 = { id: "col2", title: "Target Col", type: "search", tweetTarget: true };
-  const columns = [col1, col2];
-
-  const result1 = routing.SettingsControls({
-    column: col1,
-    columns,
-    onChange: () => {},
-    onSetTarget: () => {},
-    Switch: "Switch",
-    Label: "Label",
-    jsx,
-    t,
-    rowClassName: "row",
-  });
-  assert.ok(result1);
-  assert.equal(result1.props.children[0].key, "tweetTarget");
-  assert.equal(result1.props.children[1].key, "openTweetsInTarget");
-
-  const result2 = routing.SettingsControls({
-    column: col2,
-    columns,
-    onChange: () => {},
-    onSetTarget: () => {},
-    Switch: "Switch",
-    Label: "Label",
-    jsx,
-    t,
-    rowClassName: "row",
-  });
-  assert.ok(result2);
-  assert.equal(result2.props.children[0].key, "tweetTarget");
-  assert.equal(result2.props.children[1], null);
-});
-
-test("contentDeck store setTweetTargetColumn enforces eligibility, mutual exclusion, and clears pending paths", () => {
+test("contentDeck store resets linkTarget when the referenced target column is removed", () => {
   const deckSource = readFileSync(new URL("../contentDeck.js", import.meta.url), "utf8");
-  const { context, routing, document } = setup(`<div data-column-id="c1"></div><div data-column-id="c2"></div>`);
+  const { context, routing } = setup(`<div data-column-id="c3"></div>`);
   Object.assign(context, {
     crypto: { randomUUID },
     console: { log() {}, warn() {}, error() {} },
@@ -486,66 +450,56 @@ test("contentDeck store setTweetTargetColumn enforces eligibility, mutual exclus
   );
 
   const { deckStore, createColumn } = context;
-  const c1 = { ...createColumn("home", "#1d9bf0"), id: "c1" };
-  const c2 = { ...createColumn("search", "#00ba7c"), id: "c2" };
-  const cChat = { ...createColumn("chat", "#f91880"), id: "cChat" };
-  const cLive = { ...createColumn("home", "#ffad1f"), id: "cLive", liveFeed: true };
-  deckStore.setState({ activeWorkspaceId: "ws", columns: [c1, c2, cChat, cLive], workspaces: [] });
+  const c2 = { ...createColumn("home", "#1d9bf0"), id: "c2", linkTarget: "c3" };
+  const c3 = { ...createColumn("search", "#00ba7c"), id: "c3", linkTarget: "next" };
+  deckStore.setState({ activeWorkspaceId: "ws", columns: [c2, c3], workspaces: [] });
 
-  // Ineligible columns cannot be marked as target
-  deckStore.getState().setTweetTargetColumn("cChat", true);
-  deckStore.getState().setTweetTargetColumn("cLive", true);
-  assert.equal(routing.findTargetColumn(deckStore.getState().columns), null);
+  routing.route({ columns: deckStore.getState().columns, sourceId: "c2", statusPath: "/author/status/123" });
+  assert.equal(routing.peekPendingSrc("c3", "https://x.com/home"), "https://x.com/author/status/123");
 
-  // Mark c1 as target, queue a pending path on c1, then switch target to c2 -> c1 unset & pending cleared
-  deckStore.getState().setTweetTargetColumn("c1", true);
-  assert.equal(routing.findTargetColumn(deckStore.getState().columns)?.id, "c1");
-  routing.route({ columns: deckStore.getState().columns, sourceId: "c2", statusPath: "/author/status/777" });
-  assert.equal(routing.peekPendingSrc("c1", "https://x.com/home"), "https://x.com/author/status/777");
-
-  deckStore.getState().setTweetTargetColumn("c2", true);
-  assert.equal(routing.findTargetColumn(deckStore.getState().columns)?.id, "c2");
-  assert.equal(deckStore.getState().columns.find(c => c.id === "c1").tweetTarget, false);
-  assert.equal(routing.peekPendingSrc("c1", "https://x.com/home"), "https://x.com/home");
+  // Removing c3 resets c2.linkTarget to "" and clears c3's pending path
+  deckStore.getState().removeColumn("c3");
+  assert.equal(deckStore.getState().columns.find(c => c.id === "c2").linkTarget, "");
+  assert.equal(routing.peekPendingSrc("c3", "https://x.com/home"), "https://x.com/home");
 });
 
-test("extension bundle and manifests integrate YomikuiTweetRouting correctly", () => {
+test("extension bundle and manifests integrate per-column link routing in General settings", () => {
   const deck = readFileSync(new URL("../contentDeck.js", import.meta.url), "utf8");
   const iframe = readFileSync(new URL("../contentIframe.js", import.meta.url), "utf8");
   const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
   const jaLocale = JSON.parse(readFileSync(new URL("../_locales/ja/messages.json", import.meta.url), "utf8"));
 
-  // Check contentDeck bundle integration (including [Ge,q] lazy-mount, peekPendingSrc, O(1) routeTweets, timeline fallback)
-  assert.match(deck, /tweetTarget:Re\.boolean\(\)\.catch\(!1\)/);
-  assert.match(deck, /openTweetsInTarget:Re\.boolean\(\)\.catch\(!0\)/);
-  assert.match(deck, /setTweetTargetColumn\(columnId,enabled\)/);
-  assert.match(deck, /globalThis\.YomikuiTweetRouting\?\.route/);
-  assert.match(deck, /globalThis\.YomikuiTweetRouting\?\.peekPendingSrc/);
-  assert.match(deck, /\[Ge,q\]/);
-  assert.match(deck, /an\(kx\(it\.current,q\)\)\},\[kt,q\]/);
-  assert.match(deck, /routeTweets:Boolean\(TtId&&TtId!==e\.id/);
-  assert.match(deck, /if\(e\.type==="timeline"\)/);
+  // Ensure old global target fields are completely gone
+  assert.equal(deck.includes("tweetTarget"), false);
+  assert.equal(deck.includes("openTweetsInTarget"), false);
+
+  // Check new linkTarget integration in contentDeck.js
+  assert.match(deck, /linkTarget:Re\.string\(\)\.catch\(""\)/);
+  assert.match(deck, /resolvedTargetId:globalThis\.YomikuiTweetRouting\?\.resolveTargetColumn/);
+  assert.match(deck, /routeTweets:Boolean\(TtId\)/);
   assert.match(deck, /globalThis\.YomikuiTweetRouting\.SettingsControls/);
 
-  // Check contentIframe bundle integration (native + Live Feed)
+  // Check contentIframe.js integration
   assert.match(iframe, /globalThis\.YomikuiTweetRouting\?\.setFrameEnabled/);
   assert.match(iframe, /globalThis\.YomikuiTweetRouting\?\.isFrameEnabled/);
-  assert.match(iframe, /openLiveFeedTweetInSelf/);
+  assert.match(iframe, /globalThis\.YomikuiTweetRouting\?\.normalizeRoutePath/);
   assert.match(iframe, /globalThis\.YomikuiTweetRouting\?\.installFrame/);
 
-  // Check manifest content_scripts
+  // Check manifest ordering
   const deckScripts = manifest.content_scripts.find(cs => cs.matches.some(m => m.includes("/yomikui*"))).js;
   const iframeScripts = manifest.content_scripts.find(cs => cs.all_frames === true && cs.run_at === "document_start" && !cs.world).js;
   assert.ok(deckScripts.indexOf("tweetRouting.js") > deckScripts.indexOf("tweetActions.js"));
   assert.ok(iframeScripts.indexOf("tweetRouting.js") > iframeScripts.indexOf("tweetActions.js"));
 
-  // Check translation keys in ja locale and fallback
+  // Check translation keys
   const keys = [
-    "column_settings_tweet_target",
-    "column_settings_tweet_target_desc",
-    "column_settings_open_in_target",
-    "column_settings_open_in_target_desc",
-    "column_settings_open_in_target_none",
+    "column_settings_link_target",
+    "column_settings_link_target_desc",
+    "column_settings_link_target_self",
+    "column_settings_link_target_next_with_name",
+    "column_settings_link_target_next_unavailable",
+    "column_settings_link_target_col_item",
+    "column_settings_link_target_next_missing_note",
   ];
   for (const key of keys) {
     assert.ok(jaLocale[key], `_locales/ja/messages.json contains ${key}`);

@@ -247,26 +247,42 @@
   "column_settings_hide_share_desc": {
     "message": "各ツイートの下部の共有ボタンを非表示にします。"
   },
-  "column_settings_tweet_target": {
-    "message": "ツイートの表示先にする"
+  "column_settings_link_target": {
+    "message": "リンクの表示先の列"
   },
-  "column_settings_tweet_target_desc": {
-    "message": "ほかの列で開いたツイートを、この列に表示します。ワークスペースにつき1列です。"
+  "column_settings_link_target_desc": {
+    "message": "ツイート・一覧・ユーザー・ハッシュタグ等の遷移先を開く列を指定します。"
   },
-  "column_settings_open_in_target": {
-    "message": "ツイートを表示先の列で開く"
+  "column_settings_link_target_self": {
+    "message": "この列で開く（標準）"
   },
-  "column_settings_open_in_target_desc": {
-    "message": "「$1$」で開きます。",
+  "column_settings_link_target_next_with_name": {
+    "message": "右隣の列（$1$）",
     "placeholders": {
       "1": {
         "content": "$1",
-        "example": "ツイート詳細"
+        "example": "3列目: 検索"
       }
     }
   },
-  "column_settings_open_in_target_none": {
-    "message": "表示先の列が設定されていません。"
+  "column_settings_link_target_next_unavailable": {
+    "message": "右隣の列（現在対象なし）"
+  },
+  "column_settings_link_target_col_item": {
+    "message": "$1$列目: $2$",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "3"
+      },
+      "2": {
+        "content": "$2",
+        "example": "検索"
+      }
+    }
+  },
+  "column_settings_link_target_next_missing_note": {
+    "message": "※右隣に表示可能な列がない間は、この列で開きます。"
   },
   "tweet_action_quote_list": {
     "message": "引用リツイート一覧"

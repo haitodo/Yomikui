@@ -1,16 +1,55 @@
 "use strict";
 
 // Loaded before contentDeck.js and contentIframe.js.
-// Manages routing tweet links opened in timeline columns to a designated target column.
+// Manages per-column routing of X internal links (tweets, quote/retweet lists,
+// user profiles, hashtags, lists, etc.) to a user-configured target column.
 (() => {
   if (globalThis.YomikuiTweetRouting) return;
 
-  const EXCLUDED_TYPES = new Set(["timeline", "chat"]);
+  const EXCLUDED_TYPES = new Set(["timeline", "chat", "grok", "post"]);
   const ALLOWED_HOSTS = new Set(["x.com", "www.x.com", "twitter.com", "www.twitter.com"]);
-  const STATUS_PATH_RE = /^\/(?:[A-Za-z0-9_]+|i\/web)\/status\/\d+(?:\/(?:quotes|retweets))?(?=\/?$)/;
-  const STATUS_KEY_RE = /\/status\/\d+(?:\/(?:quotes|retweets))?$/;
-  const IGNORED_TAGS = new Set(["BUTTON", "INPUT", "TEXTAREA", "SELECT", "VIDEO", "AUDIO", "SUMMARY"]);
-  const IGNORED_ROLES = new Set(["button", "menuitem", "tab", "checkbox", "switch", "menu", "dialog", "group"]);
+  const STATUS_PATH_RE = /^\/(?:[A-Za-z0-9_]+|i\/web)\/status\/\d+(?:\/(?:quotes|retweets|likes))?$/i;
+  const EXCLUDED_STATUS_SUBPATH_RE = /^\/(?:[A-Za-z0-9_]+|i\/web)\/status\/\d+\/(?:photo|video|media_tags|analytics|history|hidden)(?:\/|$)/i;
+  const EXCLUDED_PROFILE_MODAL_RE = /^\/[A-Za-z0-9_]+\/(?:photo|header_photo)(?:\/|$)/i;
+  const EXCLUDED_ROOT_ROUTE_RE = /^\/(?:compose|intent|login|logout|signup|settings|messages|account|privacy|tos|yomikui)(?:\/|$)/i;
+  const EXCLUDED_INTERNAL_ROUTE_RE = /^\/i\/(?:flow|chat|grok|keyboard_shortcuts|display|verified-choose|premium_sign_up|spaces|broadcasts)(?:\/|$)/i;
+  const PROFILE_PATH_RE = /^\/[A-Za-z0-9_]+$/;
+
+  const IGNORED_CONTAINERS_SELECTOR = [
+    '[role="dialog"]',
+    '[role="menu"]',
+    '[role="tablist"]',
+    'header[role="banner"]',
+    'form',
+    '[role="search"]',
+    '[data-testid="BottomBar"]',
+    '[data-testid="Dropdown"]',
+    '[data-testid="sheetDialog"]',
+    '[data-testid="typeaheadDropdown"]',
+    '[data-testid="AccountSwitcher_LoggedInAccounts"]',
+    '[data-testid="app-bar-back"]',
+  ].join(", ");
+
+  const CONTENT_SCOPE_SELECTOR = '[data-testid="primaryColumn"], main[role="main"], article[data-testid="tweet"], [data-testid="UserCell"]';
+
+  const IGNORED_TAGS = new Set(["BUTTON", "INPUT", "TEXTAREA", "SELECT", "VIDEO", "AUDIO", "SUMMARY", "LABEL"]);
+  const IGNORED_ROLES = new Set([
+    "button",
+    "menuitem",
+    "menuitemradio",
+    "tab",
+    "tablist",
+    "checkbox",
+    "radio",
+    "switch",
+    "menu",
+    "dialog",
+    "group",
+    "combobox",
+    "listbox",
+    "option",
+    "searchbox",
+  ]);
   const IGNORED_TESTIDS = new Set([
     "tweetPhoto",
     "videoPlayer",
@@ -25,7 +64,9 @@
     "unlike",
     "bookmark",
     "removeBookmark",
+    "app-bar-back",
   ]);
+
   const PENDING_TTL_MS = 15000;
   const FOCUS_DURATION_MS = 1500;
   const ARRIVAL_CHECK_DEBOUNCE_MS = 60;
@@ -41,30 +82,62 @@
     }
   }
 
-  function normalizeStatusPath(value) {
+  function parseInternalUrl(value) {
     if (typeof value !== "string" || !value) return null;
-    let pathname = value;
-    if (value.charCodeAt(0) === 47 && value.charCodeAt(1) !== 47) {
-      const q = value.indexOf("?");
-      const h = value.indexOf("#");
-      const cut = q === -1 ? h : (h === -1 ? q : Math.min(q, h));
-      if (cut !== -1) pathname = value.slice(0, cut);
-    } else {
-      try {
-        const url = new URL(value, "https://x.com");
-        if (url.protocol !== "https:" || !ALLOWED_HOSTS.has(url.hostname)) return null;
-        pathname = url.pathname;
-      } catch {
-        return null;
-      }
+    if (value.charCodeAt(0) === 47) {
+      if (value.charCodeAt(1) === 47) return null;
+      const hashIdx = value.indexOf("#");
+      const noHash = hashIdx === -1 ? value : value.slice(0, hashIdx);
+      const qIdx = noHash.indexOf("?");
+      return qIdx === -1
+        ? { pathname: noHash, search: "" }
+        : { pathname: noHash.slice(0, qIdx), search: noHash.slice(qIdx) };
     }
-    const match = pathname.match(STATUS_PATH_RE);
-    return match ? match[0] : null;
+    try {
+      const url = new URL(value, "https://x.com");
+      if (url.protocol !== "https:" || !ALLOWED_HOSTS.has(url.hostname.toLowerCase())) return null;
+      return { pathname: url.pathname, search: url.search };
+    } catch {
+      return null;
+    }
   }
 
-  function statusRouteKey(value) {
-    const path = normalizeStatusPath(value);
-    return path ? (path.match(STATUS_KEY_RE)?.[0] ?? path) : null;
+  function normalizeStatusPath(value) {
+    const parsed = parseInternalUrl(value);
+    if (!parsed) return null;
+    const pathname = parsed.pathname.length > 1 ? parsed.pathname.replace(/\/+$/, "") : parsed.pathname;
+    return STATUS_PATH_RE.test(pathname) ? pathname : null;
+  }
+
+  function normalizeRoutePath(value) {
+    const parsed = parseInternalUrl(value);
+    if (!parsed) return null;
+    const pathname = parsed.pathname.length > 1 ? parsed.pathname.replace(/\/+$/, "") : parsed.pathname;
+    if (!pathname || pathname === "/" || !pathname.startsWith("/")) return null;
+
+    if (
+      EXCLUDED_STATUS_SUBPATH_RE.test(pathname) ||
+      EXCLUDED_PROFILE_MODAL_RE.test(pathname) ||
+      EXCLUDED_ROOT_ROUTE_RE.test(pathname) ||
+      EXCLUDED_INTERNAL_ROUTE_RE.test(pathname)
+    ) {
+      return null;
+    }
+
+    if (STATUS_PATH_RE.test(pathname)) {
+      return pathname;
+    }
+
+    if (!parsed.search || parsed.search === "?") {
+      return pathname;
+    }
+    if (parsed.search.includes("q=yomikui-timeline")) {
+      return null;
+    }
+    const params = new URLSearchParams(parsed.search);
+    params.delete("yomikui");
+    const qs = params.toString();
+    return qs ? `${pathname}?${qs}` : pathname;
   }
 
   function isTargetEligible(column) {
@@ -77,41 +150,50 @@
     return !EXCLUDED_TYPES.has(column.type);
   }
 
-  const targetColumnCache = new WeakMap();
-
-  function findTargetColumn(columns) {
-    if (!Array.isArray(columns)) return null;
-    if (targetColumnCache.has(columns)) return targetColumnCache.get(columns);
-    const found = columns.find(c => c && c.tweetTarget === true && isTargetEligible(c)) ?? null;
-    targetColumnCache.set(columns, found);
-    return found;
+  function resolveNextColumn(sourceId, columns) {
+    if (!sourceId || !Array.isArray(columns)) return null;
+    const idx = columns.findIndex(c => c && c.id === sourceId);
+    if (idx < 0 || idx + 1 >= columns.length) return null;
+    const candidate = columns[idx + 1];
+    return isTargetEligible(candidate) ? { column: candidate, index: idx + 1 } : null;
   }
 
-  function normalizeTargets(columns) {
-    if (!Array.isArray(columns)) return columns;
-    let targetFound = false;
-    let changed = false;
-    const next = columns.map(c => {
-      if (!c || c.tweetTarget !== true) return c;
-      if (!isTargetEligible(c)) {
-        changed = true;
-        return { ...c, tweetTarget: false };
-      }
-      if (!targetFound) {
-        targetFound = true;
-        return c;
-      }
-      changed = true;
-      return { ...c, tweetTarget: false };
-    });
-    return changed ? next : columns;
+  function resolveTargetColumn(source, columns) {
+    if (!source || !isSourceEligible(source) || !Array.isArray(columns)) return null;
+    const spec = typeof source.linkTarget === "string" ? source.linkTarget : "";
+    if (!spec) return null;
+    if (spec === "next") {
+      return resolveNextColumn(source.id, columns)?.column ?? null;
+    }
+    if (spec === source.id) return null;
+    const target = columns.find(c => c && c.id === spec) ?? null;
+    return target && isTargetEligible(target) ? target : null;
   }
 
   function shouldRoute(source, columns) {
-    if (!source || !isSourceEligible(source) || source.openTweetsInTarget === false) return null;
-    const target = findTargetColumn(columns);
-    if (!target || target.id === source.id) return null;
-    return target;
+    return resolveTargetColumn(source, columns);
+  }
+
+  function sanitizeColumns(columns) {
+    if (!Array.isArray(columns)) return columns;
+    const validIds = new Set(columns.filter(Boolean).map(c => c.id));
+    let changed = false;
+    const next = columns.map(c => {
+      if (!c) return c;
+      const spec = typeof c.linkTarget === "string" ? c.linkTarget : "";
+      if (!spec) return c.linkTarget === "" ? c : ((changed = true), { ...c, linkTarget: "" });
+      if (!isSourceEligible(c)) {
+        changed = true;
+        return { ...c, linkTarget: "" };
+      }
+      if (spec === "next") return c;
+      if (spec === c.id || !validIds.has(spec)) {
+        changed = true;
+        return { ...c, linkTarget: "" };
+      }
+      return c;
+    });
+    return changed ? next : columns;
   }
 
   function isFullyVisible(columnRect, viewportRect) {
@@ -119,12 +201,19 @@
     return columnRect.left >= viewportRect.left - 1 && columnRect.right <= viewportRect.right + 1;
   }
 
-  function withPendingPath(src, path) {
-    if (typeof src !== "string" || !src || typeof path !== "string" || !path) return src;
+  function withPendingPath(src, routePath) {
+    const clean = normalizeRoutePath(routePath);
+    if (typeof src !== "string" || !src || !clean) return src;
     try {
-      const url = new URL(src, "https://x.com");
-      url.pathname = path;
-      return url.toString();
+      const base = new URL(src, "https://x.com");
+      const target = new URL(clean, "https://x.com");
+      const yomikuiParam = base.searchParams.get("yomikui");
+      base.pathname = target.pathname;
+      base.search = target.search;
+      if (yomikuiParam !== null) {
+        base.searchParams.set("yomikui", yomikuiParam);
+      }
+      return base.toString();
     } catch {
       return src;
     }
@@ -177,12 +266,12 @@
     return "*";
   }
 
-  function route({ columns, sourceId, statusPath, isComposing = false, columnComposing = null }) {
-    const path = normalizeStatusPath(statusPath);
+  function route({ columns, sourceId, statusPath, routePath, isComposing = false, columnComposing = null }) {
+    const path = normalizeRoutePath(routePath ?? statusPath);
     if (!path || !Array.isArray(columns)) return false;
     const source = columns.find(c => c && c.id === sourceId);
     if (!source) return false;
-    const target = shouldRoute(source, columns);
+    const target = resolveTargetColumn(source, columns);
     if (!target) return false;
     if (isComposing || columnComposing?.[target.id]) return false;
 
@@ -260,6 +349,19 @@
     return fallback;
   }
 
+  function extractUserCellPath(cell) {
+    if (!cell || typeof cell.querySelectorAll !== "function") return null;
+    const links = cell.querySelectorAll("a[href]");
+    let fallback = null;
+    for (const link of links) {
+      const path = normalizeRoutePath(link.getAttribute("href"));
+      if (!path || !PROFILE_PATH_RE.test(path)) continue;
+      if (!link.closest?.('[data-testid="UserDescription"]')) return path;
+      if (!fallback) fallback = path;
+    }
+    return fallback;
+  }
+
   function isIgnoredElement(node) {
     const tag = node.tagName?.toUpperCase?.();
     if (tag && IGNORED_TAGS.has(tag)) return true;
@@ -269,8 +371,16 @@
     const testId = node.getAttribute?.("data-testid");
     if (testId && IGNORED_TESTIDS.has(testId)) return true;
     const cls = node.classList;
-    if (cls && (cls.contains("yomikui-cbv-overlay") || cls.contains("yomikui-add-label-btn") || cls.contains("yomikui-edit-nickname-btn"))) {
-      return true;
+    if (cls) {
+      if (
+        cls.contains("yomikui-cbv-overlay") ||
+        cls.contains("yomikui-add-label-btn") ||
+        cls.contains("yomikui-edit-nickname-btn") ||
+        cls.contains("yomikui-ocb-btn") ||
+        cls.contains("yomikui-screenshot-btn")
+      ) {
+        return true;
+      }
     }
     return false;
   }
@@ -283,31 +393,49 @@
     const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
     if (!target || typeof target.closest !== "function") return null;
 
-    // Fast bailout for any click outside a native X tweet
-    const tweet = target.closest('article[data-testid="tweet"]');
-    if (!tweet || tweet.classList?.contains("rd-lf-tweet")) return null;
-    if (tweet.closest?.('[role="dialog"], [role="menu"]')) return null;
+    if (target.closest(IGNORED_CONTAINERS_SELECTOR)) return null;
+
+    const scope = target.closest(CONTENT_SCOPE_SELECTOR);
+    if (!scope || target.closest(".rd-lf-tweet")) return null;
 
     const selection = window.getSelection?.();
     if (selection && selection.isCollapsed !== true && selection.toString().trim() !== "") {
       return null;
     }
 
-    // Single upward pass from target to tweet boundary
-    for (let node = target; node && node !== tweet; node = node.parentElement) {
+    // Single upward pass from target up through scope (inclusive)
+    for (let node = target; node; node = node === scope ? null : node.parentElement) {
+      const testId = node.getAttribute?.("data-testid");
+
+      // UserCell itself often carries role="button" or <button>; check before generic button ignore.
+      // Inner Follow/Unfollow buttons inside UserCell are visited earlier and caught by isIgnoredElement.
+      if (testId === "UserCell") {
+        return extractUserCellPath(node);
+      }
+
       if (isIgnoredElement(node)) {
         return null;
       }
+
       if (node.tagName?.toUpperCase?.() === "A" && node.hasAttribute?.("href")) {
-        return normalizeStatusPath(node.getAttribute("href"));
+        if (node.hasAttribute?.("download")) return null;
+        return normalizeRoutePath(node.getAttribute("href"));
       }
-      const testId = node.getAttribute?.("data-testid");
-      if (testId === "quoteTweet" || testId === "tweetQuote" || node.getAttribute?.("role") === "link") {
+
+      if (
+        testId === "quoteTweet" ||
+        testId === "tweetQuote" ||
+        (node.getAttribute?.("role") === "link" && node.closest?.('article[data-testid="tweet"]'))
+      ) {
         return extractQuoteStatusPath(node);
+      }
+
+      if (testId === "tweet" && node.tagName?.toUpperCase?.() === "ARTICLE") {
+        return globalThis.YomikuiTweetActions?.resolveTweetStatusPath?.(node) ?? null;
       }
     }
 
-    return globalThis.YomikuiTweetActions?.resolveTweetStatusPath?.(tweet) ?? null;
+    return null;
   }
 
   function onDocumentClick(event) {
@@ -366,17 +494,24 @@
   }
 
   function openInPlace(path) {
-    const cleanPath = normalizeStatusPath(path);
+    const cleanPath = normalizeRoutePath(path);
     if (!cleanPath) return;
 
-    const currentKey = statusRouteKey(window.location?.href)
-      ?? globalThis.YomikuiColumnNavigation?.pageKey?.(window.location?.href);
-    const targetKey = statusRouteKey(cleanPath) ?? cleanPath;
-    if (currentKey && currentKey === targetKey) return;
+    const currentRoute = normalizeRoutePath(window.location?.href);
+    if (currentRoute && currentRoute.toLowerCase() === cleanPath.toLowerCase() && currentRoute === cleanPath) {
+      return;
+    }
 
     cleanupPendingNavigation();
 
-    const ARRIVAL_NODES_SELECTOR = 'article[data-testid="tweet"], [data-testid="UserCell"], [data-testid="emptyState"], [data-testid="error-detail"]';
+    const ARRIVAL_NODES_SELECTOR = [
+      'article[data-testid="tweet"]',
+      '[data-testid="UserCell"]',
+      '[data-testid="UserName"]',
+      '[data-testid="emptyState"]',
+      '[data-testid="error-detail"]',
+    ].join(", ");
+
     const initialScope = document.querySelector?.('[data-testid="primaryColumn"]') || document;
     const priorNodes = new WeakSet(
       typeof initialScope.querySelectorAll === "function"
@@ -392,14 +527,15 @@
 
     const idMatch = cleanPath.match(/\/status\/(\d+)/);
     const tweetId = idMatch ? idMatch[1] : null;
-    const listKind = cleanPath.endsWith("/quotes")
-      ? "quotes"
-      : (cleanPath.endsWith("/retweets") ? "retweets" : null);
+    const listMatch = cleanPath.match(/\/status\/\d+\/(quotes|retweets|likes)$/i);
+    const listKind = listMatch ? listMatch[1].toLowerCase() : null;
+    const isProfile = !tweetId && PROFILE_PATH_RE.test(cleanPath);
+    const handleLower = isProfile ? cleanPath.slice(1).toLowerCase() : null;
 
     const checkArrival = () => {
       const root = document.querySelector?.('[data-testid="primaryColumn"]') || document;
-      if (listKind) {
-        if (tweetId && root.querySelector(`a[role="tab"][href*="/status/${tweetId}/${listKind}"]`)) {
+      if (listKind && tweetId) {
+        if (root.querySelector(`a[role="tab"][href*="/status/${tweetId}/${listKind}"]`)) {
           return true;
         }
         for (const node of root.querySelectorAll(ARRIVAL_NODES_SELECTOR)) {
@@ -407,12 +543,31 @@
         }
         return false;
       }
-      if (!tweetId) return false;
-      for (const link of root.querySelectorAll(`article[data-testid="tweet"] a[href*="/status/${tweetId}"]`)) {
-        const article = link.closest?.('article[data-testid="tweet"]');
-        if (article && !priorNodes.has(article)) return true;
+      if (tweetId) {
+        for (const link of root.querySelectorAll(`article[data-testid="tweet"] a[href*="/status/${tweetId}"]`)) {
+          const article = link.closest?.('article[data-testid="tweet"]');
+          if (article && !priorNodes.has(article)) return true;
+        }
+        for (const node of root.querySelectorAll('[data-testid="emptyState"], [data-testid="error-detail"]')) {
+          if (!priorNodes.has(node)) return true;
+        }
+        return false;
       }
-      for (const node of root.querySelectorAll('[data-testid="emptyState"], [data-testid="error-detail"]')) {
+      if (handleLower) {
+        for (const tab of root.querySelectorAll('a[role="tab"][href]')) {
+          const href = tab.getAttribute("href")?.toLowerCase() ?? "";
+          if (href === `/${handleLower}` || href.startsWith(`/${handleLower}/`)) return true;
+        }
+        const userNameEl = root.querySelector('[data-testid="UserName"]');
+        if (userNameEl && (!priorNodes.has(userNameEl) || userNameEl.textContent?.toLowerCase().includes(`@${handleLower}`))) {
+          return true;
+        }
+        for (const node of root.querySelectorAll('[data-testid="emptyState"], [data-testid="error-detail"]')) {
+          if (!priorNodes.has(node)) return true;
+        }
+        return false;
+      }
+      for (const node of root.querySelectorAll(ARRIVAL_NODES_SELECTOR)) {
         if (!priorNodes.has(node)) return true;
       }
       return false;
@@ -458,61 +613,89 @@
       if (event.source !== window.parent || !isAllowedOrigin(event.origin)) return;
       if (!event.data || typeof event.data !== "object") return;
       if (event.data.type === "yomikui-tweet-route-open") {
-        const path = normalizeStatusPath(event.data.path);
+        const path = normalizeRoutePath(event.data.path);
         if (path) openInPlace(path);
       }
     });
   }
 
-  // --- Settings UI Component ---
-  function SettingsControls({ column, columns, onChange, onSetTarget, Switch, Label, jsx, t, rowClassName, disabled = false }) {
-    if (!column) return null;
-    const targetEligible = isTargetEligible(column);
-    const sourceEligible = isSourceEligible(column) && !column.tweetTarget;
-    if (!targetEligible && !sourceEligible) return null;
+  function replacePlaceholders(template, args) {
+    if (typeof template !== "string") return "";
+    let out = template;
+    for (let i = 0; i < args.length; i++) {
+      const token = `$${i + 1}`;
+      out = out.replace(new RegExp(`\\$${i + 1}\\$?`, "g"), String(args[i]));
+    }
+    return out;
+  }
 
-    const targetColumn = findTargetColumn(columns);
-    const targetName = targetColumn ? targetColumn.title : "";
-    const hasTarget = !!targetColumn && targetColumn.id !== column.id;
+  // --- Settings UI Component (placed in Column Settings -> General) ---
+  function SettingsControls({ column, columns, onChange, formatColumnName, jsx, t, disabled = false }) {
+    if (!column || !isSourceEligible(column)) return null;
+    const cols = Array.isArray(columns) ? columns : [];
+    const nameOf = col => (typeof formatColumnName === "function" ? formatColumnName(col) : col?.title) || "";
+    const formatItem = (idx, col) => {
+      const msg = t("column_settings_link_target_col_item", [idx + 1, nameOf(col)]);
+      return msg && !msg.includes("$1") ? msg : replacePlaceholders(msg || "$1列目: $2", [idx + 1, nameOf(col)]);
+    };
 
-    const targetDesc = t("column_settings_tweet_target_desc");
-    let openDesc = hasTarget
-      ? t("column_settings_open_in_target_desc", [targetName])
-      : t("column_settings_open_in_target_none");
-    if (hasTarget && openDesc && openDesc.includes("$1")) {
-      openDesc = openDesc.replace(/\$1\$?/g, targetName);
+    const nextInfo = resolveNextColumn(column.id, cols);
+    const nextOptionLabel = nextInfo
+      ? (() => {
+          const itemLabel = formatItem(nextInfo.index, nextInfo.column);
+          const msg = t("column_settings_link_target_next_with_name", [itemLabel]);
+          return msg && !msg.includes("$1") ? msg : replacePlaceholders(msg || "右隣の列（$1）", [itemLabel]);
+        })()
+      : t("column_settings_link_target_next_unavailable");
+
+    const eligibleTargets = [];
+    for (let i = 0; i < cols.length; i++) {
+      const col = cols[i];
+      if (!col || col.id === column.id || !isTargetEligible(col)) continue;
+      eligibleTargets.push({ id: col.id, label: formatItem(i, col) });
     }
 
-    return jsx.jsxs(jsx.Fragment, {
+    const rawValue = typeof column.linkTarget === "string" ? column.linkTarget : "";
+    const effectiveValue =
+      rawValue === "next" || eligibleTargets.some(item => item.id === rawValue) ? rawValue : "";
+
+    const selectId = `yomikui-link-target-${column.id}`;
+    const descId = `${selectId}-desc`;
+    const descText =
+      effectiveValue === "next" && !nextInfo
+        ? `${t("column_settings_link_target_desc")} ${t("column_settings_link_target_next_missing_note")}`
+        : t("column_settings_link_target_desc");
+
+    return jsx.jsxs("div", {
+      className: "flex flex-col gap-2 py-1",
       children: [
-        targetEligible ? jsx.jsxs("div", {
-          className: rowClassName,
+        jsx.jsx("label", {
+          htmlFor: selectId,
+          className: "text-sm text-foreground",
+          children: t("column_settings_link_target"),
+        }),
+        jsx.jsxs("select", {
+          id: selectId,
+          value: effectiveValue,
+          disabled,
+          "aria-describedby": descId,
+          className: "h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground",
+          onChange: event => {
+            onChange({ linkTarget: event.currentTarget.value || "" });
+          },
           children: [
-            jsx.jsx(Label, { label: t("column_settings_tweet_target"), description: targetDesc }),
-            jsx.jsx(Switch, {
-              checked: column.tweetTarget === true,
-              disabled,
-              "aria-label": t("column_settings_tweet_target"),
-              onCheckedChange: checked => {
-                onSetTarget(column.id, checked === true);
-              },
-            }),
+            jsx.jsx("option", { value: "", children: t("column_settings_link_target_self") }, "self"),
+            jsx.jsx("option", { value: "next", children: nextOptionLabel }, "next"),
+            ...eligibleTargets.map(item =>
+              jsx.jsx("option", { value: item.id, children: item.label }, item.id)
+            ),
           ],
-        }, "tweetTarget") : null,
-        sourceEligible ? jsx.jsxs("div", {
-          className: rowClassName,
-          children: [
-            jsx.jsx(Label, { label: t("column_settings_open_in_target"), description: openDesc }),
-            jsx.jsx(Switch, {
-              checked: column.openTweetsInTarget !== false,
-              disabled: disabled || !hasTarget,
-              "aria-label": t("column_settings_open_in_target"),
-              onCheckedChange: checked => {
-                onChange({ openTweetsInTarget: checked === true });
-              },
-            }),
-          ],
-        }, "openTweetsInTarget") : null,
+        }),
+        jsx.jsx("p", {
+          id: descId,
+          className: "text-xs text-muted-foreground",
+          children: descText,
+        }),
       ],
     });
   }
@@ -520,11 +703,13 @@
   globalThis.YomikuiTweetRouting = Object.freeze({
     isAllowedOrigin,
     normalizeStatusPath,
+    normalizeRoutePath,
     isTargetEligible,
     isSourceEligible,
-    findTargetColumn,
-    normalizeTargets,
+    resolveNextColumn,
+    resolveTargetColumn,
     shouldRoute,
+    sanitizeColumns,
     isFullyVisible,
     withPendingPath,
     peekPendingSrc,
