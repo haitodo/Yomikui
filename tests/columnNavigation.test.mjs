@@ -271,6 +271,7 @@ test('cleanUrl cleans yomikui internal query and hash while preserving search an
     'https://x.com/i/lists/123'
   );
   assert.equal(api.cleanUrl('/i/bookmarks'), 'https://x.com/i/bookmarks');
+  assert.equal(api.cleanUrl('/i/history/likes'), 'https://x.com/i/history/likes');
 });
 
 test('getColumnUrl prioritizes current iframe location and falls back to column settings', () => {
@@ -302,6 +303,10 @@ test('getColumnUrl prioritizes current iframe location and falls back to column 
   // 4. CustomUrl column fallback
   const customCol = { id: 'col-2', type: 'customUrl', customUrl: 'https://x.com/i/bookmarks' };
   assert.equal(api.getColumnUrl(customCol, null), 'https://x.com/i/bookmarks');
+
+  // 5. Likes column fallback
+  const likesCol = { id: 'col-3', type: 'likes', path: '/i/history/likes' };
+  assert.equal(api.getColumnUrl(likesCol, null), 'https://x.com/i/history/likes');
 });
 
 test('CopyUrlButton copies URL, displays success feedback, and is wired in contentDeck', async () => {
@@ -401,4 +406,27 @@ test('column duplicate action button uses Columns2 icon distinct from copy URL i
     deck,
     /className:"rd-column-action-duplicate shrink-0"[^}]+children:\(0,Ze\.jsx\)\(Gw,/
   );
+});
+
+test('likes column is supported with heart icon, default path, and translations in contentDeck', () => {
+  // Ensure "likes" is registered in column definitions with /i/history/likes and heart icon
+  assert.ok(deck.includes('likes:{label:"Likes",defaultPath:"/i/history/likes",icon:"heart"}'));
+
+  // Ensure heart icon is defined with Feather/Lucide path and registered in Lc
+  assert.ok(deck.includes('HeartColumnIcon=({size:e=20,className:t})=>'));
+  assert.ok(deck.includes('d:"M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"'));
+  assert.ok(deck.includes('heart:HeartColumnIcon'));
+
+  // Ensure "likes" is included in column addition menu after bookmarks
+  assert.ok(deck.includes('"bookmarks","likes","customUrl"'));
+
+  // Ensure "likes" is accepted in Zod schema
+  assert.ok(deck.includes('gue=Re.enum(["home","following","notifications","explore","search","post","grok","chat","bookmarks","likes","customUrl","timeline"])'));
+
+  // Ensure translation key is in bundled fallback translations
+  assert.ok(deck.includes('"column_type_likes":{"message":"いいね"}'));
+
+  // Ensure translation key exists in messages.json
+  const messages = JSON.parse(readFileSync(new URL('../_locales/ja/messages.json', import.meta.url), 'utf8'));
+  assert.equal(messages.column_type_likes?.message, 'いいね');
 });

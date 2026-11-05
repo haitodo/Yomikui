@@ -246,3 +246,19 @@ test('the extension loads layout support first and includes the new translations
     assert.ok(deckSource.includes(JSON.stringify({ [key]: messages[key] }).slice(1, -1)));
   }
 });
+
+test('likes column can be added with correct defaults and validates in schema', () => {
+  const { store, columnSchema } = setup();
+  const initialCount = store.getState().columns.length;
+  store.getState().addColumn('likes');
+  const added = store.getState().columns.at(-1);
+  assert.equal(store.getState().columns.length, initialCount + 1);
+  assert.equal(added.type, 'likes');
+  assert.equal(added.title, 'Likes');
+  assert.equal(added.path, '/i/history/likes');
+  assert.equal(added.hideBanner, true);
+  assert.equal(added.hideTopBar, true);
+
+  const parsed = columnSchema.safeParse(added);
+  assert.equal(parsed.success, true);
+});

@@ -398,3 +398,10 @@ test('the column control defaults to standard, saves preserve mode, and excludes
   assert.equal(env.api.SettingsControl({ ...props, column: { ...props.column, type: 'search' } }), null);
   assert.equal(env.api.getMode({ homeRefreshPosition: 'invalid' }), 'top');
 });
+
+test('likes columns are recognized as readable columns for wheel and reading context', () => {
+  const env = setup();
+  assert.equal(env.api.isReadableColumn({ type: 'likes', liveFeed: false }), true);
+  assert.equal(env.api.isReadableColumn({ type: 'likes', liveFeed: true }), false);
+  assert.equal(env.api.isReadableColumn({ type: 'bookmarks', liveFeed: false }), true);
+});

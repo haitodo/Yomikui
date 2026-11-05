@@ -7,7 +7,7 @@
     (tab?.getAttribute('aria-label') || tab?.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase(),
   );
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
-  const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'customUrl']);
+  const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'likes', 'customUrl']);
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
   const isReadingAction = ({ direction, mode, deltaY, deltaMode = 0 }) => mode === 'top' ||
     (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && [0, 1, 2].includes(deltaMode)) ||

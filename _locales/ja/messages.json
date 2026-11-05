@@ -410,6 +410,9 @@
   "column_type_home": {
     "message": "ホーム"
   },
+  "column_type_likes": {
+    "message": "いいね"
+  },
   "column_type_notifications": {
     "message": "通知"
   },

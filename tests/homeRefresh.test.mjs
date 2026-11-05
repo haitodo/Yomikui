@@ -174,7 +174,7 @@ test('a CSS-hidden selected recommendation tab refreshes once without exposing t
   assert.equal(env.clock.timers.size, 0);
 });
 
-for (const columnType of ['search', 'customUrl', 'following', 'explore', 'notifications', 'bookmarks']) {
+for (const columnType of ['search', 'customUrl', 'following', 'explore', 'notifications', 'bookmarks', 'likes']) {
   test(`a ${columnType} column navigated to recommendations refreshes according to its current page`, async () => {
     const env = setup();
     env.settings.columnType = columnType;
