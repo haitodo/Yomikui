@@ -50,6 +50,31 @@ function nativeTweet(id, { analytics = true, share = 'Share post' } = {}) {
   </article>`;
 }
 
+function nativeDetailTweet(id, { analytics = true, quoteId = null, share = 'Share post' } = {}) {
+  return `<article data-testid="tweet" id="tweet-${id}">
+    <div data-testid="User-Name">
+      <div><span>Author</span></div>
+      <div><span>@author</span></div>
+    </div>
+    <div data-testid="tweetText">Detail tweet text</div>
+    ${quoteId ? `<div role="link" data-testid="quoteTweet">
+      <div data-testid="User-Name"><a href="/quoted/status/${quoteId}"><time>Yesterday</time></a></div>
+      <div>Quoted text</div>
+    </div>` : ''}
+    <div id="metadata-${id}">
+      <a href="/author/status/${id}" id="permalink-${id}"><time>1:23 PM · Nov 5, 2026</time></a>
+      ${analytics ? `<a href="/author/status/${id}/analytics" id="analytics-${id}"><span>123 Views</span></a>` : ''}
+    </div>
+    <div role="group" id="actions-${id}">
+      <div><button data-testid="reply">Reply</button></div>
+      <div><button data-testid="retweet">Repost</button></div>
+      <div><button data-testid="like">Like</button></div>
+      <div><button data-testid="bookmark">Bookmark</button></div>
+      <div id="share-slot-${id}"><button aria-label="${share}">Share</button></div>
+    </div>
+  </article>`;
+}
+
 test('list routes accept native and Live Feed status paths and reject external URLs', () => {
   const { actions } = setup();
   for (const path of ['/author/status/123', 'https://twitter.com/author/status/123/analytics?x=1', '/i/web/status/123']) {
@@ -92,6 +117,39 @@ test('native links use the main tweet, preserve column navigation, and leave rep
   controller.update(allDisabled);
   assert.equal(document.getElementById('yomikui-tweet-action-styles'), null);
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 0);
+});
+
+test('detail / permalink tweets show list buttons for standalone, quoted and analytics-free tweets', () => {
+  const html = nativeDetailTweet('301', { analytics: true }) +
+    nativeDetailTweet('302', { analytics: false }) +
+    nativeDetailTweet('303', { quoteId: '999', analytics: true });
+  const { actions, document } = setup(html);
+  const controller = new actions.NativeActionsController();
+  controller.update(allEnabled);
+  for (const id of ['301', '302', '303']) {
+    const group = document.getElementById(`actions-${id}`);
+    const links = [...group.querySelectorAll('[data-yomikui-tweet-action] > a')];
+    assert.deepEqual(links.map(link => link.getAttribute('href')), [
+      `https://x.com/author/status/${id}/quotes#yomikui-cidcolumn`,
+      `https://x.com/author/status/${id}/retweets#yomikui-cidcolumn`,
+    ]);
+    assert.equal(links[0].getAttribute('aria-label'), '引用リツイート一覧');
+    assert.equal(links[1].getAttribute('aria-label'), 'リツイート一覧');
+  }
+});
+
+test('detail tweet page matching window.location associates the permalink tweet and keeps replies distinct', () => {
+  const html = nativeDetailTweet('401', { analytics: false }) + nativeTweet('501');
+  const { actions, document, window } = setup(html);
+  window.location.pathname = '/author/status/401';
+  const controller = new actions.NativeActionsController();
+  controller.update(allEnabled);
+  const mainLinks = [...document.getElementById('actions-401').querySelectorAll('[data-yomikui-tweet-action] > a')];
+  assert.equal(mainLinks[0].getAttribute('href'), 'https://x.com/author/status/401/quotes#yomikui-cidcolumn');
+  assert.equal(mainLinks[1].getAttribute('href'), 'https://x.com/author/status/401/retweets#yomikui-cidcolumn');
+  const replyLinks = [...document.getElementById('actions-501').querySelectorAll('[data-yomikui-tweet-action] > a')];
+  assert.equal(replyLinks[0].getAttribute('href'), 'https://x.com/author/status/501/quotes#yomikui-cidcolumn');
+  assert.equal(replyLinks[1].getAttribute('href'), 'https://x.com/author/status/501/retweets#yomikui-cidcolumn');
 });
 
 test('native text-only tweet counts arrive through the shipped response consumer and update without media', async () => {

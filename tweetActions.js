@@ -202,6 +202,9 @@
       });
       window.addEventListener('pagehide', () => { this.suspended = true; this.sync(); });
       window.addEventListener('pageshow', () => { this.suspended = false; this.sync(); });
+      window.addEventListener('popstate', () => { this.scan(document); this.scheduleFlush(); });
+      window.addEventListener('hashchange', () => { this.scan(document); this.scheduleFlush(); });
+      window.navigation?.addEventListener?.('navigatesuccess', () => { this.scan(document); this.scheduleFlush(); });
     }
 
     update(value) {
@@ -291,8 +294,28 @@
       if (!path) {
         for (const link of tweet.querySelectorAll('a[href*="/status/"]')) {
           if (!link.closest('[data-testid="User-Name"]') || !link.querySelector('time')) continue;
+          if (link.closest('[role="link"], [data-testid="quoteTweet"], [data-testid="tweetQuote"]')) continue;
           path = getStatusPath(link.getAttribute('href'));
           if (path) break;
+        }
+      }
+      if (!path) {
+        // Detail / permalink view: the author timestamp is placed below the text
+        // (outside User-Name), and analytics links sit next to the date.
+        const pagePath = getStatusPath(window.location?.pathname) || getStatusPath(window.location?.href);
+        const pageId = pagePath?.match(/\/status\/(\d+)$/)?.[1];
+        if (pageId && tweet.querySelector(`a[href*="/status/${pageId}"]`)) {
+          path = pagePath;
+        } else {
+          path = getStatusPath(tweet.querySelector('a[href*="/analytics"]')?.getAttribute('href'));
+        }
+        if (!path) {
+          for (const link of tweet.querySelectorAll('a[href*="/status/"]')) {
+            if (!link.querySelector('time')) continue;
+            if (link.closest('[role="link"], [data-testid="quoteTweet"], [data-testid="tweetQuote"]')) continue;
+            path = getStatusPath(link.getAttribute('href'));
+            if (path) break;
+          }
         }
       }
       const id = path?.match(/\/status\/(\d+)$/)?.[1];
