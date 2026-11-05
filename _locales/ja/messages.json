@@ -115,6 +115,12 @@
   "column_reset_page": {
     "message": "この列の初期ページに戻る"
   },
+  "column_copy_url": {
+    "message": "この列のURLをコピー"
+  },
+  "column_copy_url_copied": {
+    "message": "URLをコピーしました"
+  },
   "column_high_tweet_load": {
     "message": "ツイート件数が多いため負荷が高くなっています ($1$)。動作を軽快に保つには列を更新してください。",
     "placeholders": {

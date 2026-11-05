@@ -130,7 +130,7 @@ test('manifest.json restricts contentDeck content script matches to yomikui rout
 test('tweetActions restricts characterData observation to retweet targets and prunes irrelevant response subtrees', () => {
   const code = readFileSync('tweetActions.js', 'utf8');
   assert.ok(code.includes('[data-testid="retweet"], [data-testid="unretweet"]'));
-  assert.ok(code.includes("key === 'user_results' || key === 'feedbackInfo'"));
+  assert.ok(code.includes("IGNORED_RESPONSE_KEYS = new Set(['user_results', 'feedbackInfo'"));
 });
 
 test('homeScroll ReadingContext skips irrelevant characterData mutations outside tablist', () => {
@@ -141,7 +141,7 @@ test('homeScroll ReadingContext skips irrelevant characterData mutations outside
 
 test('frameMaintenance cleanup early-exits when no Yomikui DOM elements exist', () => {
   const code = readFileSync('frameMaintenance.js', 'utf8');
-  assert.match(code, /if \(!document\.querySelector\('\.yomikui-cbv-overlay/);
+  assert.match(code, /if \(!document\.querySelector\(DUPLICATE_SELECTOR\)\) return;/);
 });
 
 test('contentIframe zH batches article discoveries and disconnects when frame is hidden', () => {

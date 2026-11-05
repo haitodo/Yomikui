@@ -247,4 +247,140 @@ test('shared navigation loads before both entry points and the button label is a
   }
   const messages = JSON.parse(readFileSync(new URL('../_locales/ja/messages.json', import.meta.url), 'utf8'));
   assert.ok(deck.includes(JSON.stringify({ column_reset_page: messages.column_reset_page }).slice(1, -1)));
+  assert.ok(deck.includes(JSON.stringify({ column_copy_url: messages.column_copy_url }).slice(1, -1)));
+  assert.ok(deck.includes(JSON.stringify({ column_copy_url_copied: messages.column_copy_url_copied }).slice(1, -1)));
+});
+
+test('cleanUrl cleans yomikui internal query and hash while preserving search and custom anchors', () => {
+  const { api } = setup();
+  assert.equal(api.cleanUrl('https://x.com/home?yomikui=test#yomikui-cid1-hb0'), 'https://x.com/home');
+  assert.equal(
+    api.cleanUrl('https://x.com/search?q=test&f=live&yomikui=123#yomikui-cid1'),
+    'https://x.com/search?q=test&f=live'
+  );
+  assert.equal(
+    api.cleanUrl('https://x.com/user/status/123#photo1'),
+    'https://x.com/user/status/123#photo1'
+  );
+  assert.equal(
+    api.cleanUrl('chrome-extension://yomikui/liveFeedShell.html?fp=%2Fhome&fs=%3Ff%3Dlive#yomikui-cid1'),
+    'https://x.com/home?f=live'
+  );
+  assert.equal(
+    api.cleanUrl('chrome-extension://yomikui/liveFeedShell.html?cu=https%3A%2F%2Fx.com%2Fi%2Flists%2F123#yomikui-cid1'),
+    'https://x.com/i/lists/123'
+  );
+  assert.equal(api.cleanUrl('/i/bookmarks'), 'https://x.com/i/bookmarks');
+});
+
+test('getColumnUrl prioritizes current iframe location and falls back to column settings', () => {
+  const { api } = setup();
+  const column = {
+    id: 'col-1',
+    type: 'search',
+    path: '/search?q=fallback',
+    lastPath: '/search?q=remembered',
+    rememberLastPage: true,
+  };
+  const mockIframe = {
+    contentWindow: {
+      location: {
+        href: 'https://x.com/user/status/98765?yomikui=abc#yomikui-cidcol-1',
+      },
+    },
+  };
+  // 1. Live iframe href
+  assert.equal(api.getColumnUrl(column, mockIframe), 'https://x.com/user/status/98765');
+  assert.equal(api.getColumnUrl(column, { current: mockIframe }), 'https://x.com/user/status/98765');
+
+  // 2. Fallback to remembered lastPath
+  assert.equal(api.getColumnUrl(column, null), 'https://x.com/search?q=remembered');
+
+  // 3. Fallback when rememberLastPage is false
+  assert.equal(api.getColumnUrl({ ...column, rememberLastPage: false }, null), 'https://x.com/search?q=fallback');
+
+  // 4. CustomUrl column fallback
+  const customCol = { id: 'col-2', type: 'customUrl', customUrl: 'https://x.com/i/bookmarks' };
+  assert.equal(api.getColumnUrl(customCol, null), 'https://x.com/i/bookmarks');
+});
+
+test('CopyUrlButton copies URL, displays success feedback, and is wired in contentDeck', async () => {
+  const { api, context } = setup();
+  const element = (type, props) => ({ type, props });
+  const column = { id: 'col-1', type: 'home', path: '/home' };
+  const mockIframe = {
+    contentWindow: {
+      location: {
+        href: 'https://x.com/home?yomikui=1#yomikui-cid1',
+      },
+    },
+  };
+
+  let stateVal = false;
+  let copiedState = false;
+  const useState = init => {
+    stateVal = init;
+    return [stateVal, next => { stateVal = typeof next === 'function' ? next(stateVal) : next; copiedState = stateVal; }];
+  };
+  let effectCleanup = null;
+  const useEffect = (effect, deps) => {
+    effectCleanup?.();
+    effectCleanup = effect();
+  };
+
+  let copiedText = null;
+  let copyCallbackResult = null;
+  const t = key => {
+    if (key === 'column_copy_url') return 'この列のURLをコピー';
+    if (key === 'column_copy_url_copied') return 'URLをコピーしました';
+    return key;
+  };
+
+  context.navigator = {
+    clipboard: {
+      writeText: async text => { copiedText = text; },
+    },
+  };
+
+  const btnInitial = api.CopyUrlButton({
+    column,
+    iframeRef: { current: mockIframe },
+    onCopy: (url, success) => { copyCallbackResult = { url, success }; },
+    Button: 'button',
+    jsx: { jsx: element, jsxs: element },
+    t,
+    useState,
+    useEffect,
+  });
+
+  assert.equal(btnInitial.type, 'button');
+  assert.equal(btnInitial.props.type, 'button');
+  assert.equal(btnInitial.props['aria-label'], 'この列のURLをコピー');
+  assert.equal(btnInitial.props.title, 'この列のURLをコピー');
+  assert.ok(btnInitial.props.className.includes('rd-column-action-copy-url'));
+  assert.ok(!btnInitial.props.className.includes('text-emerald-500'));
+
+  // Trigger copy click
+  await btnInitial.props.onClick();
+  assert.equal(copiedText, 'https://x.com/home');
+  assert.deepEqual(copyCallbackResult, { url: 'https://x.com/home', success: true });
+  assert.equal(copiedState, true);
+
+  // Re-render in copied state
+  const btnCopied = api.CopyUrlButton({
+    column,
+    iframeRef: { current: mockIframe },
+    Button: 'button',
+    jsx: { jsx: element, jsxs: element },
+    t,
+    useState: () => [true, () => {}],
+    useEffect,
+  });
+  assert.equal(btnCopied.props['aria-label'], 'URLをコピーしました');
+  assert.equal(btnCopied.props.title, 'URLをコピーしました');
+  assert.ok(btnCopied.props.className.includes('text-emerald-500'));
+  // Rendered child should be a checkmark polyline
+  assert.equal(btnCopied.props.children.props.children.type, 'polyline');
+
+  assert.ok(deck.includes('YomikuiColumnNavigation.CopyUrlButton,{column:e,iframeRef:Pt'));
 });
