@@ -2,6 +2,8 @@
 (() => {
   if (globalThis.YomikuiFloatingControls) return;
   const PREFIX = 'yomikui-home-refresh-';
+  const NAVIGATION_TIMEOUT_MS = 1200;
+  const READING_ACTION_INTERVAL_MS = 300;
   const STORAGE_KEY = 'yomikui_floating_controls_v1';
   const TARGETS_KEY = 'yomikui_reading_targets_v1';
   const GROUPS = Object.freeze({ recommended: 'おすすめ', following: 'フォロー中', search: '検索結果', explore: '話題を検索' });
@@ -18,7 +20,7 @@
   const targetGroup = target => typeof target === 'string' && target.startsWith('group:') ? target.slice(6) : null;
   const groupName = value => Object.hasOwn(GROUPS, value) ? value : targetGroup(value);
   function selectionPreferences(value) {
-    const valid = value => typeof value === 'string' && Object.hasOwn(GROUPS, groupName(value));
+    const valid = candidate => typeof candidate === 'string' && Object.hasOwn(GROUPS, groupName(candidate));
     if (typeof value === 'string') {
       if (value === 'all') return { selectionMode: 'multiple', single: 'recommended', multiple: Object.keys(GROUPS), multipleReady: true };
       value = { single: valid(value) ? groupName(value) : 'recommended' };
@@ -183,7 +185,7 @@
           resolve({ columnId: column.id, title: column.title, ...result });
         };
         this.pending.set(id, pending);
-        pending.timer = setTimeout(() => pending.finish({ status: 'failed', reason: 'timeout' }), 1200);
+        pending.timer = setTimeout(() => pending.finish({ status: 'failed', reason: 'timeout' }), NAVIGATION_TIMEOUT_MS);
         try { frame.window.postMessage({ type: PREFIX + 'navigate', requestId: id, columnId: column.id, direction, mode, ...(group ? { group } : {}) }, frame.origin); }
         catch { pending.finish({ status: 'failed', reason: 'error' }); }
       });
@@ -224,6 +226,7 @@
         if (state.columnComposing?.[column.id]) continue;
         const frame = this.getFrame(column.id);
         if (!frame?.window || !trusted(frame.origin)) continue;
+        const group = frameGroup(buffer.target, kinds[column.id]);
         const now = Date.now();
         if (!this.wheelActivity.has(column.id) || now - this.wheelActivity.get(column.id) >= 500) {
           this.wheelActivity.set(column.id, now);
@@ -234,7 +237,7 @@
         try { frame.window.postMessage({
           type: PREFIX + 'scroll', requestId: crypto.randomUUID(), columnId: column.id, mode: 'wheel',
           deltaY, deltaMode: buffer.deltaMode,
-          ...(frameGroup(buffer.target, kinds[column.id]) ? { group: frameGroup(buffer.target, kinds[column.id]) } : {}),
+          ...(group ? { group } : {}),
         }, frame.origin); } catch {}
       }
     }
@@ -269,7 +272,7 @@
           return this.request(column, frame, direction, mode, frameGroup(target, kinds[column.id]));
         }));
         // Bound rapid clicks without queuing steps or running a repeat timer.
-        const remaining = 300 - (Date.now() - started);
+        const remaining = READING_ACTION_INTERVAL_MS - (Date.now() - started);
         if (remaining > 0 && !job.cancelled) await new Promise(resolve => {
           job.release = resolve;
           job.timer = setTimeout(resolve, remaining);
@@ -336,12 +339,14 @@
   }
 
   function readingSummary(results) {
-    const count = status => results.filter(result => result.status === status).length;
+    const counts = Object.fromEntries(['moved', 'edge', 'skipped', 'failed'].map(status => [
+      status, results.filter(result => result.status === status).length,
+    ]));
     return [
-      count('moved') && `移動 ${count('moved')}列`,
-      count('edge') && `端に到達 ${count('edge')}列`,
-      count('skipped') && `スキップ ${count('skipped')}列`,
-      count('failed') && `応答未確認 ${count('failed')}列`,
+      counts.moved && `移動 ${counts.moved}列`,
+      counts.edge && `端に到達 ${counts.edge}列`,
+      counts.skipped && `スキップ ${counts.skipped}列`,
+      counts.failed && `応答未確認 ${counts.failed}列`,
     ].filter(Boolean).join(' ／ ');
   }
 
