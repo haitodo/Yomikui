@@ -15,10 +15,11 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      ${TWEET}[${ATTRIBUTE}]{position:relative}
-      ${TWEET}>.${MARKER}{display:block;position:absolute;top:0;left:0;right:0;height:0;margin:0;padding:0;border:0;border-top:2px solid #1d9bf0;pointer-events:none;z-index:1}
-      ${TWEET}>.${MARKER}>span{position:absolute;top:-2px;right:12px;padding:0 6px;border-radius:0 0 3px 3px;background:#0b6fa4;color:#fff;font:600 10px/12px system-ui,sans-serif;white-space:nowrap}
-      @media(forced-colors:active){${TWEET}>.${MARKER}{border-color:Highlight}${TWEET}>.${MARKER}>span{background:Highlight;color:HighlightText}}
+      ${TWEET}[${ATTRIBUTE}]{position:relative;box-shadow:inset 4px 0 0 #f59e0b}
+      ${TWEET}>.${MARKER}{display:block;position:absolute;top:0;left:0;right:0;height:0;margin:0;padding:0;border:0;border-top:3px solid #f59e0b;pointer-events:none;z-index:2}
+      ${TWEET}>.${MARKER}>span{display:inline-flex;align-items:center;position:absolute;top:-10px;left:16px;padding:2px 8px;border-radius:9999px;background:#d97706;color:#fff;font:700 11px/14px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.45);letter-spacing:.02em}
+      ${TWEET}>.${MARKER}>span::before{content:'🔖';margin-right:4px;font-size:11px;line-height:1}
+      @media(forced-colors:active){${TWEET}[${ATTRIBUTE}]{box-shadow:inset 4px 0 0 Highlight}${TWEET}>.${MARKER}{border-color:Highlight}${TWEET}>.${MARKER}>span{background:Highlight;color:HighlightText}}
     `;
     (document.head || document.documentElement).appendChild(style);
   }
