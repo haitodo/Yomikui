@@ -384,3 +384,21 @@ test('CopyUrlButton copies URL, displays success feedback, and is wired in conte
 
   assert.ok(deck.includes('YomikuiColumnNavigation.CopyUrlButton,{column:e,iframeRef:Pt'));
 });
+
+test('column duplicate action button uses Columns2 icon distinct from copy URL icon', () => {
+  // Ensure the duplicate column action button in contentDeck uses a distinct Columns2 icon
+  // instead of the overlapping-rectangles copy icon used by CopyUrlButton
+  assert.ok(deck.includes('className:"rd-column-action-duplicate shrink-0"'));
+  assert.ok(deck.includes('(0,Ze.jsx)(DuplicateColumnIcon,{size:14})'));
+
+  // DuplicateColumnIcon renders a 2-column layout icon (Columns2: rect 18x18 divided by M12 3v18)
+  assert.ok(deck.includes('DuplicateColumnIcon=({size:e=20,className:t})=>'));
+  assert.ok(deck.includes('width:"18",height:"18",x:"3",y:"3",rx:"2"'));
+  assert.ok(deck.includes('d:"M12 3v18"'));
+
+  // Verify that the duplicate action does NOT share the copy icon (Gw) with CopyUrlButton
+  assert.doesNotMatch(
+    deck,
+    /className:"rd-column-action-duplicate shrink-0"[^}]+children:\(0,Ze\.jsx\)\(Gw,/
+  );
+});
