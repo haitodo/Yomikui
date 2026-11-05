@@ -150,3 +150,18 @@ test('contentIframe zH batches article discoveries and disconnects when frame is
   assert.ok(code.includes('_zHSchedule'));
   assert.match(code, /if\(!Xe\(\)\|\|document\.hidden\)\{t7&&\(t7\.disconnect\(\),t7=null\)/);
 });
+
+test('sidebar active workspace icon has refined active styling without distracting indicator pill', () => {
+  const deck = readFileSync('contentDeck.js', 'utf8');
+  // Check active workspace button class in quick access (DW)
+  assert.match(deck, /rd-sidebar-workspace-btn--active/);
+  assert.match(deck, /border-primary\/40/);
+  // Check active icon color passing
+  assert.match(deck, /iconClassName:i\?"shrink-0 text-primary":"shrink-0 text-muted-foreground"/);
+  // Check CSS rule exists with refined border and no ::before pill
+  assert.match(deck, /#yomikui-root \.rd-sidebar-workspace-btn--active\s*\{/);
+  assert.doesNotMatch(deck, /#yomikui-root \.rd-sidebar-workspace-btn--active::before/);
+  assert.match(deck, /border:\s*1px solid/);
+});
+
+
