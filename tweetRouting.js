@@ -105,14 +105,18 @@
   function normalizeStatusPath(value) {
     const parsed = parseInternalUrl(value);
     if (!parsed) return null;
-    const pathname = parsed.pathname.length > 1 ? parsed.pathname.replace(/\/+$/, "") : parsed.pathname;
+    const pathname = withoutTrailingSlashes(parsed.pathname);
     return STATUS_PATH_RE.test(pathname) ? pathname : null;
+  }
+
+  function withoutTrailingSlashes(pathname) {
+    return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   }
 
   function normalizeRoutePath(value) {
     const parsed = parseInternalUrl(value);
     if (!parsed) return null;
-    const pathname = parsed.pathname.length > 1 ? parsed.pathname.replace(/\/+$/, "") : parsed.pathname;
+    const pathname = withoutTrailingSlashes(parsed.pathname);
     if (!pathname || pathname === "/" || !pathname.startsWith("/")) return null;
 
     if (
@@ -141,8 +145,7 @@
   }
 
   function isTargetEligible(column) {
-    if (!column || typeof column !== "object") return false;
-    return !EXCLUDED_TYPES.has(column.type) && column.liveFeed !== true;
+    return isSourceEligible(column) && column.liveFeed !== true;
   }
 
   function isSourceEligible(column) {

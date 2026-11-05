@@ -655,18 +655,20 @@
     if (view.phase === 'running') return `選択中の列を更新中 ${view.done}/${view.total}列`;
     if (view.phase === 'cancelled') return '一括更新を中止しました';
     if (!view.results.length) return '';
-    const count = status => view.results.filter(result => result.status === status).length;
+    const counts = Object.fromEntries(['updated', 'reloaded', 'requested', 'skipped', 'failed'].map(status => [
+      status, view.results.filter(result => result.status === status).length,
+    ]));
     const unconfirmedReloads = view.results.filter(result => result.status === 'requested' && result.method === 'reload').length;
-    const unconfirmedUpdates = count('requested') - unconfirmedReloads;
+    const unconfirmedUpdates = counts.requested - unconfirmedReloads;
     const skippedReasons = [...new Set(view.results.filter(result => result.status === 'skipped')
       .map(result => REASONS[result.reason]).filter(Boolean))];
     return [
-      count('updated') && `表示更新 ${count('updated')}列`,
-      count('reloaded') && `再読み込み ${count('reloaded')}列`,
+      counts.updated && `表示更新 ${counts.updated}列`,
+      counts.reloaded && `再読み込み ${counts.reloaded}列`,
       unconfirmedReloads && `再読み込み操作済み・表示未確認 ${unconfirmedReloads}列`,
       unconfirmedUpdates && `操作済み・表示変化未確認 ${unconfirmedUpdates}列`,
-      count('skipped') && `スキップ ${count('skipped')}列${skippedReasons.length === 1 ? `（${skippedReasons[0]}）` : ''}`,
-      count('failed') && `応答未確認 ${count('failed')}列`,
+      counts.skipped && `スキップ ${counts.skipped}列${skippedReasons.length === 1 ? `（${skippedReasons[0]}）` : ''}`,
+      counts.failed && `応答未確認 ${counts.failed}列`,
     ].filter(Boolean).join(' ／ ');
   }
 

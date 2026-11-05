@@ -24,9 +24,11 @@ function extensionFor(url) {
 
 function mediaTasks(media) {
   const videos = media.videos;
-  return (videos.length ? videos : media.images).map(item => ({
+  const hasVideos = Boolean(videos.length);
+  const items = hasVideos ? videos : media.images;
+  return items.map(item => ({
     url: item.url,
-    filename: `${media.screenName}_${media.tweetId}_${videos.length ? 'v' : ''}${item.index + 1}.${extensionFor(item.url)}`,
+    filename: `${media.screenName}_${media.tweetId}_${hasVideos ? 'v' : ''}${item.index + 1}.${extensionFor(item.url)}`,
   }));
 }
 
