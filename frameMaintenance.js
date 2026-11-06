@@ -96,7 +96,9 @@
     }
 
     scanTweets(root) {
+      if (!root || (root.nodeType !== 1 && root.nodeType !== 9)) return;
       if (root.matches?.(TWEET)) this.pendingTweets.add(root);
+      if (root.nodeType === 1 && root.childElementCount === 0) return;
       for (const tweet of root.querySelectorAll(TWEET)) this.pendingTweets.add(tweet);
     }
 

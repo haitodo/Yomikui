@@ -13,6 +13,8 @@ test('Dve autoReload timer stops when offscreen or document is hidden', () => {
   const deck = readFileSync('contentDeck.js', 'utf8');
   assert.match(deck, /if\(!e\.autoReload\|\|e\.liveFeed\|\|!Le\)return;/);
   assert.match(deck, /document\.addEventListener\("visibilitychange",sn\)/);
+  // Reload execution effect also guards against offscreen (!Le) and pauses when hidden
+  assert.match(deck, /document\.addEventListener\("visibilitychange",_vc\)/);
 });
 
 test('gY stubbed notification poller is silenced in contentDeck.js', () => {
@@ -175,6 +177,13 @@ test('contentIframe pauses video playback when column becomes hidden', () => {
   assert.ok(iframe.includes('_yomikuiFreezeMedia'));
   assert.match(iframe, /t\.dataset\.yomikuiPaused="1"/);
 });
+
+test('contentIframe applies content-visibility: auto to timeline tweet cellInnerDiv elements', () => {
+  const iframe = readFileSync('contentIframe.js', 'utf8');
+  assert.match(iframe, /\[data-testid="cellInnerDiv"\]\s*\{\s*content-visibility:\s*auto;/);
+  assert.match(iframe, /contain-intrinsic-size:\s*auto\s*150px;/);
+});
+
 
 
 

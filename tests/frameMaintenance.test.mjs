@@ -31,6 +31,17 @@ test('idle columns do not rescan the document, send duplicate counts, or measure
   assert.equal(env.clock.timers.size, 0);
 });
 
+test('leaf node additions without child elements early exit and skip querySelectorAll', () => {
+  const env = setup();
+  env.maintenance.start();
+  const observer = env.observers[0];
+  const span = new Element('span');
+  const queriesBefore = env.document.documentQueries;
+  observer.emit([{ type: 'childList', target: env.document.body, addedNodes: [span] }]);
+  assert.equal(env.document.documentQueries, queriesBefore);
+  assert.equal(env.maintenance.pendingTweets.size, 0);
+});
+
 test('new mutations restart performance checks after an idle session', async () => {
   const env = setup();
   env.maintenance.start();

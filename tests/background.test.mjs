@@ -77,5 +77,9 @@ test('declarativeNetRequest dynamic rules include telemetry and ad blocks for x.
   assert.ok(filters.includes('*.ads-x.com'));
   assert.ok(filters.includes('logs.x.com'));
   assert.ok(filters.includes('scribe.x.com'));
+  assert.ok(filters.includes('x.com/i/api/1.1/jot/*'));
+  assert.ok(filters.includes('twitter.com/i/api/1.1/jot/*'));
+  assert.ok(filters.includes('x.com/i/api/1.1/branch/*'));
+  assert.ok(filters.includes('twitter.com/i/api/1.1/branch/*'));
 });
 

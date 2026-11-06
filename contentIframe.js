@@ -1151,6 +1151,10 @@ body { background-color: ${e.bg} !important; overflow: hidden !important; margin
     [data-testid="inlinePrompt"] { display: none !important; }
     [data-testid="BottomBar"] { display: none !important; }
     nav[role="navigation"][aria-label="Footer"] { display: none !important; }
+    [data-testid="cellInnerDiv"] {
+      content-visibility: auto;
+      contain-intrinsic-size: auto 150px;
+    }
   `}function lJ(e){let t=[];return t.push(`
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
