@@ -8,6 +8,10 @@
   const TARGETS_KEY = 'yomikui_reading_targets_v1';
   const GROUPS = Object.freeze({ recommended: 'おすすめ', following: 'フォロー中', search: '検索結果', explore: '話題を検索' });
   const COLORS = Object.freeze({ bluegray: 'ブルーグレー', lavender: 'ラベンダー', sage: 'セージ', gray: 'グレー', theme: 'テーマに合わせる' });
+  const ALL_GROUPS = Object.freeze(Object.keys(GROUPS));
+  const FRAME_EVENT_TYPES = new Set(['yomikui-frame-ready', 'yomikui-tab-change', 'yomikui-path-change']);
+  const VALID_CONTEXT_KINDS = new Set([...ALL_GROUPS, 'other', null]);
+  const NAVIGATED_STATUSES = new Set(['moved', 'edge', 'skipped', 'failed']);
   const trusted = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
   const clamp = value => Math.max(0, Math.min(1, value));
   const readable = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
@@ -22,7 +26,7 @@
   function selectionPreferences(value) {
     const valid = candidate => typeof candidate === 'string' && Object.hasOwn(GROUPS, groupName(candidate));
     if (typeof value === 'string') {
-      if (value === 'all') return { selectionMode: 'multiple', single: 'recommended', multiple: Object.keys(GROUPS), multipleReady: true };
+      if (value === 'all') return { selectionMode: 'multiple', single: 'recommended', multiple: ALL_GROUPS, multipleReady: true };
       value = { single: valid(value) ? groupName(value) : 'recommended' };
     }
     const single = valid(value?.single) ? groupName(value.single) : 'recommended';
@@ -94,12 +98,16 @@
     const left = Math.max(0, rect.left), right = Math.min(window.innerWidth, rect.right);
     const top = Math.max(0, rect.top), bottom = Math.min(window.innerHeight, rect.bottom);
     if (right <= left || bottom <= top) return new Set();
-    return new Set([...rack.querySelectorAll('[data-column-id]')].filter(element => {
+    const ids = new Set();
+    for (const element of rack.querySelectorAll('[data-column-id]')) {
       const bounds = element.getBoundingClientRect();
-      // Fractional column widths can leave a subpixel sliver of the next column.
-      return Math.min(bounds.right, right) - Math.max(bounds.left, left) >= 1 &&
-        Math.min(bounds.bottom, bottom) - Math.max(bounds.top, top) >= 1;
-    }).map(element => element.getAttribute('data-column-id')));
+      if (Math.min(bounds.right, right) - Math.max(bounds.left, left) >= 1 &&
+          Math.min(bounds.bottom, bottom) - Math.max(bounds.top, top) >= 1) {
+        const id = element.getAttribute('data-column-id');
+        if (id) ids.add(id);
+      }
+    }
+    return ids;
   }
 
   class ReadingController {
@@ -121,12 +129,12 @@
 
     receive(event) {
       const data = event.data;
-      if (data?.type === PREFIX + 'context' || ['yomikui-frame-ready', 'yomikui-tab-change', 'yomikui-path-change'].includes(data?.type)) {
+      if (data?.type === PREFIX + 'context' || FRAME_EVENT_TYPES.has(data?.type)) {
         const column = this.getState().columns.find(column => column.id === data.columnId && readable(column));
         const frame = column && this.getFrame(column.id);
         if (!frame?.window || event.source !== frame.window || event.origin !== frame.origin || !trusted(event.origin)) return;
         if (data.type === PREFIX + 'context') {
-          if (![...Object.keys(GROUPS), 'other', null].includes(data.kind)) return;
+          if (!VALID_CONTEXT_KINDS.has(data.kind)) return;
           this.contexts.set(column.id, { ...frame, kind: data.kind });
           this.publishContexts();
         } else if (this.getVisibleIds().has(column.id)) this.requestContext(column, true);
@@ -135,15 +143,20 @@
       const pending = this.pending.get(data?.requestId);
       if (!pending || data.type !== PREFIX + 'navigated' || data.columnId !== pending.columnId ||
           event.source !== pending.frame || event.origin !== pending.origin || !trusted(event.origin) ||
-          !['moved', 'edge', 'skipped', 'failed'].includes(data.status)) return;
+          !NAVIGATED_STATUSES.has(data.status)) return;
       pending.finish({ status: data.status, reason: data.reason });
     }
 
     kinds() {
-      return Object.fromEntries(this.getState().columns.filter(readable).flatMap(column => {
+      const result = {};
+      for (const column of this.getState().columns) {
+        if (!readable(column)) continue;
         const entry = this.contexts.get(column.id), frame = this.getFrame(column.id);
-        return entry && entry.window === frame?.window && entry.origin === frame.origin ? [[column.id, entry.kind]] : [];
-      }));
+        if (entry && entry.window === frame?.window && entry.origin === frame.origin) {
+          result[column.id] = entry.kind;
+        }
+      }
+      return result;
     }
 
     selectedColumns(target = 'all', visible = this.getVisibleIds()) {

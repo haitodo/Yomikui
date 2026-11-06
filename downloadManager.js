@@ -152,9 +152,10 @@ export class DownloadManager {
 
   poll() {
     if (this.pollPromise) return this.pollPromise;
-    const ids = new Set([...this.activeIds, ...this.refreshIds]);
+    const ids = new Set(this.activeIds);
+    for (const id of this.refreshIds) ids.add(id);
     this.refreshIds.clear();
-    this.pollPromise = Promise.all([...ids].map(async id => {
+    this.pollPromise = Promise.all(Array.from(ids, async id => {
       try {
         const [snapshot] = await this.api.downloads.search({ id });
         const item = this.items.get(id);

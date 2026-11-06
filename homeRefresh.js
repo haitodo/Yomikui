@@ -35,6 +35,11 @@
     'reload-unavailable': '列の再読み込みを準備できませんでした',
     'scroll-top': '先頭への移動を確認できませんでした',
   };
+  const SEARCH_PATH_RE = /^\/search\/?(?:\?|$)/;
+  const EXPLORE_PATH_RE = /^\/explore(?:\/tabs\/[\w-]+)?\/?(?:\?|$)/;
+  const HOME_PATH_RE = /^\/home\/?(?:\?|$)/;
+  const STATUS_ID_RE = /\/status\/(\d+)/;
+  const STATUS_KEYS = Object.freeze(['updated', 'reloaded', 'requested', 'skipped', 'failed']);
   const isNativeColumn = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
   const refreshable = kind => globalThis.YomikuiHomeScroll.isRefreshableKind(kind);
   const readingKind = getSettings => globalThis.YomikuiHomeScroll.readingKind(getSettings);
@@ -43,10 +48,10 @@
   const reloadable = kind => refreshable(kind);
   const reloadByDefault = kind => kind === 'search' || kind === 'explore';
   const reloadKind = path => typeof path !== 'string' ? null :
-    /^\/search\/?(?:\?|$)/.test(path) ? 'search' :
-    /^\/explore(?:\/tabs\/[\w-]+)?\/?(?:\?|$)/.test(path) ? 'explore' : null;
+    SEARCH_PATH_RE.test(path) ? 'search' :
+    EXPLORE_PATH_RE.test(path) ? 'explore' : null;
   const reloadPathMatches = (kind, path) => homeKind(kind)
-    ? typeof path === 'string' && /^\/home\/?(?:\?|$)/.test(path)
+    ? typeof path === 'string' && HOME_PATH_RE.test(path)
     : reloadKind(path) === kind;
   const trustedOrigin = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
   const abortError = () => new DOMException('Refresh cancelled', 'AbortError');
@@ -162,7 +167,7 @@
       .slice(0, 4).map(tweet => {
         const time = tweet.querySelector('time');
         const link = time?.closest('a[href*="/status/"]') ?? tweet.querySelector('a[href*="/status/"]');
-        return link?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1] ?? '';
+        return link?.getAttribute('href')?.match(STATUS_ID_RE)?.[1] ?? '';
       }).filter(Boolean).join(',');
   }
 
@@ -238,7 +243,7 @@
       checkAbort(signal);
       let reason = this.unavailableReason(target);
       if (reason) return { status: 'skipped', reason };
-      if (!['recommended', 'following'].includes(target)) return { status: 'skipped', reason: 'unavailable' };
+      if (!homeKind(target)) return { status: 'skipped', reason: 'unavailable' };
       if (Date.now() - this.lastAction < COOLDOWN) return { status: 'skipped', reason: 'cooldown' };
 
       const tab = await observeUntil(() => {
@@ -655,7 +660,7 @@
     if (view.phase === 'running') return `選択中の列を更新中 ${view.done}/${view.total}列`;
     if (view.phase === 'cancelled') return '一括更新を中止しました';
     if (!view.results.length) return '';
-    const counts = Object.fromEntries(['updated', 'reloaded', 'requested', 'skipped', 'failed'].map(status => [
+    const counts = Object.fromEntries(STATUS_KEYS.map(status => [
       status, view.results.filter(result => result.status === status).length,
     ]));
     const unconfirmedReloads = view.results.filter(result => result.status === 'requested' && result.method === 'reload').length;

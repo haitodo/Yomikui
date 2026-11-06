@@ -11,12 +11,12 @@ const distDir = path.join(rootDir, "dist");
 /**
  * Yomikui 拡張機能を構成する静的ファイルおよびフォルダーを dist/ にコピーする
  */
-const EXTENSION_FILES = [
+const EXTENSION_FILES = new Set([
   "background.js",
   "contentDeck.js",
   "contentIframe.js",
   "mediaInterceptor.js",
-];
+]);
 
 const EXTENSION_DIRS = ["icons", "_locales"];
 
@@ -48,7 +48,7 @@ export async function buildExtension() {
   for (const file of rootFiles) {
     if (
       (file.endsWith(".js") || file.endsWith(".css") || file.endsWith(".html")) &&
-      !EXTENSION_FILES.includes(file)
+      !EXTENSION_FILES.has(file)
     ) {
       const srcPath = path.join(rootDir, file);
       const fileStat = await stat(srcPath);
