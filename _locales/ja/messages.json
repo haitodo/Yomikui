@@ -857,6 +857,9 @@
   "sidebar_size_px": {
     "message": "サイズ (px)"
   },
+  "sidebar_sleep_wait_time": {
+    "message": "待機時間"
+  },
   "sidebar_sleep_when_inactive": {
     "message": "非アクティブ時にスリープ"
   },

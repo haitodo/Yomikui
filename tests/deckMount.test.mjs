@@ -184,6 +184,97 @@ test('contentIframe applies content-visibility: auto to timeline tweet cellInner
   assert.match(iframe, /contain-intrinsic-size:\s*auto\s*150px;/);
 });
 
+test('sidebar sleep setting supports switch toggle and reveals minute input only when active', () => {
+  const deck = readFileSync('contentDeck.js', 'utf8');
+  const messages = JSON.parse(readFileSync('_locales/ja/messages.json', 'utf8'));
 
+  // Translation definition exists
+  assert.ok(messages.sidebar_sleep_wait_time);
+  assert.equal(messages.sidebar_sleep_wait_time.message, '待機時間');
+  assert.match(deck, /"sidebar_sleep_wait_time":\{"message":"待機時間"\}/);
 
+  // Switch toggle is rendered for sleep_when_inactive
+  assert.match(deck, /V\("sidebar_sleep_when_inactive"\)\}\),\(0,ee\.jsx\)\(ga,\{checked:sleepEnabled/);
+
+  // Minutes input is conditionally rendered when sleepEnabled is true
+  assert.match(deck, /sleepEnabled&&\(0,ee\.jsxs\)\("div",\{className:"flex items-center justify-between gap-4",children:\[\(0,ee\.jsx\)\("span",\{className:"text-sm text-muted-foreground",children:V\("sidebar_sleep_wait_time"\)/);
+
+  // Input min is 1, not 0
+  assert.match(deck, /type:"number",min:1,max:60,value:dt/);
+
+  // Obsolete "0 = 無効" is removed from sidebar settings UI
+  assert.doesNotMatch(deck, /V\("sidebar_zero_disabled"\)/);
+
+  // Logic test for saving: false sets 0, true sets clamped [1, 60]
+  const feStart = deck.indexOf('Fe=(0,ln.useCallback)');
+  const feEnd = deck.indexOf('),it=(0,ln.useCallback)', feStart);
+  assert.ok(feStart > 0 && feEnd > feStart);
+  const snippet = deck.slice(feStart, feEnd + 1).trim();
+
+  let savedValue = null;
+  const mockSetInactivityTimeout = (val) => { savedValue = val; };
+
+  // Case 1: sleepEnabled = false
+  {
+    const ctx = {
+      ln: { useCallback: (fn) => fn },
+      sleepEnabled: false,
+      dt: '10',
+      h: mockSetInactivityTimeout,
+      Dt: () => {},
+    };
+    vm.runInNewContext('var ' + snippet + ';', ctx);
+    ctx.Fe();
+    assert.equal(savedValue, 0);
+  }
+
+  // Case 2: sleepEnabled = true, dt = 15
+  {
+    const ctx = {
+      ln: { useCallback: (fn) => fn },
+      sleepEnabled: true,
+      dt: '15',
+      h: mockSetInactivityTimeout,
+      Dt: () => {},
+    };
+    vm.runInNewContext('var ' + snippet + ';', ctx);
+    ctx.Fe();
+    assert.equal(savedValue, 15);
+  }
+
+  // Case 3: sleepEnabled = true, dt <= 0 clamps to minimum 1
+  {
+    const ctx = {
+      ln: { useCallback: (fn) => fn },
+      sleepEnabled: true,
+      dt: '0',
+      h: mockSetInactivityTimeout,
+      Dt: () => {},
+    };
+    vm.runInNewContext('var ' + snippet + ';', ctx);
+    ctx.Fe();
+    assert.equal(savedValue, 1);
+  }
+
+  // Case 4: sleepEnabled = true, dt > 60 clamps to maximum 60
+  {
+    const ctx = {
+      ln: { useCallback: (fn) => fn },
+      sleepEnabled: true,
+      dt: '99',
+      h: mockSetInactivityTimeout,
+      Dt: () => {},
+    };
+    vm.runInNewContext('var ' + snippet + ';', ctx);
+    ctx.Fe();
+    assert.equal(savedValue, 60);
+  }
+});
+
+test('contentDeck.js parses as valid JavaScript without syntax errors', () => {
+  const deck = readFileSync('contentDeck.js', 'utf8');
+  assert.doesNotThrow(() => {
+    new vm.Script(deck, { filename: 'contentDeck.js' });
+  });
+});
 
