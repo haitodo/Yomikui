@@ -14,6 +14,8 @@
   const EXCLUDED_ROOT_ROUTE_RE = /^\/(?:compose|intent|login|logout|signup|settings|messages|account|privacy|tos|yomikui)(?:\/|$)/i;
   const EXCLUDED_INTERNAL_ROUTE_RE = /^\/i\/(?:flow|chat|grok|keyboard_shortcuts|display|verified-choose|premium_sign_up|spaces|broadcasts)(?:\/|$)/i;
   const PROFILE_PATH_RE = /^\/[A-Za-z0-9_]+$/;
+  const STATUS_LIST_SUFFIX_RE = /\/status\/\d+\/(quotes|retweets|likes)$/i;
+  const PROFILE_SECTION_PATH_RE = /^\/([A-Za-z0-9_]+)(?:\/(?:all|with_replies|highlights|media|articles))?$/i;
 
   const RESERVED_ROOT_PATHS = new Set([
     "home",
@@ -38,6 +40,10 @@
     "help",
     "x",
   ]);
+
+  function withoutTrailingSlashes(pathname) {
+    return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  }
 
   function isProfilePath(pathname) {
     if (!pathname || typeof pathname !== "string") return false;
@@ -150,10 +156,6 @@
     if (!parsed) return null;
     const pathname = withoutTrailingSlashes(parsed.pathname);
     return STATUS_PATH_RE.test(pathname) ? pathname : null;
-  }
-
-  function withoutTrailingSlashes(pathname) {
-    return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   }
 
   function normalizeRoutePath(value) {
@@ -595,11 +597,11 @@
 
     const idMatch = cleanPath.match(/\/status\/(\d+)/);
     const tweetId = idMatch ? idMatch[1] : null;
-    const listMatch = cleanPath.match(/\/status\/\d+\/(quotes|retweets|likes)$/i);
+    const listMatch = cleanPath.match(STATUS_LIST_SUFFIX_RE);
     const listKind = listMatch ? listMatch[1].toLowerCase() : null;
     const profileMatch =
       !tweetId &&
-      cleanPath.match(/^\/([A-Za-z0-9_]+)(?:\/(?:all|with_replies|highlights|media|articles))?$/i);
+      cleanPath.match(PROFILE_SECTION_PATH_RE);
     const isProfile = Boolean(
       profileMatch &&
         !RESERVED_ROOT_PATHS.has(profileMatch[1].toLowerCase()) &&
@@ -921,7 +923,7 @@
 
   function getProfileAllUrl(anchor) {
     if (anchor.hasAttribute("download") || anchor.closest('[role="tablist"], [role="tab"]')) return null;
-    const href = anchor.getAttribute("href").trim();
+    const href = anchor.getAttribute("href")?.trim();
     if (!href || href.startsWith("#") || href.startsWith("?")) return null;
     try {
       const url = new URL(anchor.href, window.location.href);

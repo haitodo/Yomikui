@@ -6,6 +6,7 @@
   const ATTRIBUTE = 'data-yomikui-refresh-boundary';
   const MARKER = 'yomikui-refresh-boundary';
   const STYLE_ID = 'yomikui-refresh-boundary-style';
+  const TWEET_ID_RE = /^\d{1,25}$/;
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
   const path = () => window.location.pathname + (window.location.search || '');
   const tweetId = tweet => globalThis.YomikuiHomeScroll.tweetId(tweet);
@@ -51,7 +52,7 @@
 
     set(entry) {
       this.clear();
-      if (this.disposed || !entry || typeof entry.id !== 'string' || !/^\d{1,25}$/.test(entry.id) ||
+      if (this.disposed || !entry || typeof entry.id !== 'string' || !TWEET_ID_RE.test(entry.id) ||
           !globalThis.YomikuiHomeScroll.isRefreshableKind(entry.kind) || entry.path !== path()) return;
       this.entry = { id: entry.id, kind: entry.kind, path: entry.path };
       this.sync();
@@ -83,6 +84,7 @@
         if (record.type === 'attributes') {
           if (record.attributeName === 'href') this.pending.add(target?.closest(TWEET));
         } else {
+          if (record.addedNodes.length === 0 && record.removedNodes.length === 0) continue;
           const nodes = [...record.addedNodes, ...record.removedNodes];
           // Our own landmark must not keep scheduling new work.
           if (nodes.length && nodes.every(node => node.nodeType === 1 && node.classList.contains(MARKER))) continue;

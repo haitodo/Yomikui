@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +26,7 @@ function formatBytes(bytes) {
 function createZip(sourceDir, targetZipPath) {
   if (existsSync(targetZipPath)) {
     try {
-      execSync(`del /f /q "${targetZipPath}"`, { stdio: "ignore", shell: "cmd.exe" });
+      rmSync(targetZipPath, { force: true });
     } catch {}
   }
 

@@ -6,6 +6,10 @@
   const DEFAULT_WIDTH_REM = 32;
   const MIN_WIDTH_REM = 20;
   const MAX_WIDTH_REM = 45;
+  const WIDTH_MODES = Object.freeze([
+    ["auto", "column_settings_width_auto"],
+    ["fixed", "column_settings_width_fixed"],
+  ]);
 
   function getFixedWidth(column) {
     return Number.isFinite(column.width) && column.width > 0
@@ -64,10 +68,7 @@
               className: "flex shrink-0 overflow-hidden rounded-lg border border-border",
               "aria-labelledby": modeId,
               "aria-describedby": mode === "auto" ? descriptionId : undefined,
-              children: [
-                ["auto", "column_settings_width_auto"],
-                ["fixed", "column_settings_width_fixed"],
-              ].map(([value, label]) => jsx.jsx("button", {
+              children: WIDTH_MODES.map(([value, label]) => jsx.jsx("button", {
                 type: "button",
                 "aria-pressed": mode === value,
                 className: "flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium transition-colors "

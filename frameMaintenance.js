@@ -29,6 +29,8 @@
     ['.yomikui-account-location-badge', 8],
   ];
   const DUPLICATE_SELECTOR = DUPLICATES.map(([selector]) => selector).join(', ');
+  const STATUS_ID_RE = /\/status\/(\d+)/;
+  const TIMER_KEYS = Object.freeze(['countTimer', 'cleanupTimer', 'performanceTimer']);
 
   globalThis.YomikuiFrameMaintenance = class {
     constructor({ targetOrigin, getColumnId, isColumnVisible, getChurn }) {
@@ -138,7 +140,7 @@
       for (const tweet of this.pendingTweets) {
         if (!tweet.isConnected) continue;
         const href = tweet.querySelector('a[href*="/status/"]')?.getAttribute('href') ?? '';
-        const id = href.match(/\/status\/(\d+)/)?.[1];
+        const id = href.match(STATUS_ID_RE)?.[1];
         if (!id) continue;
         this.seenIds.add(id);
         if (this.seenIds.size > 5000) {
@@ -241,7 +243,7 @@
     }
 
     cancelTimers() {
-      for (const key of ['countTimer', 'cleanupTimer', 'performanceTimer']) {
+      for (const key of TIMER_KEYS) {
         if (this[key] !== null) clearTimeout(this[key]);
         this[key] = null;
       }

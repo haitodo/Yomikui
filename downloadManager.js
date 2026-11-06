@@ -2,6 +2,7 @@ const POLL_DELAY = 400;
 const RETENTION_DELAY = 5000;
 const DECK_URLS = ['https://x.com/yomikui*', 'https://twitter.com/yomikui*'];
 const MEDIA_HOSTS = ['pbs.twimg.com', 'video.twimg.com', 'ton.twimg.com', 'x.com'];
+const FILE_EXT_RE = /\.([a-zA-Z0-9]+)$/;
 
 function isAllowedUrl(url) {
   try {
@@ -16,7 +17,7 @@ function extensionFor(url) {
   try {
     const parsed = new URL(url);
     if (parsed.pathname.includes('.mp4') || url.includes('video')) return 'mp4';
-    return parsed.searchParams.get('format') || parsed.pathname.match(/\.([a-zA-Z0-9]+)$/)?.[1] || 'jpg';
+    return parsed.searchParams.get('format') || parsed.pathname.match(FILE_EXT_RE)?.[1] || 'jpg';
   } catch {
     return 'jpg';
   }
@@ -235,7 +236,7 @@ export class DownloadManager {
         batchId: id,
         tweetId: first.tweetId,
         screenName: first.screenName,
-        items: [...batch.items.values()].map(item => ({
+        items: Array.from(batch.items.values(), item => ({
           downloadId: item.downloadId,
           filename: item.filename,
           state: item.state,

@@ -19,15 +19,23 @@
     { key: 'showRetweetList', kind: 'retweets', label: 'tweet_action_retweet_list', fallback: 'リツイート一覧', path: 'm5 2 4 4-1.4 1.4L6 5.8V15a2 2 0 0 0 2 2h3v2H8a4 4 0 0 1-4-4V5.8L2.4 7.4 1 6l4-4Zm11 3a4 4 0 0 1 4 4v9.2l1.6-1.6L23 18l-4 4-4-4 1.4-1.4 1.6 1.6V9a2 2 0 0 0-2-2h-3V5h3ZM9 10h6v2H9v-2Zm0 4h6v2H9v-2Z' },
   ]);
   const IGNORED_RESPONSE_KEYS = new Set(['user_results', 'feedbackInfo', 'clientEventInfo', 'responseObjects', 'ext']);
+  const ALLOWED_STATUS_HOSTS = new Set(['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com']);
+  const FORMATTED_NUMBER_RE = /^\d+(?:,\d{3})*$/;
+  const INTEGER_RE = /^\d+$/;
+  const STATUS_PATH_RE = /^\/(?:[A-Za-z0-9_]+|i\/web)\/status\/\d+(?=\/|$)/;
+  const STATUS_ID_RE = /\/status\/(\d+)$/;
+  const NATIVE_COUNT_TEXT_RE = /^[\d.,\s]+(?:[KMBkmb]|万|億|兆)?$/;
 
   function normalizeSettings(value = {}) {
     return Object.fromEntries(SETTINGS.map(({ key, defaultValue = false }) => [key, typeof value[key] === 'boolean' ? value[key] : defaultValue]));
   }
 
   function readCount(value) {
-    if (typeof value !== 'number' && typeof value !== 'string') return null;
-    if (typeof value === 'string' && !/^\d+(?:,\d{3})*$/.test(value.trim())) return null;
-    const count = Number(String(value).replace(/,/g, ''));
+    if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? value : null;
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!FORMATTED_NUMBER_RE.test(trimmed)) return null;
+    const count = Number(trimmed.replace(/,/g, ''));
     return Number.isSafeInteger(count) && count >= 0 ? count : null;
   }
 
@@ -57,7 +65,7 @@
       seen.add(node);
       const legacy = node.legacy ?? node;
       const id = legacy.id_str ?? node.rest_id;
-      if (typeof id === 'string' && /^\d+$/.test(id)) {
+      if (typeof id === 'string' && INTEGER_RE.test(id)) {
         const quoteCount = readCount(legacy.quote_count);
         const repostCount = readCount(legacy.retweet_count);
         if (quoteCount !== null || repostCount !== null) {
@@ -83,7 +91,7 @@
     const counter = button?.querySelector('[data-testid="app-text-transition-container"]');
     const text = (counter?.textContent ?? button?.textContent ?? '').trim();
     // Keep X's own localized/abbreviated number, including optimistic updates.
-    if (/^[\d.,\s]+(?:[KMBkmb]|万|億|兆)?$/.test(text)) return /[1-9]/.test(text) ? text : '';
+    if (NATIVE_COUNT_TEXT_RE.test(text)) return /[1-9]/.test(text) ? text : '';
     if (counter && text === '') return '';
     return formatCount(cachedCount);
   }
@@ -92,8 +100,8 @@
     if (typeof href !== 'string' || !href) return null;
     try {
       const url = new URL(href, 'https://x.com');
-      if (url.protocol !== 'https:' || !['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(url.hostname)) return null;
-      return url.pathname.match(/^\/(?:[A-Za-z0-9_]+|i\/web)\/status\/\d+(?=\/|$)/)?.[0] ?? null;
+      if (url.protocol !== 'https:' || !ALLOWED_STATUS_HOSTS.has(url.hostname)) return null;
+      return url.pathname.match(STATUS_PATH_RE)?.[0] ?? null;
     } catch {
       return null;
     }
@@ -211,7 +219,7 @@
     // Detail / permalink view: the author timestamp is placed below the text
     // (outside User-Name), and analytics links sit next to the date.
     const pagePath = getStatusPath(window.location?.pathname) || getStatusPath(window.location?.href);
-    const pageId = pagePath?.match(/\/status\/(\d+)$/)?.[1];
+    const pageId = pagePath?.match(STATUS_ID_RE)?.[1];
     if (pageId && tweet.querySelector(`a[href*="/status/${pageId}"]`)) {
       return pagePath;
     }
@@ -331,7 +339,7 @@
       const group = reply?.closest('[role="group"]');
       if (!group || group.closest(TWEET) !== tweet) return;
       const path = resolveTweetStatusPath(tweet, group);
-      const id = path?.match(/\/status\/(\d+)$/)?.[1];
+      const id = path?.match(STATUS_ID_RE)?.[1];
       const counts = getCounts(id);
       for (const list of LISTS) {
         const slots = [...tweet.querySelectorAll(`[${SLOT}="${list.kind}"]`)];

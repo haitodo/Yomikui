@@ -2,11 +2,14 @@
 
 // Shared by the dashboard and native X frames; the existing UI is a bundle.
 (() => {
+  const ALLOWED_PAGE_HOSTS = new Set(["x.com", "twitter.com"]);
+  const HOST_ORIGIN_RE = /^https?:\/\/(?:[a-zA-Z0-9-]+\.)*(?:x|twitter)\.com$/i;
+
   function pageKey(value) {
     if (typeof value !== "string" || !value) return null;
     try {
       const url = new URL(value, "https://x.com");
-      if (url.protocol !== "https:" || !["x.com", "twitter.com"].includes(url.hostname)) return null;
+      if (url.protocol !== "https:" || !ALLOWED_PAGE_HOSTS.has(url.hostname)) return null;
       return url.pathname.replace(/\/+$/, "") || "/";
     } catch { return null; }
   }
@@ -51,7 +54,7 @@
     }
     const origin = (typeof defaultOrigin === "string" && defaultOrigin.startsWith("http"))
       ? defaultOrigin
-      : (typeof window !== "undefined" && window?.location?.origin && /^https?:\/\/(?:[a-zA-Z0-9-]+\.)*(?:x|twitter)\.com$/i.test(window.location.origin))
+      : (typeof window !== "undefined" && window?.location?.origin && HOST_ORIGIN_RE.test(window.location.origin))
         ? window.location.origin
         : "https://x.com";
     try {

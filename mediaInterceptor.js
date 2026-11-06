@@ -52,10 +52,11 @@
     'NotificationsTimeline',
   ];
 
+  const GRAPHQL_PATH_RE = /graphql\/([^/?]+)\/([^/?]+)/;
   const shouldIntercept = (url) => ENDPOINTS.some(ep => url.includes(ep));
 
   const dispatchResponse = (url, body) => {
-    const match = url.match(/graphql\/([^/?]+)\/([^/?]+)/);
+    const match = url.match(GRAPHQL_PATH_RE);
     if (match) {
       window.dispatchEvent(new CustomEvent('yomikui-query-id-discovered', {
         detail: { queryId: match[1], operationName: match[2] }

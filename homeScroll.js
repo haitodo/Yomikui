@@ -3,18 +3,24 @@
   if (globalThis.YomikuiHomeScroll) return;
 
   const getMode = settings => settings?.homeRefreshPosition === 'preserve' ? 'preserve' : 'top';
-  const recommended = tab => ['おすすめ', 'お勧め', 'foryou'].includes(
+  const recommended = tab => RECOMMENDED_LABELS.has(
     (tab?.getAttribute('aria-label') || tab?.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase(),
   );
+  const RECOMMENDED_LABELS = new Set(['おすすめ', 'お勧め', 'foryou']);
+  const FOLLOWING_LABELS = new Set(['following', 'フォロー中', 'フォロー']);
+  const VALID_DELTA_MODES = new Set([0, 1, 2]);
+  const READING_NAV_MODES = new Set(['post', 'page']);
+  const STATUS_ID_RE = /\/status\/(\d+)/;
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
   const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'likes', 'customUrl']);
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
   const isReadingAction = ({ direction, mode, deltaY, deltaMode = 0 }) => mode === 'top' ||
-    (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && [0, 1, 2].includes(deltaMode)) ||
-    ((direction === 1 || direction === -1) && ['post', 'page'].includes(mode));
+    (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && VALID_DELTA_MODES.has(deltaMode)) ||
+    ((direction === 1 || direction === -1) && READING_NAV_MODES.has(mode));
   const READING_GROUPS = ['recommended', 'following', 'search', 'explore'];
   const REFRESH_KINDS = ['recommended', 'following', 'search', 'explore'];
-  const isRefreshableKind = kind => REFRESH_KINDS.includes(kind);
+  const REFRESH_KINDS_SET = new Set(REFRESH_KINDS);
+  const isRefreshableKind = kind => REFRESH_KINDS_SET.has(kind);
   const selectedTimelineTab = () => [...primary()?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
     .find(tab => !tab.closest('article, [role="dialog"]'));
   function readingKind(getSettings) {
@@ -29,7 +35,7 @@
     if (!tab) return null;
     if (recommended(tab)) return 'recommended';
     const label = (tab.getAttribute('aria-label') || tab.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
-    return ['following', 'フォロー中', 'フォロー'].includes(label) ? 'following' : 'other';
+    return FOLLOWING_LABELS.has(label) ? 'following' : 'other';
   }
 
   class ReadingContext {
@@ -98,7 +104,7 @@
   }
   const articles = () => [...primary()?.querySelectorAll('article[data-testid="tweet"]') ?? []];
   const tweetId = article => (article.querySelector('time')?.closest('a[href*="/status/"]') ??
-    article.querySelector('a[href*="/status/"]'))?.getAttribute('href')?.match(/\/status\/(\d+)/)?.[1];
+    article.querySelector('a[href*="/status/"]'))?.getAttribute('href')?.match(STATUS_ID_RE)?.[1];
   const signature = () => articles().slice(0, 4).map(tweetId).filter(Boolean).join(',');
   const newPostsPattern = /^(?:show\s+(?:[\d,.]+\s+)?(?:new\s+)?(?:posts?|tweets?)|[\d,]+\s*件の(?:新しい)?(?:ポスト|ツイート)(?:を)?表示|(?:新しい|新着の?)(?:ポスト|ツイート)(?:を)?表示)$/i;
 
