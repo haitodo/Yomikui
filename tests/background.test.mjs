@@ -6,6 +6,7 @@ function setup() {
   const env = downloadEnvironment();
   const writes = [];
   let reads = 0;
+  const dnrUpdates = [];
   const api = env.api;
   api.runtime = { id: 'extension', onMessage: hook(), onInstalled: hook(), onStartup: hook() };
   api.webRequest = { onCompleted: hook(), onHeadersReceived: hook() };
@@ -14,11 +15,14 @@ function setup() {
     get: async () => { reads++; return {}; },
   } };
   api.contextMenus = { removeAll: callback => callback(), create: (options, callback) => callback(), onClicked: hook() };
-  api.declarativeNetRequest = { getDynamicRules: async () => [], updateDynamicRules: async () => {} };
+  api.declarativeNetRequest = {
+    getDynamicRules: async () => [],
+    updateDynamicRules: async options => { dnrUpdates.push(options); },
+  };
   api.action = { onClicked: hook() };
   env.context.chrome = api;
   evaluate(env.context, 'background.js', source => source.replace(/^import .*;\n/, ''));
-  return { ...env, api, writes, get reads() { return reads; } };
+  return { ...env, api, writes, dnrUpdates, get reads() { return reads; } };
 }
 
 test('repeated query ID discoveries persist once and cached requests avoid storage reads', async () => {
@@ -60,3 +64,18 @@ test('a failed persistence attempt can retry on the next response', async () => 
   await settle();
   assert.equal(calls, 2);
 });
+
+test('declarativeNetRequest dynamic rules include telemetry and ad blocks for x.com and twitter.com', async () => {
+  const env = setup();
+  await settle();
+  assert.ok(env.dnrUpdates.length > 0);
+  const latest = env.dnrUpdates.at(-1);
+  const blockRules = latest.addRules.filter(r => r.action.type === 'block');
+  const filters = blockRules.map(r => r.condition.urlFilter);
+  assert.ok(filters.includes('analytics.x.com'));
+  assert.ok(filters.includes('telemetry.x.com'));
+  assert.ok(filters.includes('*.ads-x.com'));
+  assert.ok(filters.includes('logs.x.com'));
+  assert.ok(filters.includes('scribe.x.com'));
+});
+

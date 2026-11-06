@@ -164,4 +164,17 @@ test('sidebar active workspace icon has refined active styling without distracti
   assert.match(deck, /border:\s*1px solid/);
 });
 
+test('Dve clears iframe src to about:blank and cleans window reference on unmount', () => {
+  const deck = readFileSync('contentDeck.js', 'utf8');
+  assert.match(deck, /try\{Te\.src="about:blank"\}catch\{\}/);
+  assert.match(deck, /try\{i\?\.\(e\.id,null,null\)\}catch\{\}/);
+});
+
+test('contentIframe pauses video playback when column becomes hidden', () => {
+  const iframe = readFileSync('contentIframe.js', 'utf8');
+  assert.ok(iframe.includes('_yomikuiFreezeMedia'));
+  assert.match(iframe, /t\.dataset\.yomikuiPaused="1"/);
+});
+
+
 

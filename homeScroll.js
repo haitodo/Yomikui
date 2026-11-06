@@ -204,9 +204,7 @@
         .filter(cell => cell.querySelector('a[href], [data-testid="trend"], article[data-testid="tweet"]'));
       posts = cells.length ? cells : [...primary()?.querySelectorAll('[data-testid="trend"]') ?? []];
     }
-    if (mode === 'post') posts = posts.filter(article => article.getBoundingClientRect().height > 0);
-    const rendered = mode === 'post' ? posts.length > 0 : posts.some(article => article.getBoundingClientRect().height > 0);
-    if (!rendered || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
+    if (!posts.length || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
     const top = scroller?.scrollTop ?? window.scrollY ?? 0;
     const viewportTop = rootScroller ? 0 : Math.max(0, rect.top);
     const stride = height * .8;
@@ -218,14 +216,36 @@
       next = top + deltaY * (deltaMode === 2 ? height : lineHeight);
     }
     if (mode === 'post') {
-      const anchors = posts.map(post => top + post.getBoundingClientRect().top - viewportTop).sort((a, b) => a - b);
+      let hasRendered = false;
+      let anchor = undefined;
       if (direction > 0) {
-        const anchor = anchors.find(value => value > top + 4);
+        for (let i = 0; i < posts.length; i++) {
+          const postRect = posts[i].getBoundingClientRect();
+          if (postRect.height <= 0) continue;
+          hasRendered = true;
+          const pos = top + postRect.top - viewportTop;
+          if (pos > top + 4) {
+            anchor = pos;
+            break;
+          }
+        }
         if (anchor !== undefined) next = Math.min(next, anchor);
       } else {
-        const anchor = anchors.filter(value => value < top - 4).at(-1);
+        for (let i = posts.length - 1; i >= 0; i--) {
+          const postRect = posts[i].getBoundingClientRect();
+          if (postRect.height <= 0) continue;
+          hasRendered = true;
+          const pos = top + postRect.top - viewportTop;
+          if (pos < top - 4) {
+            anchor = pos;
+            break;
+          }
+        }
         next = anchor === undefined ? Math.max(0, next) : Math.max(next, anchor);
       }
+      if (!hasRendered) return { status: 'skipped', reason: 'unavailable' };
+    } else if (mode !== 'top' && !posts.some(article => article.getBoundingClientRect().height > 0)) {
+      return { status: 'skipped', reason: 'unavailable' };
     }
     next = Math.max(0, Math.min(limit, next));
     if (!Number.isFinite(next)) return { status: 'skipped', reason: 'unavailable' };
