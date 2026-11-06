@@ -397,7 +397,7 @@ function positionSetup() {
   return { ...env, panel, handle, commits, position, emit, pointer, setHeight: value => { panelHeight = value; } };
 }
 
-test('panel dragging clamps to the viewport, shields frames and saves only a completed drag', () => {
+test('panel dragging clamps to the viewport, shields frames and saves only a completed drag', async () => {
   const env = positionSetup();
   assert.equal(env.panel.style.left, '706px');
   env.pointer('pointerdown', 710, 520);
@@ -412,6 +412,24 @@ test('panel dragging clamps to the viewport, shields frames and saves only a com
   assert.equal(env.panel.style.left, '8px');
   assert.equal(env.panel.style.top, '8px');
   assert.deepEqual(env.commits, [{ x: 0, y: 0 }]);
+  // Reversing direction immediately moves the panel without getting stuck at edges
+  env.pointer('pointerdown', 10, 10);
+  env.pointer('pointermove', -1000, -1000); // Hit top-left edge
+  assert.equal(env.panel.style.left, '8px');
+  assert.equal(env.panel.style.top, '8px');
+  env.pointer('pointermove', -995, -995); // Move 5px inwards
+  assert.equal(env.panel.style.left, '13px');
+  assert.equal(env.panel.style.top, '13px');
+  env.pointer('pointerup', -995, -995);
+  // Double-clicking immediately after dragging is ignored to avoid accidental reset
+  env.emit('dblclick', { button: 0 });
+  assert.equal(env.panel.style.left, '13px');
+  // Double-clicking after drag settles resets position to bottom-right
+  await env.clock.advance(600);
+  env.emit('dblclick', { button: 0 });
+  assert.equal(env.panel.style.left, '706px');
+  assert.equal(env.panel.style.top, '512px');
+  assert.deepEqual(env.commits.at(-1), { x: 1, y: 1 });
   env.position.dispose();
 });
 

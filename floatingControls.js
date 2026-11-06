@@ -379,6 +379,7 @@
       listen(handle, 'pointerup', event => this.end(event));
       listen(handle, 'pointercancel', event => this.end(event, true));
       listen(handle, 'lostpointercapture', event => this.end(event, true));
+      listen(handle, 'dblclick', event => this.resetPosition(event));
       listen(handle, 'keydown', event => this.key(event));
       listen(window, 'resize', () => this.place());
       listen(window.visualViewport, 'resize', () => this.place());
@@ -411,39 +412,42 @@
       };
     }
 
-    place() {
-      this.panel.style.maxWidth = `${Math.max(0, (window.visualViewport?.width ?? window.innerWidth) - 16)}px`;
-      this.panel.style.maxHeight = `${Math.max(0, (window.visualViewport?.height ?? window.innerHeight) - 16)}px`;
-      const point = this.coordinates();
+    place(bounds = this.bounds(), dragMoving = false) {
+      if (!dragMoving) {
+        this.panel.style.maxWidth = `${Math.max(0, (window.visualViewport?.width ?? window.innerWidth) - 16)}px`;
+        this.panel.style.maxHeight = `${Math.max(0, (window.visualViewport?.height ?? window.innerHeight) - 16)}px`;
+        this.panel.style.right = 'auto';
+        this.panel.style.bottom = 'auto';
+      }
+      const point = this.coordinates(bounds);
       this.panel.style.left = `${point.left}px`;
       this.panel.style.top = `${point.top}px`;
-      this.panel.style.right = 'auto';
-      this.panel.style.bottom = 'auto';
     }
 
     setPosition(position) {
       if (!this.drag) { this.position = preferences(position); this.place(); }
     }
 
-    placeAt(left, top) {
-      const bounds = this.bounds();
+    placeAt(left, top, bounds = this.bounds(), dragMoving = false) {
       // Coordinates use the viewport, so changing status text or folding the
       // settings does not shift an interior header. A value of 1 anchors an edge.
       if (bounds.x) this.position.x = left >= bounds.left + bounds.x - 1 ? 1 : clamp((left - bounds.left) / bounds.scaleX);
       if (bounds.y) this.position.y = top >= bounds.top + bounds.y - 1 ? 1 : clamp((top - bounds.top) / bounds.scaleY);
-      this.place();
+      this.place(bounds, dragMoving);
     }
 
     start(event) {
       if (event.button !== 0 || this.drag) return;
       event.preventDefault();
       this.handle.focus({ preventScroll: true });
-      const point = this.coordinates();
+      const bounds = this.bounds();
+      const point = this.coordinates(bounds);
       this.drag = {
         id: event.pointerId, clientX: event.clientX, clientY: event.clientY,
-        left: point.left, top: point.top,
+        left: point.left, top: point.top, bounds,
         previous: { ...this.position }, moved: false,
       };
+      this.panel.style.willChange = 'left, top';
       this.shield = document.createElement('div');
       Object.assign(this.shield.style, { position: 'fixed', inset: '0', zIndex: '799', cursor: 'grabbing', touchAction: 'none' });
       this.shield.setAttribute('aria-hidden', 'true');
@@ -457,19 +461,37 @@
       const dx = event.clientX - this.drag.clientX, dy = event.clientY - this.drag.clientY;
       if (!this.drag.moved && Math.hypot(dx, dy) < 4) return;
       this.drag.moved = true;
-      this.placeAt(this.drag.left + dx, this.drag.top + dy);
+      const bounds = this.drag.bounds;
+      const rawLeft = this.drag.left + dx, rawTop = this.drag.top + dy;
+      const targetLeft = Math.max(bounds.left, Math.min(bounds.left + bounds.x, rawLeft));
+      const targetTop = Math.max(bounds.top, Math.min(bounds.top + bounds.y, rawTop));
+      // Re-sync origin when hitting viewport boundary to prevent lag when reversing direction
+      if (rawLeft !== targetLeft) this.drag.clientX = event.clientX - (targetLeft - this.drag.left);
+      if (rawTop !== targetTop) this.drag.clientY = event.clientY - (targetTop - this.drag.top);
+      this.placeAt(targetLeft, targetTop, bounds, true);
     }
 
     end(event, cancelled = false) {
       if (!this.drag || (event && event.pointerId !== undefined && event.pointerId !== this.drag.id)) return;
       const drag = this.drag;
       this.drag = null;
+      this.panel.style.willChange = '';
       this.shield?.remove();
       this.shield = null;
       this.handle.style.cursor = 'grab';
       if (cancelled) { this.position = drag.previous; this.place(); }
       try { this.handle.releasePointerCapture(drag.id); } catch {}
-      if (!cancelled && drag.moved) this.onCommit({ x: this.position.x, y: this.position.y });
+      if (!cancelled && drag.moved) {
+        this.lastDragMovedAt = Date.now();
+        this.onCommit({ x: this.position.x, y: this.position.y });
+      }
+    }
+
+    resetPosition(event) {
+      if (event.button !== 0 || this.drag || Date.now() - (this.lastDragMovedAt ?? 0) < 500) return;
+      this.position = preferences({ x: 1, y: 1 });
+      this.place();
+      this.onCommit({ x: this.position.x, y: this.position.y });
     }
 
     key(event) {
