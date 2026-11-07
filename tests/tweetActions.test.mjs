@@ -119,6 +119,33 @@ test('native links use the main tweet, preserve column navigation, and leave rep
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 0);
 });
 
+test('unchanged list settings and duplicate navigation events do not repeatedly scan the timeline', async () => {
+  const { actions, document, window, clock } = setup(nativeTweet('101'));
+  const queryAll = document.querySelectorAll.bind(document);
+  let scans = 0;
+  document.querySelectorAll = selector => {
+    if (selector === 'article[data-testid="tweet"]') scans++;
+    return queryAll(selector);
+  };
+  const controller = new actions.NativeActionsController();
+  controller.update(allEnabled);
+  controller.update(allEnabled);
+  controller.update({ ...allEnabled, hideShare: false });
+  assert.equal(scans, 1);
+
+  window.location.hash = '#yomikui-cidnext';
+  window.emit('popstate');
+  window.emit('hashchange');
+  await clock.advance(80);
+  assert.equal(scans, 2);
+  assert.match(document.querySelector('[data-yomikui-tweet-action] > a').getAttribute('href'), /#yomikui-cidnext$/);
+
+  window.emit('yomikui-frame-column-visibility', { detail: { visible: false } });
+  window.emit('hashchange');
+  await clock.advance(80);
+  assert.equal(scans, 2);
+});
+
 test('detail / permalink tweets show list buttons for standalone, quoted and analytics-free tweets', () => {
   const html = nativeDetailTweet('301', { analytics: true }) +
     nativeDetailTweet('302', { analytics: false }) +

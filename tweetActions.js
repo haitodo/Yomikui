@@ -241,6 +241,7 @@
       this.columnVisible = true;
       this.suspended = false;
       this.pending = new Set();
+      this.rescanPending = false;
       this.observer = null;
       this.timer = null;
       this.syncVisibility = () => this.sync();
@@ -252,13 +253,20 @@
       });
       window.addEventListener('pagehide', () => { this.suspended = true; this.sync(); });
       window.addEventListener('pageshow', () => { this.suspended = false; this.sync(); });
-      window.addEventListener('popstate', () => { this.scan(document); this.scheduleFlush(); });
-      window.addEventListener('hashchange', () => { this.scan(document); this.scheduleFlush(); });
-      window.navigation?.addEventListener?.('navigatesuccess', () => { this.scan(document); this.scheduleFlush(); });
+      const rescanOnNavigation = () => {
+        if (!this.observer) return;
+        this.rescanPending = true;
+        this.scheduleFlush();
+      };
+      window.addEventListener('popstate', rescanOnNavigation);
+      window.addEventListener('hashchange', rescanOnNavigation);
+      window.navigation?.addEventListener?.('navigatesuccess', rescanOnNavigation);
     }
 
     update(value) {
+      const previous = this.settings;
       this.settings = normalizeSettings(value.isLiveFeedColumn ? { hideViews: false, hideShare: false } : value);
+      const listsChanged = LISTS.some(({ key }) => this.settings[key] !== previous[key]);
       const css = getNativeCss(this.settings);
       let style = document.getElementById(STYLE_ID);
       if (css) {
@@ -271,14 +279,16 @@
       } else {
         style?.remove();
       }
-      for (const slot of document.querySelectorAll(`[${SLOT}]`)) {
-        const list = LISTS.find(item => item.kind === slot.getAttribute(SLOT));
-        if (!list || !this.settings[list.key]) slot.remove();
+      if (listsChanged) {
+        for (const slot of document.querySelectorAll(`[${SLOT}]`)) {
+          const list = LISTS.find(item => item.kind === slot.getAttribute(SLOT));
+          if (!list || !this.settings[list.key]) slot.remove();
+        }
       }
-      this.sync();
+      this.sync(listsChanged);
     }
 
-    sync() {
+    sync(rescan = false) {
       const enabled = this.settings.showQuoteList || this.settings.showRetweetList;
       if (!enabled || document.hidden || !this.columnVisible || this.suspended) {
         this.observer?.disconnect();
@@ -286,9 +296,11 @@
         if (this.timer !== null) clearTimeout(this.timer);
         this.timer = null;
         this.pending.clear();
+        this.rescanPending = false;
         return;
       }
-      this.scan(document);
+      if (this.observer && !rescan) return;
+      this.rescanPending = true;
       this.flush();
       if (this.observer) return;
       this.observer = new MutationObserver(records => {
@@ -311,7 +323,7 @@
     }
 
     scheduleFlush() {
-      if (this.pending.size && this.timer === null) {
+      if ((this.rescanPending || this.pending.size) && this.timer === null) {
         this.timer = setTimeout(() => { this.timer = null; this.flush(); }, 80);
       }
     }
@@ -326,10 +338,15 @@
 
     scan(root) {
       if (root.matches?.(TWEET)) this.pending.add(root);
+      if (root.nodeType === 1 && root.childElementCount === 0) return;
       for (const tweet of root.querySelectorAll(TWEET)) this.pending.add(tweet);
     }
 
     flush() {
+      if (this.rescanPending) {
+        this.rescanPending = false;
+        this.scan(document);
+      }
       for (const tweet of this.pending) if (tweet.isConnected && !tweet.matches('.rd-lf-tweet')) this.process(tweet);
       this.pending.clear();
     }

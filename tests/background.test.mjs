@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { downloadEnvironment, evaluate, hook, settle } from './helpers.mjs';
 
 function setup() {
@@ -81,5 +82,35 @@ test('declarativeNetRequest dynamic rules include telemetry and ad blocks for x.
   assert.ok(filters.includes('twitter.com/i/api/1.1/jot/*'));
   assert.ok(filters.includes('x.com/i/api/1.1/branch/*'));
   assert.ok(filters.includes('twitter.com/i/api/1.1/branch/*'));
+});
+
+test('the static rule suppresses page scripts only on the dashboard document', async () => {
+  const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url)));
+  const ruleset = manifest.declarative_net_request.rule_resources.find(rule => rule.id === 'deck');
+  assert.equal(ruleset.enabled, true);
+  const [rule] = JSON.parse(readFileSync(new URL(`../${ruleset.path}`, import.meta.url)));
+  const { regexFilter, resourceTypes, requestDomains } = rule.condition;
+  const pathMatches = new RegExp(regexFilter);
+  for (const url of [
+    'https://x.com/yomikui/status/0',
+    'https://www.twitter.com/yomikui/status/0/?foo=bar',
+  ]) assert.match(url, pathMatches);
+  for (const url of [
+    'https://x.com/home',
+    'https://x.com/yomikui/status/01',
+    'https://x.com/yomikui/status/0/photo/1',
+    'https://x.com/i/flow/login?next=/yomikui/status/0',
+  ]) assert.doesNotMatch(url, pathMatches);
+  assert.deepEqual(resourceTypes, ['main_frame']);
+  assert.deepEqual(requestDomains, ['x.com', 'twitter.com']);
+  assert.deepEqual(rule.action.responseHeaders, [
+    { header: 'content-security-policy', operation: 'append', value: "script-src 'none'" },
+  ]);
+
+  const env = setup();
+  await settle();
+  const dynamicCsp = env.dnrUpdates.at(-1).addRules.find(candidate =>
+    candidate.action.responseHeaders?.some(header => header.header.toLowerCase() === 'content-security-policy'));
+  assert.ok(rule.priority > dynamicCsp.priority);
 });
 

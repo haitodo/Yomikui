@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "priority": 3,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        {
+          "header": "content-security-policy",
+          "operation": "append",
+          "value": "script-src 'none'"
+        }
+      ]
+    },
+    "condition": {
+      "regexFilter": "^https://[^/]+/yomikui/status/0/?(?:\\?|$)",
+      "isUrlFilterCaseSensitive": true,
+      "requestDomains": ["x.com", "twitter.com"],
+      "resourceTypes": ["main_frame"]
+    }
+  }
+]

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { Events } from './helpers.mjs';
 
 test('Dve sets initial isIntersecting to false and mounts only when visible or keepMounted', () => {
   const deck = readFileSync('contentDeck.js', 'utf8');
@@ -166,16 +167,55 @@ test('sidebar active workspace icon has refined active styling without distracti
   assert.match(deck, /border:\s*1px solid/);
 });
 
-test('Dve clears iframe src to about:blank and cleans window reference on unmount', () => {
+test('replacing the frame load listener leaves the live iframe and its window registration intact', () => {
   const deck = readFileSync('contentDeck.js', 'utf8');
-  assert.match(deck, /try\{Te\.src="about:blank"\}catch\{\}/);
-  assert.match(deck, /try\{i\?\.\(e\.id,null,null\)\}catch\{\}/);
+  const loadListener = deck.indexOf('Te.addEventListener("load",De)');
+  const start = deck.lastIndexOf('(0,nt.useEffect)', loadListener);
+  const end = deck.indexOf(',(0,nt.useEffect)', loadListener);
+  const frame = new Events();
+  frame.src = 'https://x.com/home';
+  const register = () => assert.fail('Listener cleanup must not clear the frame registration');
+  vm.runInNewContext(deck.slice(start, end), {
+    nt: { useEffect: effect => effect()() },
+    Pt: { current: frame }, e: { id: 'home' },
+    i: register, kt: 0, Ge: true, Ot() {}, Eo() {},
+  });
+  assert.equal(frame.src, 'https://x.com/home');
+  assert.equal(frame.listeners.get('load').length, 0);
+  assert.match(deck, /\(\)=>i\?\.\(e\.id,null\)\),\[e\.id,i,kt,Ge,Ot\]/);
+  assert.match(deck, /Ne\.current=\{\},Fe\.current=\{\},Eo\(\),syncColumnVisibility\(\);return/);
 });
 
-test('contentIframe pauses video playback when column becomes hidden', () => {
+test('offscreen columns pause existing and newly started videos, then resume only prior playback', () => {
   const iframe = readFileSync('contentIframe.js', 'utf8');
-  assert.ok(iframe.includes('_yomikuiFreezeMedia'));
-  assert.match(iframe, /t\.dataset\.yomikuiPaused="1"/);
+  class Video {
+    constructor(paused) { this.paused = paused; }
+    pause() { this.paused = true; }
+    play() { this.paused = false; return Promise.resolve(); }
+  }
+  const playing = new Video(false);
+  const idle = new Video(true);
+  const addedWhileHidden = new Video(true);
+  const document = new Events();
+  const videos = [playing, idle];
+  document.querySelectorAll = () => videos;
+  const context = { document, HTMLVideoElement: Video, window: new Events(), CustomEvent };
+  const start = iframe.indexOf('var $2=!0;');
+  const end = iframe.indexOf('function Xe()', start);
+  vm.runInNewContext(iframe.slice(start, end), context);
+
+  context.G1(false);
+  assert.equal(playing.paused, true);
+  videos.push(addedWhileHidden);
+  addedWhileHidden.play();
+  document.emit('play', { target: addedWhileHidden });
+  assert.equal(addedWhileHidden.paused, true);
+
+  context.G1(true);
+  assert.equal(playing.paused, false);
+  assert.equal(idle.paused, true);
+  assert.equal(addedWhileHidden.paused, true);
+  assert.equal(document.listeners.get('play').length, 0);
 });
 
 test('contentIframe applies content-visibility: auto to timeline tweet cellInnerDiv elements', () => {

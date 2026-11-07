@@ -15,6 +15,7 @@ const EXTENSION_FILES = new Set([
   "background.js",
   "contentDeck.js",
   "contentIframe.js",
+  "deckRules.json",
   "mediaInterceptor.js",
 ]);
 

@@ -30,6 +30,15 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "deck",
+        "enabled": true,
+        "path": "deckRules.json"
+      }
+    ]
+  },
   "content_scripts": [
     {
       "matches": [
@@ -78,6 +87,7 @@
         "https://*.x.com/*"
       ],
       "js": [
+        "nativeTimeline.js",
         "mediaInterceptor.js"
       ],
       "all_frames": true,
