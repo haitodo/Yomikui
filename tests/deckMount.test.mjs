@@ -224,6 +224,69 @@ test('contentIframe applies content-visibility: auto to timeline tweet cellInner
   assert.match(iframe, /contain-intrinsic-size:\s*auto\s*150px;/);
 });
 
+test('history pauses both timers and catches up once when its column becomes visible', async () => {
+  const iframe = readFileSync('contentIframe.js', 'utf8');
+  const helperStart = iframe.indexOf('function watchHistoryWhileVisible(');
+  const helperEnd = iframe.indexOf('var xJ=', helperStart);
+  const effectStart = iframe.indexOf('(0,We.useEffect)(() => watchHistoryWhileVisible(');
+  const effectEnd = iframe.indexOf(';let J=(0,We.useCallback)', effectStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart && effectStart >= 0 && effectEnd > effectStart);
+
+  const window = new Events();
+  const document = new Events();
+  document.hidden = false;
+  const timers = new Map();
+  let nextTimer = 0;
+  let visible = true;
+  let cleanup;
+  let reads = 0;
+  let historyFetches = 0;
+  let labelUpdates = 0;
+  let finishRead;
+  const firstRead = new Promise(resolve => { finishRead = resolve; });
+  vm.runInNewContext(`${iframe.slice(helperStart, helperEnd)}\n${iframe.slice(effectStart, effectEnd)}`, {
+    window, document, Xe: () => visible, fJ: 15000,
+    setInterval(callback, delay) {
+      const id = ++nextTimer;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearInterval: id => timers.delete(id),
+    We: { useEffect: effect => { cleanup = effect(); } },
+    AD: () => ++reads === 1 ? firstRead : Promise.resolve(0),
+    $D: async () => { historyFetches++; return []; },
+    k: { current: 0 },
+    S: () => { labelUpdates++; },
+  });
+  assert.deepEqual([...timers.values()].map(timer => timer.delay), [15000, 60000]);
+  const { callback: poll } = timers.values().next().value;
+  const pending = poll();
+  await poll();
+  assert.equal(reads, 1);
+
+  visible = false;
+  window.emit('yomikui-frame-column-visibility');
+  assert.equal(timers.size, 0);
+  finishRead(1);
+  await pending;
+  assert.equal(historyFetches, 0);
+
+  visible = true;
+  window.emit('yomikui-frame-column-visibility');
+  document.emit('visibilitychange');
+  assert.equal(reads, 2);
+  assert.equal(labelUpdates, 1);
+  assert.equal(timers.size, 2);
+  document.hidden = true;
+  document.emit('visibilitychange');
+  assert.equal(timers.size, 0);
+  cleanup();
+  document.hidden = false;
+  document.emit('visibilitychange');
+  window.emit('yomikui-frame-column-visibility');
+  assert.equal(timers.size, 0);
+});
+
 test('sidebar sleep setting supports switch toggle and reveals minute input only when active', () => {
   const deck = readFileSync('contentDeck.js', 'utf8');
   const messages = JSON.parse(readFileSync('_locales/ja/messages.json', 'utf8'));
