@@ -189,6 +189,141 @@
     });
   }
 
+  function isInputActive(targetDoc = (typeof document !== "undefined" ? document : null)) {
+    if (!targetDoc) return false;
+    try {
+      const active = targetDoc.activeElement;
+      if (!active) return false;
+      const tag = active.tagName?.toUpperCase?.();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (active.isContentEditable) return true;
+      const role = active.getAttribute?.("role");
+      if (role === "textbox" || role === "searchbox" || role === "combobox") return true;
+      if (active.closest?.('[contenteditable="true"], [role="textbox"], [role="searchbox"], [role="combobox"], form, [data-testid="tweetTextarea_0"]')) {
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  function installDeckHoverFocus(rootDoc = (typeof document !== "undefined" ? document : null)) {
+    if (!rootDoc || rootDoc.__yomikuiDeckHoverFocusInstalled) return () => {};
+    rootDoc.__yomikuiDeckHoverFocusInstalled = true;
+
+    let lastFocusedIframe = null;
+    let lastBackMessageTime = -Infinity;
+    const BACK_BUTTON_DEBOUNCE_MS = 250;
+
+    const handlePointerOver = (event) => {
+      if (event?.buttons !== 0) return;
+      if (isInputActive(rootDoc)) return;
+
+      const columnEl = event?.target?.closest?.(".rd-column");
+      if (!columnEl) return;
+
+      const iframeEl = columnEl.querySelector?.("iframe");
+      if (!iframeEl || iframeEl === lastFocusedIframe) return;
+
+      if (rootDoc.activeElement === iframeEl) {
+        lastFocusedIframe = iframeEl;
+        return;
+      }
+
+      try {
+        iframeEl.focus();
+        lastFocusedIframe = iframeEl;
+      } catch {}
+    };
+
+    const handleMouseBackButton = (event) => {
+      if (event?.button !== 3) return;
+
+      event.preventDefault?.();
+      event.stopPropagation?.();
+
+      const now = Date.now();
+      if (now - lastBackMessageTime < BACK_BUTTON_DEBOUNCE_MS) return;
+      lastBackMessageTime = now;
+
+      const columnEl = event?.target?.closest?.(".rd-column");
+      const iframeEl = columnEl?.querySelector?.("iframe") || lastFocusedIframe;
+      if (!iframeEl) return;
+
+      try {
+        iframeEl.focus?.();
+        iframeEl.contentWindow?.postMessage?.({ type: "yomikui-go-back" }, "*");
+      } catch {}
+    };
+
+    rootDoc.addEventListener("pointerover", handlePointerOver, { passive: true, capture: true });
+    rootDoc.addEventListener("mouseover", handlePointerOver, { passive: true, capture: true });
+    rootDoc.addEventListener("pointerdown", handleMouseBackButton, true);
+    rootDoc.addEventListener("mousedown", handleMouseBackButton, true);
+    rootDoc.addEventListener("auxclick", handleMouseBackButton, true);
+    rootDoc.addEventListener("mouseup", handleMouseBackButton, true);
+
+    return () => {
+      rootDoc.removeEventListener("pointerover", handlePointerOver, { capture: true });
+      rootDoc.removeEventListener("mouseover", handlePointerOver, { capture: true });
+      rootDoc.removeEventListener("pointerdown", handleMouseBackButton, true);
+      rootDoc.removeEventListener("mousedown", handleMouseBackButton, true);
+      rootDoc.removeEventListener("auxclick", handleMouseBackButton, true);
+      rootDoc.removeEventListener("mouseup", handleMouseBackButton, true);
+      delete rootDoc.__yomikuiDeckHoverFocusInstalled;
+    };
+  }
+
+  function installFrameHoverFocus(frameDoc = (typeof document !== "undefined" ? document : null), frameWin = (typeof window !== "undefined" ? window : null)) {
+    if (!frameDoc || !frameWin || frameDoc.__yomikuiFrameHoverFocusInstalled) return () => {};
+    frameDoc.__yomikuiFrameHoverFocusInstalled = true;
+
+    const handlePointerMove = (event) => {
+      if (event?.buttons !== 0) return;
+      if (typeof frameDoc.hasFocus === "function" && frameDoc.hasFocus()) return;
+      if (isInputActive(frameDoc)) return;
+
+      try {
+        frameWin.focus();
+      } catch {}
+    };
+
+    const handlePointerDown = (event) => {
+      if (event?.button === 3) {
+        if (typeof frameDoc.hasFocus === "function" && !frameDoc.hasFocus()) {
+          try {
+            frameWin.focus();
+          } catch {}
+        }
+      }
+    };
+
+    frameWin.addEventListener("pointermove", handlePointerMove, { passive: true });
+    frameWin.addEventListener("mousemove", handlePointerMove, { passive: true });
+    frameWin.addEventListener("pointerenter", handlePointerMove, { passive: true });
+    frameWin.addEventListener("pointerdown", handlePointerDown, true);
+    frameWin.addEventListener("mousedown", handlePointerDown, true);
+    frameWin.addEventListener("auxclick", handlePointerDown, true);
+
+    return () => {
+      frameWin.removeEventListener("pointermove", handlePointerMove);
+      frameWin.removeEventListener("mousemove", handlePointerMove);
+      frameWin.removeEventListener("pointerenter", handlePointerMove);
+      frameWin.removeEventListener("pointerdown", handlePointerDown, true);
+      frameWin.removeEventListener("mousedown", handlePointerDown, true);
+      frameWin.removeEventListener("auxclick", handlePointerDown, true);
+      delete frameDoc.__yomikuiFrameHoverFocusInstalled;
+    };
+  }
+
+  if (typeof window !== "undefined" && typeof document !== "undefined") {
+    const isTopDeck = window.parent === window || (window.location?.pathname?.startsWith?.("/yomikui") ?? false);
+    if (isTopDeck) {
+      installDeckHoverFocus(document);
+    } else {
+      installFrameHoverFocus(document, window);
+    }
+  }
+
   globalThis.YomikuiColumnNavigation = Object.freeze({
     pageKey,
     restorableTab,
@@ -198,5 +333,8 @@
     getColumnUrl,
     copyToClipboard,
     CopyUrlButton,
+    isInputActive,
+    installDeckHoverFocus,
+    installFrameHoverFocus,
   });
 })();

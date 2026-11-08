@@ -430,3 +430,146 @@ test('likes column is supported with heart icon, default path, and translations 
   const messages = JSON.parse(readFileSync(new URL('../_locales/ja/messages.json', import.meta.url), 'utf8'));
   assert.equal(messages.column_type_likes?.message, 'いいね');
 });
+
+test('isInputActive detects form inputs, contenteditable, and search/text roles', () => {
+  const { api } = setup();
+  const { document } = parseHTML('<!doctype html><html><body>' +
+    '<div id="plain">Plain text</div>' +
+    '<input id="inp" type="text" />' +
+    '<textarea id="txt"></textarea>' +
+    '<select id="sel"></select>' +
+    '<div id="ce" contenteditable="true">Editable</div>' +
+    '<div id="tb" role="textbox">Textbox</div>' +
+    '<div data-testid="tweetTextarea_0"><span id="nested">Reply</span></div>' +
+    '</body></html>');
+
+  assert.equal(api.isInputActive(document), false);
+
+  document.activeElement = document.getElementById('inp');
+  assert.equal(api.isInputActive(document), true);
+
+  document.activeElement = document.getElementById('txt');
+  assert.equal(api.isInputActive(document), true);
+
+  document.activeElement = document.getElementById('sel');
+  assert.equal(api.isInputActive(document), true);
+
+  document.activeElement = document.getElementById('ce');
+  assert.equal(api.isInputActive(document), true);
+
+  document.activeElement = document.getElementById('tb');
+  assert.equal(api.isInputActive(document), true);
+
+  document.activeElement = document.getElementById('nested');
+  assert.equal(api.isInputActive(document), true);
+
+  document.activeElement = document.getElementById('plain');
+  assert.equal(api.isInputActive(document), false);
+});
+
+test('installDeckHoverFocus focuses column iframe on hover and routes mouse back button', () => {
+  const { api } = setup();
+  const { document, window, Event, CustomEvent } = parseHTML('<!doctype html><html><body>' +
+    '<div class="rd-column" id="col1"><div class="rd-column-header">Header 1</div><iframe id="frame1"></iframe></div>' +
+    '<div class="rd-column" id="col2"><div class="rd-column-header">Header 2</div><iframe id="frame2"></iframe></div>' +
+    '</body></html>');
+
+  const frame1 = document.getElementById('frame1');
+  const frame2 = document.getElementById('frame2');
+  let frame1Focused = 0;
+  let frame2Focused = 0;
+  frame1.focus = () => { frame1Focused++; document.activeElement = frame1; };
+  frame2.focus = () => { frame2Focused++; document.activeElement = frame2; };
+
+  const messages = [];
+  frame1.contentWindow = { postMessage: (msg) => messages.push({ target: 'frame1', msg }) };
+  frame2.contentWindow = { postMessage: (msg) => messages.push({ target: 'frame2', msg }) };
+
+  const cleanup = api.installDeckHoverFocus(document);
+
+  const makeEvent = (type, target, props = {}) => {
+    const ev = new CustomEvent(type, { bubbles: true, cancelable: true });
+    Object.assign(ev, props);
+    // Linkedom dispatchEvent sets target to the dispatched element
+    target.dispatchEvent(ev);
+    return ev;
+  };
+
+  // 1. Pointer over col1 triggers focus on frame1
+  const header1 = document.querySelector('#col1 .rd-column-header');
+  makeEvent('pointerover', header1, { buttons: 0 });
+  assert.equal(frame1Focused, 1);
+
+  // Duplicate hover over same column does not refocus
+  makeEvent('pointerover', header1, { buttons: 0 });
+  assert.equal(frame1Focused, 1);
+
+  // Hover over col2 triggers focus on frame2
+  const header2 = document.querySelector('#col2 .rd-column-header');
+  makeEvent('pointerover', header2, { buttons: 0 });
+  assert.equal(frame2Focused, 1);
+
+  // Dragging (buttons !== 0) suppresses focus change
+  makeEvent('pointerover', header1, { buttons: 1 });
+  assert.equal(frame1Focused, 1);
+
+  // 2. Mouse back button (button === 3) prevents default and sends yomikui-go-back to column iframe
+  const backEv = makeEvent('pointerdown', header2, { button: 3 });
+  assert.equal(backEv.defaultPrevented, true);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].target, 'frame2');
+  assert.equal(messages[0].msg?.type, 'yomikui-go-back');
+
+  // Cleanup removes listeners
+  cleanup();
+  makeEvent('pointerover', header1, { buttons: 0 });
+  assert.equal(frame1Focused, 1);
+});
+
+test('installFrameHoverFocus focuses window on frame pointer activity and back button', () => {
+  const { api } = setup();
+  const { document, window, CustomEvent } = parseHTML('<!doctype html><html><body><div id="content">Tweet</div></body></html>');
+
+  let windowFocused = 0;
+  window.focus = () => { windowFocused++; hasFocus = true; };
+  let hasFocus = false;
+  document.hasFocus = () => hasFocus;
+
+  const cleanup = api.installFrameHoverFocus(document, window);
+
+  const makeWindowEvent = (type, props = {}) => {
+    const ev = new CustomEvent(type, { bubbles: true, cancelable: true });
+    Object.assign(ev, props);
+    window.dispatchEvent(ev);
+    return ev;
+  };
+
+  // 1. Pointer move focuses window when not already focused
+  makeWindowEvent('pointermove', { buttons: 0 });
+  assert.equal(windowFocused, 1);
+  assert.equal(hasFocus, true);
+
+  // Already focused: subsequent moves do not call window.focus()
+  makeWindowEvent('pointermove', { buttons: 0 });
+  assert.equal(windowFocused, 1);
+
+  // If focus was lost, moving again refocuses
+  hasFocus = false;
+  makeWindowEvent('pointermove', { buttons: 0 });
+  assert.equal(windowFocused, 2);
+
+  // Dragging does not focus
+  hasFocus = false;
+  makeWindowEvent('pointermove', { buttons: 1 });
+  assert.equal(windowFocused, 2);
+
+  // Mouse back button (button === 3) focuses frame immediately if not focused
+  makeWindowEvent('pointerdown', { button: 3 });
+  assert.equal(windowFocused, 3);
+
+  // Cleanup removes listeners
+  cleanup();
+  hasFocus = false;
+  makeWindowEvent('pointermove', { buttons: 0 });
+  assert.equal(windowFocused, 3);
+});
