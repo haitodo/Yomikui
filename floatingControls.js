@@ -72,7 +72,37 @@
       hideEmpty: value?.hideEmpty !== false,
       color: Object.hasOwn(COLORS, value?.color) ? value.color : 'bluegray',
       transparency: Number.isFinite(value?.transparency) ? Math.max(0, Math.min(80, Math.round(value.transparency / 5) * 5)) : 0,
+      minimized: value?.minimized === true,
     };
+  }
+
+  // The panel and the sidebar button live in separate dashboard components.
+  // The panel owns the persisted preference; this store only mirrors it so the
+  // sidebar can show the state and ask the panel to toggle.
+  const dock = (() => {
+    let state = Object.freeze({ available: false, minimized: false, phase: 'idle', feedback: null });
+    const listeners = new Set();
+    let toggleHandler = null, focusHandler = null;
+    return Object.freeze({
+      get: () => state,
+      subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      publish(patch) {
+        if (Object.keys(patch).every(key => Object.is(state[key], patch[key]))) return;
+        state = Object.freeze({ ...state, ...patch });
+        for (const listener of [...listeners]) listener(state);
+      },
+      connect(handler) { toggleHandler = handler; return () => { if (toggleHandler === handler) toggleHandler = null; }; },
+      toggle() { toggleHandler?.(!state.minimized); },
+      registerFocus(handler) { focusHandler = handler; return () => { if (focusHandler === handler) focusHandler = null; }; },
+      focus() { focusHandler?.(); },
+    });
+  })();
+
+  const FEEDBACK = Object.freeze({ 完了: 'success', 一部: 'warning', 未確認: 'warning', 対象外: 'warning', 中止済: 'muted' });
+  function refreshFeedback(view) {
+    const results = view.results ?? [];
+    return view.phase === 'cancelled' ? '中止済' : results.some(result => ['failed', 'requested'].includes(result.status)) ? '未確認' :
+      results.some(result => result.status === 'skipped') ? results.some(result => ['updated', 'reloaded'].includes(result.status)) ? '一部' : '対象外' : results.length ? '完了' : '更新';
   }
 
   async function loadPreferences() {
@@ -527,7 +557,7 @@
     .yomikui-floating-panel button:focus-visible,.yomikui-floating-panel select:focus-visible,.yomikui-floating-panel input:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
     .yomikui-floating-panel .yf-handle{flex:1;justify-content:flex-start;gap:6px;min-height:24px;padding:4px 5px;color:var(--yf-muted-foreground);cursor:grab;touch-action:none;user-select:none}
     .yomikui-floating-panel .yf-title{flex-shrink:0;font-size:11px;font-weight:600;color:var(--foreground)}
-    .yomikui-floating-panel .yf-settings-toggle{width:24px;min-height:24px;padding:4px;color:var(--yf-muted-foreground)}
+    .yomikui-floating-panel .yf-settings-toggle,.yomikui-floating-panel .yf-minimize{width:24px;min-height:24px;padding:4px;color:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-body{padding:4px 8px 8px}
     .yomikui-floating-panel [hidden]{display:none!important}
     .yomikui-floating-panel .yf-choice-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px;margin-bottom:4px}
@@ -563,9 +593,21 @@
     .yomikui-floating-panel .yf-refresh{width:76px;min-height:32px;background:var(--yf-control-background)}
     .yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:yomikui-floating-spin 1s linear infinite}
     @keyframes yomikui-floating-spin{to{transform:rotate(360deg)}}
-    @media(pointer:coarse){.yomikui-floating-panel button,.yomikui-floating-panel .yf-target,.yomikui-floating-panel .yf-selection-mode button,.yomikui-floating-panel .yf-hide-empty{min-height:44px}.yomikui-floating-panel .yf-settings-toggle{width:44px;min-height:44px}.yomikui-floating-panel .yf-refresh{min-height:44px}.yomikui-floating-panel select{height:44px;font-size:16px}.yomikui-floating-panel .yf-transparency input{height:28px}}
+    @media(pointer:coarse){.yomikui-floating-panel button,.yomikui-floating-panel .yf-target,.yomikui-floating-panel .yf-selection-mode button,.yomikui-floating-panel .yf-hide-empty{min-height:44px}.yomikui-floating-panel .yf-settings-toggle,.yomikui-floating-panel .yf-minimize{width:44px;min-height:44px}.yomikui-floating-panel .yf-refresh{min-height:44px}.yomikui-floating-panel select{height:44px;font-size:16px}.yomikui-floating-panel .yf-transparency input{height:28px}}
     @media(prefers-reduced-motion:reduce){.yomikui-floating-panel button,.yomikui-floating-panel select{transition:none}.yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:none}}
-  `.replaceAll('.yomikui-floating-panel', '#yomikui-root .yomikui-floating-panel');
+  `.replaceAll('.yomikui-floating-panel', '#yomikui-root .yomikui-floating-panel') + `
+    #yomikui-root .yf-dock-btn{position:relative;color:var(--muted-foreground)}
+    #yomikui-root .yf-dock-btn:hover{background-color:var(--sidebar-accent);color:var(--foreground)}
+    #yomikui-root .yf-dock-btn[aria-pressed="true"]{background-color:color-mix(in oklab,var(--primary) 16%,transparent);color:var(--foreground)}
+    #yomikui-root .yf-dock-btn[aria-pressed="true"]:hover{background-color:color-mix(in oklab,var(--primary) 24%,var(--sidebar-accent,transparent))}
+    #yomikui-root .yf-dock-dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px var(--sidebar);pointer-events:none}
+    #yomikui-root .yf-dock-dot[data-tone="running"]{background:var(--primary);animation:yomikui-dock-pulse 1.2s ease-in-out infinite}
+    #yomikui-root .yf-dock-dot[data-tone="success"]{background:var(--chart-2)}
+    #yomikui-root .yf-dock-dot[data-tone="warning"]{background:oklch(0.75 0.15 85)}
+    #yomikui-root .yf-dock-dot[data-tone="muted"]{background:var(--muted-foreground)}
+    @keyframes yomikui-dock-pulse{50%{opacity:.35}}
+    @media(prefers-reduced-motion:reduce){#yomikui-root .yf-dock-dot[data-tone="running"]{animation:none}}
+  `;
 
   function installStyles() {
     // The dashboard removes every other stylesheet on head mutations. Extend
@@ -579,18 +621,66 @@
     return true;
   }
 
+  const ICONS = Object.freeze({
+    top: 'M5 3h14M12 21V7m-6 6 6-6 6 6', up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
+    grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
+    refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 17.9 17',
+    settings: 'M10 2h4l1 3 2 1 3-1 2 4-2 2v2l2 2-2 4-3-1-2 1-1 3h-4l-1-3-2-1-3 1-2-4 2-2v-2L2 9l2-4 3 1 2-1z M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8',
+    minimize: 'M6 12h12',
+    dock: 'M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4',
+  });
+  const panelIcon = (jsx, name, size = 14) => jsx.jsx('svg', {
+    width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75,
+    strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
+    children: jsx.jsx('path', { d: ICONS[name] }),
+  });
+
+  // Rendered inside the dashboard sidebar. Button and tooltip parts come from
+  // the dashboard so the entry matches the neighbouring sidebar buttons.
+  function SidebarButton({ React, jsx, Button = 'button', Tooltip, TooltipTrigger, TooltipContent }) {
+    const [state, setState] = React.useState(dock.get);
+    const buttonRef = React.useRef(null);
+    React.useEffect(() => {
+      installStyles();
+      setState(dock.get());
+      return dock.subscribe(setState);
+    }, []);
+    React.useEffect(() => dock.registerFocus(() => buttonRef.current?.focus({ preventScroll: true })), []);
+    if (!state.available) return null;
+    const action = state.minimized ? '閲覧・更新パネルを表示' : '閲覧・更新パネルを最小化';
+    const status = state.phase === 'running' ? '更新中' : state.feedback ? `更新: ${state.feedback}` : '';
+    const tone = state.phase === 'running' ? 'running' : FEEDBACK[state.feedback] ?? null;
+    const label = status ? `${action}（${status}）` : action;
+    const button = jsx.jsxs(Button, {
+      ref: buttonRef, type: 'button', variant: 'ghost', size: 'default', className: 'yf-dock-btn h-10 w-10 rounded-xl',
+      'aria-pressed': !state.minimized, 'aria-label': label, 'data-yf-minimized': state.minimized ? 'true' : 'false',
+      ...(Tooltip ? {} : { title: label }),
+      onClick: () => dock.toggle(),
+      children: [panelIcon(jsx, 'dock', 20), tone && jsx.jsx('span', { className: 'yf-dock-dot', 'data-tone': tone, 'aria-hidden': true })],
+    });
+    if (!Tooltip || !TooltipTrigger || !TooltipContent) return button;
+    return jsx.jsxs(Tooltip, { children: [
+      jsx.jsx(TooltipTrigger, { asChild: true, children: button }),
+      jsx.jsx(TooltipContent, { side: 'right', children: label }),
+    ] });
+  }
+
   function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onCancelRefresh, onNavigate, onWheel, onCancelWheel, workspaceId = 'default', kinds = {}, onVisibleChange }) {
     const [prefs, setPrefs] = React.useState(preferences);
     const [selection, setSelection] = React.useState(() => ({ workspaceId, value: selectionPreferences(), ready: false }));
     const [visible, setVisible] = React.useState(() => new Set());
     const [lastAction, setLastAction] = React.useState('reading');
     const [settingsOpen, setSettingsOpen] = React.useState(false);
+    // Rendering waits for saved preferences so a minimized panel never flashes open.
+    const [loaded, setLoaded] = React.useState(false);
     const prefsRef = React.useRef(prefs), dirty = React.useRef(false);
     const panelRef = React.useRef(null), handleRef = React.useRef(null), positionRef = React.useRef(null);
     const wheelRef = React.useRef(null);
     const countsRef = React.useRef(null);
     const eligible = columns.filter(readable);
     const available = eligible.length > 0 || canRefresh;
+    const minimized = prefs.minimized;
+    const shown = !hidden && available && loaded && !minimized;
     const targetReady = selection.workspaceId === workspaceId && selection.ready;
     const target = targetReady ? selectedGroups(selection.value) : [];
     const useLayoutEffect = React.useLayoutEffect ?? React.useEffect;
@@ -601,21 +691,35 @@
       setPrefs(next);
       savePreferences(next);
     }, []);
+    const setMinimized = React.useCallback(value => {
+      if (value) onCancelWheel?.();
+      updatePrefs({ minimized: value === true });
+    }, [onCancelWheel, updatePrefs]);
     React.useEffect(() => {
       let mounted = true;
       loadPreferences().then(value => {
-        if (mounted && !dirty.current) { prefsRef.current = value; setPrefs(value); }
+        if (!mounted) return;
+        if (!dirty.current) { prefsRef.current = value; setPrefs(value); }
+        setLoaded(true);
       });
       return () => { mounted = false; };
     }, []);
+    React.useEffect(() => dock.connect(setMinimized), [setMinimized]);
+    React.useEffect(() => () => dock.publish({ available: false }), []);
+    React.useEffect(() => {
+      dock.publish({
+        available: available && loaded, minimized, phase: view.phase,
+        feedback: ['cooldown', 'cancelled'].includes(view.phase) ? refreshFeedback(view) : null,
+      });
+    });
     useLayoutEffect(() => {
-      if (hidden || !available || !panelRef.current || !handleRef.current) return;
+      if (!shown || !panelRef.current || !handleRef.current) return;
       installStyles();
       const position = new PanelPosition({ panel: panelRef.current, handle: handleRef.current, position: prefsRef.current, onCommit: updatePrefs });
       const disposeWheel = installWheel(panelRef.current, action => wheelRef.current?.(action) === true);
       positionRef.current = position;
       return () => { disposeWheel(); position.dispose(); positionRef.current = null; };
-    }, [hidden, available, updatePrefs]);
+    }, [shown, updatePrefs]);
     useLayoutEffect(() => { positionRef.current?.setPosition(prefs); }, [prefs]);
     React.useEffect(() => {
       let mounted = true;
@@ -625,7 +729,9 @@
       return () => { mounted = false; };
     }, [workspaceId]);
     React.useEffect(() => {
-      if (hidden || !available) return;
+      // A minimized panel shows no counts and accepts no wheel input, so it
+      // does not follow the rack. Restoring runs one immediate update.
+      if (!shown) return;
       let scheduled = null;
       const update = () => {
         scheduled = null;
@@ -646,8 +752,8 @@
         observer?.disconnect();
         if (scheduled !== null) cancelAnimationFrame(scheduled);
       };
-    }, [hidden, available, columns, onVisibleChange]);
-    if (hidden || !available) return null;
+    }, [shown, columns, onVisibleChange]);
+    if (!shown) return null;
     const busy = view.phase === 'running';
     const visibleColumns = eligible.filter(column => visible.has(column.id));
     const currentCounts = Object.fromEntries(Object.keys(GROUPS).map(kind => [kind, visibleColumns.filter(column => kinds[column.id] === kind).length]));
@@ -672,25 +778,14 @@
       setLastAction('selection');
       saveTarget(workspaceId, value);
     };
-    const icon = name => jsx.jsx('svg', {
-      width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.75,
-      strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
-      children: jsx.jsx('path', { d: {
-        top: 'M5 3h14M12 21V7m-6 6 6-6 6 6', up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
-        grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
-        refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 17.9 17',
-        settings: 'M10 2h4l1 3 2 1 3-1 2 4-2 2v2l2 2-2 4-3-1-2 1-1 3h-4l-1-3-2-1-3 1-2-4 2-2v-2L2 9l2-4 3 1 2-1z M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8',
-      }[name] }),
-    });
+    const icon = name => panelIcon(jsx, name);
     const details = reading.results.map(result => `${result.title || '列'}: ${
       result.status === 'moved' ? '移動操作済み' : result.status === 'edge' ? '端に到達' : REASONS[result.reason] || '応答未確認'
     }`).join('\n');
     const showRefresh = busy || (lastAction === 'refresh' && !reading.busy);
     const noSelection = targetReady && !selectionVisible && !busy;
     const statusText = !targetReady ? '対象を読み込み中' : noSelection ? '画面内に閲覧対象の列がありません' : showRefresh ? refreshText : lastAction === 'reading' || reading.busy ? reading.message : '';
-    const results = view.results ?? [];
-    const feedback = view.phase === 'cancelled' ? '中止済' : results.some(result => ['failed', 'requested'].includes(result.status)) ? '未確認' :
-      results.some(result => result.status === 'skipped') ? results.some(result => ['updated', 'reloaded'].includes(result.status)) ? '一部' : '対象外' : results.length ? '完了' : '更新';
+    const feedback = refreshFeedback(view);
     const refreshLabel = busy ? onCancelRefresh ? '中止' : '更新中' : lastAction === 'refresh' && ['cooldown', 'cancelled'].includes(view.phase) ? feedback : '更新';
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
@@ -703,6 +798,7 @@
             icon('grip'), jsx.jsx('span', { className: 'yf-title', children: '閲覧・更新' }),
           ] }),
           jsx.jsx('button', { type: 'button', className: 'yf-settings-toggle', 'aria-label': 'パネル設定', 'aria-expanded': settingsOpen, 'aria-controls': 'yomikui-reading-settings', onClick: () => setSettingsOpen(!settingsOpen), children: icon('settings') }),
+          jsx.jsx('button', { type: 'button', className: 'yf-minimize', 'aria-label': '閲覧・更新パネルを最小化', title: '最小化（サイドバーのボタンで再表示）', onClick: () => { setMinimized(true); dock.focus(); }, children: icon('minimize') }),
         ] }),
         jsx.jsxs('div', { className: 'yf-body', children: [
           jsx.jsxs('div', { className: 'yf-choice-row', children: [
@@ -767,5 +863,5 @@
     });
   }
 
-  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, installWheel, visibleColumnIds, preferences, selectionPreferences, loadPreferences, savePreferences, loadTarget, saveTarget, matchesTarget, readingSummary, installStyles });
+  globalThis.YomikuiFloatingControls = Object.freeze({ ReadingController, PanelPosition, Panel, SidebarButton, dock, installWheel, visibleColumnIds, preferences, selectionPreferences, loadPreferences, savePreferences, loadTarget, saveTarget, matchesTarget, readingSummary, installStyles });
 })();

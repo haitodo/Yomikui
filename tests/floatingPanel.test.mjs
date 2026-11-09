@@ -27,21 +27,22 @@ function panel(env, options = {}) {
     phase = 'idle', reading = false, ready = true, workspaceId = 'workspace', selectedWorkspaceId = workspaceId,
     kinds = { one: 'recommended' }, lastAction = 'selection', settingsOpen = false, results = [],
     color = 'bluegray', transparency = 0, columns = [{ id: 'one', type: 'home', title: 'Home' }], visible = ['one'],
+    minimized = false, loaded = true,
   } = options;
-  const states = [env.api.preferences({ mode, hideEmpty, color, transparency }),
+  const states = [env.api.preferences({ mode, hideEmpty, color, transparency, minimized }),
     { workspaceId: selectedWorkspaceId, value: env.api.selectionPreferences({ selectionMode, single: target[0], multiple: target, multipleReady: true }), ready },
-    new Set(visible), lastAction, settingsOpen];
-  let index, nodes;
+    new Set(visible), lastAction, settingsOpen, loaded];
+  let index, nodes, effects = [];
   const refs = [];
   let refIndex;
   const React = {
     useState() { const slot = index++; return [states[slot], value => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }]; },
     useRef(current) { const slot = refIndex++; return refs[slot] ??= { current }; },
-    useCallback: fn => fn, useEffect() {}, useLayoutEffect() {},
+    useCallback: fn => fn, useEffect(fn) { effects.push(fn); }, useLayoutEffect() {},
   };
   const element = (type, props) => ({ type, props });
   const render = () => {
-    index = 0; refIndex = 0; nodes = [];
+    index = 0; refIndex = 0; nodes = []; effects = [];
     const tree = env.api.Panel({ React, jsx: { jsx: element, jsxs: element }, columns, kinds, workspaceId,
       view: { phase, results, done: 0, total: results.length }, reading: { busy: reading, results: [], message: '' },
       canRefresh: true, refreshText: '操作結果', refreshDetails: '列ごとの結果',
@@ -52,7 +53,8 @@ function panel(env, options = {}) {
     return tree;
   };
   render();
-  return { render, nodes: () => nodes, find: predicate => nodes.find(predicate),
+  return { render, nodes: () => nodes, find: predicate => nodes.find(predicate), states,
+    runEffects: () => effects.splice(0).map(effect => effect()),
     byClass: name => nodes.find(node => node.props?.className === name),
     target: name => nodes.find(node => node.props?.['data-target'] === name),
     mode: mode => nodes.find(node => node.type === 'button' && node.props?.children === (mode === 'single' ? '切り替え' : '複数選択')),
@@ -106,7 +108,7 @@ test('the panel keeps targets next to actions and only settings beside its drag 
   const body = ui.byClass('yf-body').props.children;
   assert.equal(body[1].props.className, 'yf-targets');
   assert.equal(body[2].props.className, 'yf-actions');
-  assert.deepEqual(clone(ui.byClass('yf-header').props.children.map(node => node.props.className)), ['yf-handle', 'yf-settings-toggle']);
+  assert.deepEqual(clone(ui.byClass('yf-header').props.children.map(node => node.props.className)), ['yf-handle', 'yf-settings-toggle', 'yf-minimize']);
   assert.equal(ui.byClass('yf-fields').props.hidden, true);
   ui.byClass('yf-settings-toggle').props.onClick(); ui.render();
   assert.equal(ui.byClass('yf-fields').props.hidden, false);
@@ -192,4 +194,97 @@ test('color, transparency and movement mode survive preference changes', async (
   await settle();
   const prefs = await env.api.loadPreferences();
   assert.deepEqual([prefs.color, prefs.transparency, prefs.mode], ['gray', 60, 'page']);
+});
+
+function sidebar(env, parts = {}) {
+  const states = [];
+  let index, button;
+  const React = {
+    useState(initial) { const slot = index++; if (!(slot in states)) states[slot] = typeof initial === 'function' ? initial() : initial; return [states[slot], value => { states[slot] = value; }]; },
+    useRef: current => ({ current }), useEffect(fn) { fn(); },
+  };
+  const element = (type, props) => ({ type, props });
+  const render = () => {
+    index = 0;
+    const tree = env.api.SidebarButton({ React, jsx: { jsx: element, jsxs: element }, ...parts });
+    button = tree?.type === 'Tooltip' ? tree.props.children[0].props.children : tree;
+    return tree;
+  };
+  return { render, button: () => button };
+}
+
+test('minimizing hides the panel, keeps a running refresh, persists and is restored from the sidebar', async () => {
+  const env = setup();
+  let wheelCancels = 0, refreshCancels = 0;
+  const ui = panel(env, { phase: 'running', onCancelWheel: () => wheelCancels++, onCancelRefresh: () => refreshCancels++ });
+  ui.runEffects();
+  assert.equal(env.api.dock.get().available, true);
+  assert.equal(env.api.dock.get().phase, 'running');
+  const minimize = ui.byClass('yf-minimize');
+  assert.equal(minimize.props['aria-label'], '閲覧・更新パネルを最小化');
+  minimize.props.onClick();
+  assert.equal(ui.render(), null, 'a minimized panel renders nothing');
+  ui.runEffects();
+  assert.equal(env.api.dock.get().minimized, true);
+  assert.equal(wheelCancels, 1, 'queued wheel input is released');
+  assert.equal(refreshCancels, 0, 'minimizing is not hiding and never cancels the refresh');
+  await settle();
+  assert.equal((await env.api.loadPreferences()).minimized, true);
+  env.api.dock.toggle();
+  assert.ok(ui.render(), 'the sidebar toggle restores the panel');
+  await settle();
+  assert.equal((await env.api.loadPreferences()).minimized, false);
+});
+
+test('the panel waits for saved preferences so a minimized panel never flashes open', () => {
+  const env = setup();
+  assert.equal(panel(env, { loaded: false }).render(), null);
+  assert.equal(panel(env, { minimized: true }).render(), null);
+  assert.ok(panel(env).render());
+});
+
+test('the sidebar button mirrors the panel state, refresh progress and uses dashboard parts', () => {
+  const env = setup(), dock = env.api.dock, toggles = [];
+  const ui = sidebar(env, { Button: 'Button', Tooltip: 'Tooltip', TooltipTrigger: 'Trigger', TooltipContent: 'Content' });
+  assert.equal(ui.render(), null, 'hidden while no panel is available');
+  const disconnect = dock.connect(value => toggles.push(value));
+  dock.publish({ available: true, minimized: true, phase: 'idle', feedback: null });
+  const tree = ui.render();
+  assert.equal(tree.type, 'Tooltip');
+  assert.equal(tree.props.children[0].props.asChild, true);
+  assert.equal(ui.button().type, 'Button');
+  assert.equal(ui.button().props['aria-pressed'], false);
+  assert.equal(ui.button().props['aria-label'], '閲覧・更新パネルを表示');
+  assert.equal(tree.props.children[1].props.side, 'right');
+  ui.button().props.onClick();
+  assert.deepEqual(toggles, [false]);
+  dock.publish({ minimized: false, phase: 'running' });
+  ui.render();
+  assert.equal(ui.button().props['aria-pressed'], true);
+  assert.match(ui.button().props['aria-label'], /最小化（更新中）/);
+  assert.equal(ui.button().props.children[1].props['data-tone'], 'running');
+  for (const [feedback, tone] of [['完了', 'success'], ['未確認', 'warning'], ['中止済', 'muted']]) {
+    dock.publish({ phase: 'cooldown', feedback });
+    ui.render();
+    assert.equal(ui.button().props.children[1].props['data-tone'], tone);
+  }
+  dock.publish({ phase: 'idle', feedback: null });
+  ui.render();
+  assert.equal(ui.button().props.children[1], null);
+  disconnect();
+  ui.button().props.onClick();
+  assert.deepEqual(toggles, [false], 'a disconnected panel receives no toggles');
+  const plain = sidebar(env);
+  plain.render();
+  assert.equal(plain.button().type, 'button');
+  assert.equal(plain.button().props.title, '閲覧・更新パネルを最小化');
+});
+
+test('the dashboard sidebar renders the panel button above the account button', () => {
+  const deck = readFileSync(new URL('../contentDeck.js', import.meta.url), 'utf8');
+  const call = '(0,ee.jsx)(globalThis.YomikuiFloatingControls.SidebarButton,{React:ln,jsx:ee,Button:Bt,Tooltip:yr,TooltipTrigger:wr,TooltipContent:lr})';
+  assert.equal(deck.split(call).length, 2);
+  assert.ok(deck.indexOf(call) < deck.indexOf('rd-sidebar-account-btn'));
+  const anchor = '(0,ee.jsx)(RW,{tutorialOpen:Ft?Yt==="workspaces":void 0,tutorialDismissKey:Fn}),';
+  assert.equal(deck.indexOf(call), deck.indexOf(anchor) + anchor.length, 'placed right after the workspace control');
 });
