@@ -1515,8 +1515,9 @@ test('the shipped dashboard renders one floating control and keeps its target fr
   };
   Object.assign(env.context, {
     Ut: store, rr: value => value, Ke: react, vt: { jsx: element, jsxs: element, Fragment: 'Fragment' },
-    en: () => key => key, rg: () => [], L0e: () => true, gY() {}, n$: () => false, T0e: 2,
+    en: () => key => key, rg: () => [], L0e: () => true, gY() {}, n$: () => false, T0e: 2, b9: url => url,
   });
+  vm.runInContext(readFileSync(new URL('../mediaPip.js', import.meta.url), 'utf8'), env.context);
   for (const name of ['PW', '_f', 'hf', 'pf', 'ZR', 'Cm', 'k1', 'UA', 'SW', 'eK', 'ym']) env.context[name] = name;
   vm.runInContext('globalThis.render = ' + deck.slice(start + 'hY='.length, end) + ';', env.context);
   const tree = env.context.render();

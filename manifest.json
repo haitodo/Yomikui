@@ -55,6 +55,7 @@
         "homeScroll.js",
         "floatingControls.js",
         "homeRefresh.js",
+        "mediaPip.js",
         "contentDeck.js"
       ],
       "run_at": "document_idle"
@@ -75,6 +76,7 @@
         "refreshBoundary.js",
         "homeRefresh.js",
         "wideMedia.js",
+        "mediaPipFrame.js",
         "contentIframe.js"
       ],
       "all_frames": true,
