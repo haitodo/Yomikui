@@ -218,21 +218,21 @@ test('fixed-width inputs commit on blur, clamp values, and allow cancelling a dr
   automatic.props.onClick();
   assert.deepEqual(modes, ['auto']);
   const input = find('Input').props;
-  for (const [value, expected] of [['24', '24'], ['100', '45'], ['3', '20'], ['28.7', '29'], ['', '32'], ['bad', '32']]) {
+  for (const [value, expected] of [['24', '24'], ['60', '60'], ['100', '80'], ['3', '20'], ['28.7', '29'], ['', '32'], ['bad', '32']]) {
     const currentTarget = { value };
     input.onBlur({ currentTarget });
     assert.equal(currentTarget.value, expected);
   }
-  assert.deepEqual(changes, [24, 45, 20, 29]);
+  assert.deepEqual(changes, [24, 60, 80, 20, 29]);
   const currentTarget = { value: '27', blur() { input.onBlur({ currentTarget }); } };
   input.onKeyDown({ key: 'Escape', currentTarget, preventDefault() {}, stopPropagation() {} });
   assert.equal(currentTarget.value, '32');
-  assert.deepEqual(changes, [24, 45, 20, 29]);
+  assert.deepEqual(changes, [24, 60, 80, 20, 29]);
   currentTarget.value = '26';
   input.onKeyDown({ key: 'Enter', currentTarget, preventDefault() {}, stopPropagation() {} });
   assert.equal(changes.at(-1), 26);
-  find('Slider').props.onValueChange([35]);
-  assert.equal(changes.at(-1), 35);
+  find('Slider').props.onValueChange([70]);
+  assert.equal(changes.at(-1), 70);
 });
 
 test('the extension loads layout support first and includes the new translations', () => {

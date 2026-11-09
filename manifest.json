@@ -74,6 +74,7 @@
         "homeScroll.js",
         "refreshBoundary.js",
         "homeRefresh.js",
+        "wideMedia.js",
         "contentIframe.js"
       ],
       "all_frames": true,

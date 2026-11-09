@@ -5,7 +5,7 @@
 (() => {
   const DEFAULT_WIDTH_REM = 32;
   const MIN_WIDTH_REM = 20;
-  const MAX_WIDTH_REM = 45;
+  const MAX_WIDTH_REM = 80;
   const WIDTH_MODES = Object.freeze([
     ["auto", "column_settings_width_auto"],
     ["fixed", "column_settings_width_fixed"],
