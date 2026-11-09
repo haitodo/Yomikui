@@ -541,6 +541,61 @@
   let pendingNavigationTimer = null;
   let pendingCheckTimer = null;
   let pendingNavigationObserver = null;
+  const pendingScrollTimers = new Set();
+
+  function cancelPendingScrollTimers() {
+    for (const timer of pendingScrollTimers) {
+      clearTimeout(timer);
+    }
+    pendingScrollTimers.clear();
+  }
+
+  function resetScrollToTop() {
+    try {
+      if (typeof window.scrollTo === "function") {
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      }
+    } catch {
+      try { window.scrollTo?.(0, 0); } catch {}
+    }
+    const candidates = [
+      document.scrollingElement,
+      document.documentElement,
+      document.body,
+      document.getElementById("yomikui-timeline-root"),
+      document.querySelector?.('[data-testid="primaryColumn"]'),
+      document.querySelector?.('main[role="main"]'),
+    ];
+    for (const el of candidates) {
+      if (!el) continue;
+      try {
+        if (typeof el.scrollTo === "function") {
+          el.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        }
+      } catch {
+        try { el.scrollTo?.(0, 0); } catch {}
+      }
+      try {
+        if (el.scrollTop !== 0) el.scrollTop = 0;
+      } catch {}
+    }
+  }
+
+  function scheduleScrollToTop() {
+    resetScrollToTop();
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(resetScrollToTop);
+    }
+    const schedule = (delay) => {
+      const timer = setTimeout(() => {
+        pendingScrollTimers.delete(timer);
+        resetScrollToTop();
+      }, delay);
+      pendingScrollTimers.add(timer);
+    };
+    schedule(50);
+    schedule(150);
+  }
 
   function cleanupPendingNavigation() {
     if (pendingNavigationTimer !== null) {
@@ -555,6 +610,7 @@
       pendingNavigationObserver.disconnect();
       pendingNavigationObserver = null;
     }
+    cancelPendingScrollTimers();
   }
 
   function openInPlace(path) {
@@ -594,6 +650,8 @@
       window.history.pushState(null, "", url);
       window.dispatchEvent(new PopStateEvent("popstate", { state: null }));
     } catch {}
+
+    scheduleScrollToTop();
 
     const idMatch = cleanPath.match(/\/status\/(\d+)/);
     const tweetId = idMatch ? idMatch[1] : null;
@@ -655,7 +713,10 @@
         if (pendingCheckTimer !== null) return;
         pendingCheckTimer = setTimeout(() => {
           pendingCheckTimer = null;
-          if (checkArrival()) cleanupPendingNavigation();
+          if (checkArrival()) {
+            cleanupPendingNavigation();
+            scheduleScrollToTop();
+          }
         }, ARRIVAL_CHECK_DEBOUNCE_MS);
       });
       const root = document.body || document.documentElement;
@@ -667,6 +728,7 @@
     pendingNavigationTimer = setTimeout(() => {
       if (checkArrival()) {
         cleanupPendingNavigation();
+        scheduleScrollToTop();
         return;
       }
       cleanupPendingNavigation();
@@ -963,6 +1025,7 @@
     setFrameEnabled,
     isFrameEnabled,
     resolveClickTarget,
+    resetScrollToTop,
     openInPlace,
     installFrame,
     SettingsControls,

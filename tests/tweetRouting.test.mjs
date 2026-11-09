@@ -310,6 +310,53 @@ test("openInPlace detects SPA arrival for user profiles as well as tweets and re
   assert.equal(hrefReloads, 0);
 });
 
+test("openInPlace resets scroll position to top on navigation and content arrival", async () => {
+  const html = `
+    <div data-testid="primaryColumn" id="primary">
+      <article data-testid="tweet" id="old-tweet">
+        <a href="/alice/status/100">Tweet 100</a>
+      </article>
+    </div>
+  `;
+  const { routing, document, window, observers, clock } = setup(html);
+
+  const scrollCalls = [];
+  window.scrollTo = (options) => {
+    scrollCalls.push(options);
+  };
+
+  const primary = document.getElementById("primary");
+  primary.scrollTop = 500;
+  primary.scrollTo = (options) => {
+    primary.scrollTop = typeof options === "object" ? options.top : options;
+  };
+
+  // リツイート一覧への遷移を実行（前回スクロール位置 500 が残っている状態）
+  routing.openInPlace("/alice/status/200/retweets");
+
+  // ナビゲーション直後に即座にスクロール位置が最上部にリセットされる
+  assert.equal(primary.scrollTop, 0);
+  assert.ok(scrollCalls.length > 0);
+  assert.equal(scrollCalls[0].top, 0);
+
+  // 待機中に仮想スクロール等で scrollTop が動いた状況をシミュレート
+  primary.scrollTop = 350;
+
+  // 新しいコンテンツ（UserCell）が到着
+  const cell = document.createElement("div");
+  cell.setAttribute("data-testid", "UserCell");
+  cell.textContent = "@retweeter";
+  primary.appendChild(cell);
+
+  const obs = observers.at(-1);
+  obs.emit([{}]);
+  await clock.advance(100);
+
+  // 到着検知で observer が解除され、スクロール位置が再度 0 にリセットされる
+  assert.equal(obs.connected, false);
+  assert.equal(primary.scrollTop, 0);
+});
+
 test("SettingsControls renders compact segmented buttons (self, next, custom) and inline target chips", () => {
   const { routing } = setup();
   const element = (type, props, key) => ({ type, props, key });
