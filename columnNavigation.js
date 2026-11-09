@@ -315,12 +315,196 @@
     };
   }
 
+  const ACCOUNT_STORAGE_KEY = "yomikui_current_account_v1";
+
+  /**
+   * DOM から現在ログイン中の X アカウント情報を抽出する
+   */
+  function extractAccountInfo(doc = (typeof document !== "undefined" ? document : null)) {
+    if (!doc) return null;
+
+    let avatarUrl = null;
+    let name = null;
+    let screenName = null;
+
+    // 1. [data-testid="SideNav_AccountSwitcher_Button"] またはアカウントメニューボタン
+    const switcherBtn = doc.querySelector?.(
+      '[data-testid="SideNav_AccountSwitcher_Button"], button[aria-label*="Account"], button[aria-label*="アカウント"]'
+    );
+
+    if (switcherBtn) {
+      const img = switcherBtn.querySelector?.('img[src*="profile_images"], img');
+      if (img) {
+        avatarUrl = img.getAttribute?.("src") || img.src || null;
+        const alt = img.getAttribute?.("alt");
+        if (alt && !alt.startsWith("@")) {
+          name = alt.trim();
+        }
+      }
+
+      const text = switcherBtn.innerText || switcherBtn.textContent || "";
+      const handleMatch = text.match(/@([A-Za-z0-9_]{1,15})/);
+      if (handleMatch) {
+        screenName = handleMatch[1];
+      }
+
+      if (!name) {
+        const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+        const handleIdx = lines.findIndex(l => l.startsWith("@"));
+        if (handleIdx > 0) {
+          name = lines[handleIdx - 1];
+        } else if (lines.length > 0 && !lines[0].startsWith("@")) {
+          name = lines[0];
+        }
+      }
+    }
+
+    // 2. フォールバック: AppTabBar_Profile_Link
+    if (!screenName) {
+      const profileLink = doc.querySelector?.(
+        'a[data-testid="AppTabBar_Profile_Link"], a[href^="/"][aria-label*="Profile"], a[href^="/"][aria-label*="プロフィール"]'
+      );
+      if (profileLink) {
+        const href = profileLink.getAttribute?.("href") || "";
+        const match = href.match(/^\/([A-Za-z0-9_]{1,15})(?:\/|$)/);
+        if (match) {
+          const candidate = match[1].toLowerCase();
+          const reserved = ["home", "explore", "notifications", "messages", "search", "i", "settings", "compose", "login", "logout"];
+          if (!reserved.includes(candidate)) {
+            screenName = match[1];
+          }
+        }
+      }
+    }
+
+    // 3. フォールバック: プロフィール画像の再探索
+    if (!avatarUrl && screenName) {
+      const profileImg = doc.querySelector?.(`a[href*="/${screenName}"] img[src*="profile_images"]`);
+      if (profileImg) {
+        avatarUrl = profileImg.getAttribute?.("src") || profileImg.src || null;
+      }
+    }
+
+    if (screenName || avatarUrl) {
+      if (avatarUrl && typeof avatarUrl === "string") {
+        avatarUrl = avatarUrl.replace(/_normal(\.[a-zA-Z0-9]+)$/, "_bigger$1");
+      }
+      return {
+        screenName: screenName || "",
+        name: name || screenName || "",
+        avatarUrl: avatarUrl || "",
+      };
+    }
+
+    return null;
+  }
+
+  function installAccountReporter(frameDoc = (typeof document !== "undefined" ? document : null), frameWin = (typeof window !== "undefined" ? window : null)) {
+    if (!frameDoc || !frameWin || frameDoc.__yomikuiAccountReporterInstalled) return () => {};
+    frameDoc.__yomikuiAccountReporterInstalled = true;
+
+    let lastSent = null;
+
+    const reportIfChanged = () => {
+      try {
+        const info = extractAccountInfo(frameDoc);
+        if (!info) return;
+        if (
+          !lastSent ||
+          lastSent.screenName !== info.screenName ||
+          lastSent.name !== info.name ||
+          lastSent.avatarUrl !== info.avatarUrl
+        ) {
+          lastSent = info;
+          frameWin.parent?.postMessage?.({
+            type: "yomikui-current-account-info",
+            account: info,
+          }, "*");
+        }
+      } catch {}
+    };
+
+    reportIfChanged();
+    if (frameDoc.readyState === "loading") {
+      frameDoc.addEventListener?.("DOMContentLoaded", reportIfChanged, { once: true });
+    }
+    frameWin.addEventListener?.("load", reportIfChanged, { once: true });
+
+    const handleMessage = (event) => {
+      if (event?.data?.type === "yomikui-request-account-info") {
+        reportIfChanged();
+      }
+    };
+    frameWin.addEventListener?.("message", handleMessage);
+
+    let observer = null;
+    try {
+      const target = frameDoc.body || frameDoc.documentElement;
+      if (target && typeof MutationObserver !== "undefined") {
+        observer = new MutationObserver(() => {
+          reportIfChanged();
+        });
+        observer.observe(target, { childList: true, subtree: true });
+      }
+    } catch {}
+
+    return () => {
+      frameWin.removeEventListener?.("message", handleMessage);
+      if (observer) observer.disconnect();
+      delete frameDoc.__yomikuiAccountReporterInstalled;
+    };
+  }
+
+  async function loadStoredAccount() {
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.local?.get) {
+        const res = await chrome.storage.local.get(ACCOUNT_STORAGE_KEY);
+        return res?.[ACCOUNT_STORAGE_KEY] || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  async function saveStoredAccount(account) {
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.local?.set) {
+        await chrome.storage.local.set({ [ACCOUNT_STORAGE_KEY]: account });
+      }
+    } catch {}
+  }
+
+  async function clearStoredAccount() {
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.local?.remove) {
+        await chrome.storage.local.remove(ACCOUNT_STORAGE_KEY);
+      }
+    } catch {}
+  }
+
+  function installAccountReceiver(rootWin = (typeof window !== "undefined" ? window : null), onAccountChange) {
+    if (!rootWin) return () => {};
+
+    const handleMessage = (event) => {
+      if (event?.data?.type === "yomikui-current-account-info" && event.data.account) {
+        const account = event.data.account;
+        saveStoredAccount(account);
+        onAccountChange?.(account);
+      }
+    };
+
+    rootWin.addEventListener?.("message", handleMessage);
+    return () => {
+      rootWin.removeEventListener?.("message", handleMessage);
+    };
+  }
+
   if (typeof window !== "undefined" && typeof document !== "undefined") {
     const isTopDeck = window.parent === window || (window.location?.pathname?.startsWith?.("/yomikui") ?? false);
     if (isTopDeck) {
       installDeckHoverFocus(document);
     } else {
       installFrameHoverFocus(document, window);
+      installAccountReporter(document, window);
     }
   }
 
@@ -336,5 +520,12 @@
     isInputActive,
     installDeckHoverFocus,
     installFrameHoverFocus,
+    extractAccountInfo,
+    installAccountReporter,
+    installAccountReceiver,
+    loadStoredAccount,
+    saveStoredAccount,
+    clearStoredAccount,
+    ACCOUNT_STORAGE_KEY,
   });
 })();

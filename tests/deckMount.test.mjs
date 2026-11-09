@@ -381,3 +381,27 @@ test('contentDeck.js parses as valid JavaScript without syntax errors', () => {
   });
 });
 
+test('sidebar renders dedicated account button and shows current account preview and quick switch', () => {
+  const deck = readFileSync('contentDeck.js', 'utf8');
+
+  // Account button element exists in sidebar
+  assert.match(deck, /rd-sidebar-account-btn/);
+
+  // Checks that clicking account button calls onSwitchAccount
+  assert.match(deck, /onClick:\(\)=>\{at\|\|t\?\.\(\)\}/);
+
+  // Avatar rendering with ring-primary and fallback to user icon
+  assert.match(deck, /src:ac\.avatarUrl/);
+  assert.match(deck, /ring-primary\/40/);
+
+  // Settings modal displays current account preview
+  assert.match(deck, /ac\?\.screenName&&\(0,ee\.jsxs\)\("div",\{className:"flex items-center gap-2\.5 rounded-lg border border-border\/60/);
+
+  // Account storage clearance on switch selected
+  assert.match(deck, /globalThis\.YomikuiColumnNavigation\?\.clearStoredAccount\?\.\(\)/);
+
+  // CSS rule for account button hover exists
+  assert.match(deck, /#yomikui-root \.rd-sidebar-account-btn:hover\s*\{/);
+});
+
+

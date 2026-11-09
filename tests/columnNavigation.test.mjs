@@ -573,3 +573,52 @@ test('installFrameHoverFocus focuses window on frame pointer activity and back b
   makeWindowEvent('pointermove', { buttons: 0 });
   assert.equal(windowFocused, 3);
 });
+
+test('extractAccountInfo extracts account details from SideNav button and falls back cleanly', () => {
+  const { api } = setup();
+
+  // Case 1: SideNav_AccountSwitcher_Button exists with avatar and handle
+  {
+    const { document } = parseHTML(`
+      <!DOCTYPE html><html><body>
+        <button data-testid="SideNav_AccountSwitcher_Button">
+          <div>
+            <img src="https://pbs.twimg.com/profile_images/123/avatar_normal.jpg" alt="Alice Wonderland" />
+            <div>
+              <span>Alice Wonderland</span>
+              <span>@alicew</span>
+            </div>
+          </div>
+        </button>
+      </body></html>
+    `);
+    const info = api.extractAccountInfo(document);
+    assert.deepEqual({ ...info }, {
+      screenName: 'alicew',
+      name: 'Alice Wonderland',
+      avatarUrl: 'https://pbs.twimg.com/profile_images/123/avatar_bigger.jpg',
+    });
+  }
+
+  // Case 2: Fallback to AppTabBar_Profile_Link
+  {
+    const { document } = parseHTML(`
+      <!DOCTYPE html><html><body>
+        <a data-testid="AppTabBar_Profile_Link" href="/bob_builder">Profile</a>
+        <a href="/bob_builder"><img src="https://pbs.twimg.com/profile_images/456/pic_normal.png" /></a>
+      </body></html>
+    `);
+    const info = api.extractAccountInfo(document);
+    assert.deepEqual({ ...info }, {
+      screenName: 'bob_builder',
+      name: 'bob_builder',
+      avatarUrl: 'https://pbs.twimg.com/profile_images/456/pic_bigger.png',
+    });
+  }
+
+  // Case 3: Empty document returns null
+  {
+    const { document } = parseHTML(`<!DOCTYPE html><html><body><div>No user</div></body></html>`);
+    assert.equal(api.extractAccountInfo(document), null);
+  }
+});
