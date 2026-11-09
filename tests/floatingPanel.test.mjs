@@ -29,7 +29,12 @@ function panel(env, options = {}) {
     color = 'bluegray', transparency = 0, columns = [{ id: 'one', type: 'home', title: 'Home' }], visible = ['one'],
     minimized = false, loaded = true,
   } = options;
-  const states = [env.api.preferences({ mode, hideEmpty, color, transparency, minimized }),
+  const initialMinimized = typeof minimized === 'object' && minimized !== null
+    ? minimized
+    : minimized === true
+      ? { [workspaceId]: true }
+      : {};
+  const states = [env.api.preferences({ mode, hideEmpty, color, transparency, minimized: initialMinimized }),
     { workspaceId: selectedWorkspaceId, value: env.api.selectionPreferences({ selectionMode, single: target[0], multiple: target, multipleReady: true }), ready },
     new Set(visible), lastAction, settingsOpen, loaded];
   let index, nodes, effects = [];
@@ -41,12 +46,16 @@ function panel(env, options = {}) {
     useCallback: fn => fn, useEffect(fn) { effects.push(fn); }, useLayoutEffect() {},
   };
   const element = (type, props) => ({ type, props });
-  const render = () => {
+  let currentOptions = { ...options };
+  const render = (patch = {}) => {
+    Object.assign(currentOptions, patch);
+    const activeWorkspace = currentOptions.workspaceId ?? workspaceId;
     index = 0; refIndex = 0; nodes = []; effects = [];
-    const tree = env.api.Panel({ React, jsx: { jsx: element, jsxs: element }, columns, kinds, workspaceId,
+    const tree = env.api.Panel({ React, jsx: { jsx: element, jsxs: element }, columns, kinds,
+      workspaceId: activeWorkspace,
       view: { phase, results, done: 0, total: results.length }, reading: { busy: reading, results: [], message: '' },
       canRefresh: true, refreshText: '操作結果', refreshDetails: '列ごとの結果',
-      onRefresh() {}, onNavigate() {}, ...options, reading: { busy: reading, results: [], message: '' },
+      onRefresh() {}, onNavigate() {}, ...currentOptions, reading: { busy: reading, results: [], message: '' },
     });
     const visit = node => { if (!node || typeof node !== 'object') return; nodes.push(node); for (const child of [node.props?.children].flat()) visit(child); };
     visit(tree);
@@ -229,11 +238,11 @@ test('minimizing hides the panel, keeps a running refresh, persists and is resto
   assert.equal(wheelCancels, 1, 'queued wheel input is released');
   assert.equal(refreshCancels, 0, 'minimizing is not hiding and never cancels the refresh');
   await settle();
-  assert.equal((await env.api.loadPreferences()).minimized, true);
+  assert.deepEqual(clone((await env.api.loadPreferences()).minimized), { workspace: true });
   env.api.dock.toggle();
   assert.ok(ui.render(), 'the sidebar toggle restores the panel');
   await settle();
-  assert.equal((await env.api.loadPreferences()).minimized, false);
+  assert.deepEqual(clone((await env.api.loadPreferences()).minimized), { workspace: false });
 });
 
 test('the panel waits for saved preferences so a minimized panel never flashes open', () => {
@@ -287,4 +296,50 @@ test('the dashboard sidebar renders the panel button above the account button', 
   assert.ok(deck.indexOf(call) < deck.indexOf('rd-sidebar-account-btn'));
   const anchor = '(0,ee.jsx)(RW,{tutorialOpen:Ft?Yt==="workspaces":void 0,tutorialDismissKey:Fn}),';
   assert.equal(deck.indexOf(call), deck.indexOf(anchor) + anchor.length, 'placed right after the workspace control');
+});
+
+test('minimizing is tracked independently per workspace and switching workspaces restores the respective state', async () => {
+  const env = setup();
+  const ui = panel(env, { workspaceId: 'ws1' });
+  ui.runEffects();
+  assert.ok(ui.render(), 'ws1 starts shown');
+  assert.equal(env.api.dock.get().minimized, false);
+
+  // Minimize ws1
+  ui.byClass('yf-minimize').props.onClick();
+  assert.equal(ui.render(), null, 'ws1 is now minimized');
+  ui.runEffects();
+  assert.equal(env.api.dock.get().minimized, true);
+
+  // Switch to ws2 (which was never minimized)
+  assert.ok(ui.render({ workspaceId: 'ws2' }), 'ws2 is shown because it was not minimized');
+  ui.runEffects();
+  assert.equal(env.api.dock.get().minimized, false, 'dock mirrors ws2 not being minimized');
+
+  // Minimize ws2
+  ui.byClass('yf-minimize').props.onClick();
+  assert.equal(ui.render({ workspaceId: 'ws2' }), null, 'ws2 is now minimized');
+  ui.runEffects();
+  assert.equal(env.api.dock.get().minimized, true);
+
+  // Switch back to ws1 (still minimized)
+  assert.equal(ui.render({ workspaceId: 'ws1' }), null, 'ws1 remains minimized');
+  ui.runEffects();
+  assert.equal(env.api.dock.get().minimized, true);
+
+  // Restore ws1 via dock toggle
+  env.api.dock.toggle();
+  assert.ok(ui.render({ workspaceId: 'ws1' }), 'ws1 is restored');
+  ui.runEffects();
+  assert.equal(env.api.dock.get().minimized, false);
+
+  // Switch to ws2 (should still be minimized)
+  assert.equal(ui.render({ workspaceId: 'ws2' }), null, 'ws2 is still minimized after ws1 was restored');
+  ui.runEffects();
+  assert.equal(env.api.dock.get().minimized, true);
+
+  // Verify persistence
+  await settle();
+  const saved = await env.api.loadPreferences();
+  assert.deepEqual(clone(saved.minimized), { ws1: false, ws2: true });
 });

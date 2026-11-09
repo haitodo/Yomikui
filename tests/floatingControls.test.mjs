@@ -484,14 +484,16 @@ test('a dragged header stays in place when folding or status text changes the pa
 
 test('panel preferences persist locally in order and normalize invalid values', async () => {
   const env = setup();
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, mode: 'post', hideEmpty: true, color: 'bluegray', transparency: 0, minimized: false });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, mode: 'post', hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} });
   env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, collapsed: true, mode: 'page' };
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 0, minimized: false }, 'older preferences retain the position and mode and drop the retired compact state');
-  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', hideEmpty: true, color: 'invalid', transparency: 110 });
-  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35, minimized: false });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} }, 'older preferences retain the position and mode and drop the retired compact state');
+  env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, mode: 'page', minimized: true };
+  assert.deepEqual(clone(await env.api.loadPreferences()).minimized, { default: true }, 'legacy boolean minimized state migrates to default workspace');
+  const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', hideEmpty: true, color: 'invalid', transparency: 110, minimized: { ws1: true, ws2: false, bad: 'ignore' } });
+  const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35, minimized: { ws1: false, ws3: true } });
   await Promise.all([first, last]);
-  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 80, minimized: false });
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35, minimized: false });
+  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 80, minimized: { ws1: true, ws2: false } });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35, minimized: { ws1: false, ws3: true } });
   for (const transparency of [-20, NaN, Infinity, '60']) assert.equal(env.api.preferences({ transparency }).transparency, 0);
   for (const color of ['invalid', '__proto__', 'toString', '#123456', null]) assert.equal(env.api.preferences({ color }).color, 'bluegray');
 });

@@ -65,6 +65,15 @@
   }
 
   function preferences(value) {
+    const rawMinimized = value?.minimized;
+    const minimized = {};
+    if (typeof rawMinimized === 'object' && rawMinimized !== null && !Array.isArray(rawMinimized)) {
+      for (const [k, v] of Object.entries(rawMinimized)) {
+        if (typeof v === 'boolean') minimized[workspaceKey(k)] = v;
+      }
+    } else if (typeof rawMinimized === 'boolean') {
+      minimized.default = rawMinimized;
+    }
     return {
       x: Number.isFinite(value?.x) ? clamp(value.x) : 1,
       y: Number.isFinite(value?.y) ? clamp(value.y) : 1,
@@ -72,7 +81,7 @@
       hideEmpty: value?.hideEmpty !== false,
       color: Object.hasOwn(COLORS, value?.color) ? value.color : 'bluegray',
       transparency: Number.isFinite(value?.transparency) ? Math.max(0, Math.min(80, Math.round(value.transparency / 5) * 5)) : 0,
-      minimized: value?.minimized === true,
+      minimized: Object.freeze(minimized),
     };
   }
 
@@ -679,7 +688,8 @@
     const countsRef = React.useRef(null);
     const eligible = columns.filter(readable);
     const available = eligible.length > 0 || canRefresh;
-    const minimized = prefs.minimized;
+    const activeWorkspaceKey = workspaceKey(workspaceId);
+    const minimized = prefs.minimized[activeWorkspaceKey] === true;
     const shown = !hidden && available && loaded && !minimized;
     const targetReady = selection.workspaceId === workspaceId && selection.ready;
     const target = targetReady ? selectedGroups(selection.value) : [];
@@ -693,8 +703,10 @@
     }, []);
     const setMinimized = React.useCallback(value => {
       if (value) onCancelWheel?.();
-      updatePrefs({ minimized: value === true });
-    }, [onCancelWheel, updatePrefs]);
+      updatePrefs({
+        minimized: { ...prefsRef.current.minimized, [workspaceKey(workspaceId)]: value === true },
+      });
+    }, [workspaceId, onCancelWheel, updatePrefs]);
     React.useEffect(() => {
       let mounted = true;
       loadPreferences().then(value => {
