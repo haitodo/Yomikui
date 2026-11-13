@@ -48,7 +48,7 @@ function setup(options = {}) {
 
 function makeJsx() {
   const jsx = (type, props, key) => ({ type, props: { ...props, ...(key !== undefined ? { key } : {}) } });
-  return { jsx, jsxs: jsx };
+  return { jsx, jsxs: jsx, Fragment: 'Fragment' };
 }
 
 function flattenNodes(node, out = []) {
@@ -238,6 +238,7 @@ test('FilterButton and FilterPanel render controls, toggle filters, and manage p
 
   const baseState = {
     open,
+    setOpen: (val) => { open = typeof val === 'function' ? val(open) : val; },
     toggleOpen: () => { open = !open; },
     isSearchPage: true,
     isLiveFeed: false,
@@ -363,6 +364,86 @@ test('FilterButton and FilterPanel render controls, toggle filters, and manage p
     navigated.at(-1),
     '/search?q=rust+filter%3Aimages+-filter%3Aretweets+since%3A2026-05-01+until%3A2026-05-11&f=live',
   );
+});
+
+test('FilterPanel renders only slim 1-row period minibar when closed with active period, and opens overlay popover on demand', () => {
+  const { api } = setup();
+  const jsx = makeJsx();
+  const navigated = [];
+  let open = false;
+  const hooks = [];
+  let hookIdx = 0;
+  const useState = (init) => {
+    const idx = hookIdx++;
+    if (!(idx in hooks)) hooks[idx] = typeof init === 'function' ? init() : init;
+    return [hooks[idx], val => { hooks[idx] = typeof val === 'function' ? val(hooks[idx]) : val; }];
+  };
+
+  const renderWith = (filters, isOpen = open) => {
+    hookIdx = 0;
+    return api.FilterPanel({
+      searchState: {
+        open: isOpen,
+        setOpen: (val) => { open = typeof val === 'function' ? val(open) : val; },
+        toggleOpen: () => { open = !open; },
+        isSearchPage: true,
+        isLiveFeed: false,
+        currentUrl: api.buildSearchPath('rust', filters, 'live'),
+        tab: 'live',
+        baseText: 'rust',
+        filters,
+        activeCount: api.countActiveFilters(filters),
+        presets: [],
+        navigateSearch: (path) => navigated.push(path),
+        addPreset: async () => {},
+        deletePreset: async () => {},
+      },
+      jsx,
+      useState,
+      useEffect: () => {},
+    });
+  };
+
+  // Closed & no custom period -> renders nothing (0px)
+  assert.equal(renderWith(api.normalizeFilters(), false), null);
+
+  // Closed & active month period -> renders ONLY minibar (no overlay panel)
+  const novFilters = api.normalizeFilters({ sinceDate: '2026-11-01', untilDate: '2026-12-01' });
+  const closedTree = renderWith(novFilters, false);
+  const closedNodes = flattenNodes(closedTree);
+  assert.ok(closedNodes.some(n => String(n.props?.className).includes('rd-search-period-minibar')));
+  assert.equal(closedNodes.some(n => String(n.props?.className).includes('rd-search-filter-panel')), false);
+
+  // Step previous month directly from closed minibar
+  const miniBtns = closedNodes.filter(n => n.type === 'button');
+  miniBtns.find(b => b.props['aria-label'] === '前の期間').props.onClick();
+  assert.equal(navigated.at(-1), '/search?q=rust+since%3A2026-10-01+until%3A2026-11-01&f=live');
+
+  // Switch unit to 週 on minibar and jump to 今週
+  miniBtns.find(b => textContent(b).trim() === '週').props.onClick();
+  const weekTree = renderWith(novFilters, false);
+  const weekBtns = flattenNodes(weekTree).filter(n => n.type === 'button');
+  assert.ok(weekBtns.some(b => textContent(b).trim() === '今週'));
+
+  // Clicking the period label opens the overlay popover with date box expanded
+  weekBtns.find(b => b.props.title === '詳細・日付指定を開く').props.onClick();
+  assert.equal(open, true);
+
+  const openTree = renderWith(novFilters, true);
+  const openNodes = flattenNodes(openTree);
+  assert.ok(openNodes.some(n => String(n.props?.className).includes('rd-search-filter-panel')));
+  assert.ok(openNodes.some(n => String(n.props?.className).includes('rd-search-period-box')));
+  const backdrop = openNodes.find(n => String(n.props?.className).includes('rd-search-filter-backdrop'));
+  assert.ok(backdrop);
+  backdrop.props.onClick();
+  assert.equal(open, false);
+
+  // Clear period directly from minibar
+  const clearBtn = flattenNodes(renderWith(novFilters, false))
+    .filter(n => n.type === 'button')
+    .find(b => b.props['aria-label'] === '期間を解除');
+  clearBtn.props.onClick();
+  assert.equal(navigated.at(-1), '/search?q=rust&f=live');
 });
 
 test('installFrameSearchBridge reports path changes and handles search navigation messages', () => {

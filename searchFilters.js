@@ -899,14 +899,34 @@
       if (detected) setPeriodUnit(detected);
     }, [searchState?.filters?.sinceDate, searchState?.filters?.untilDate]);
 
-    if (!searchState?.open || !searchState?.isSearchPage || searchState?.isLiveFeed) return null;
+    useEffect(() => {
+      if (!searchState?.open || typeof window === "undefined") return;
+      const onKeyDown = (ev) => {
+        if (ev.key !== "Escape") return;
+        ev.preventDefault?.();
+        ev.stopPropagation?.();
+        if (showSaveForm) {
+          setShowSaveForm(false);
+        } else {
+          searchState.setOpen(false);
+        }
+      };
+      window.addEventListener("keydown", onKeyDown, true);
+      return () => window.removeEventListener("keydown", onKeyDown, true);
+    }, [searchState?.open, showSaveForm]);
+
+    if (!searchState?.isSearchPage || searchState?.isLiveFeed) return null;
 
     const { filters, baseText, tab, activeCount, presets = [] } = searchState;
+    const isOpen = Boolean(searchState.open);
     const hasCustomPeriod = Boolean(filters.sinceDate || filters.untilDate);
     const periodLabel = formatPeriodLabel(filters);
     const currentUnitMeta = PERIOD_UNITS.find(u => u.value === periodUnit) ?? PERIOD_UNITS[2];
+    if (!isOpen && !hasCustomPeriod) return null;
 
-    const updateFilters = (patch, nextTab = tab, nextBase = keywordDraft) => {
+    const activeBaseText = isOpen ? keywordDraft : baseText;
+
+    const updateFilters = (patch, nextTab = tab, nextBase = activeBaseText) => {
       const nextFilters = normalizeFilters({ ...filters, ...patch });
       searchState.navigateSearch(buildSearchPath(nextBase, nextFilters, nextTab));
     };
@@ -974,11 +994,98 @@
     const chipActive = "border-primary bg-primary/15 text-primary";
     const chipIdle = "border-border bg-background text-foreground hover:bg-muted/60";
     const miniBtnBase = "rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer";
+    const FragmentComp = jsx.Fragment ?? "div";
 
-    return jsx.jsxs("div", {
-      className: "rd-search-filter-panel flex flex-col gap-2 border-b border-border bg-card px-2.5 py-2 text-xs text-foreground select-none",
-      onClick: (ev) => ev?.stopPropagation?.(),
+    const miniBar = hasCustomPeriod
+      ? jsx.jsxs("div", {
+          className: "rd-search-period-minibar flex h-7 min-h-7 flex-nowrap items-center justify-between gap-1 overflow-x-auto border-b border-border bg-card/90 px-2 text-[11px] text-foreground select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          onClick: (ev) => ev?.stopPropagation?.(),
+          children: [
+            jsx.jsxs("div", {
+              className: "flex min-w-0 shrink-0 items-center gap-0.5",
+              children: [
+                jsx.jsx("button", {
+                  type: "button",
+                  className: "flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-background text-[10px] hover:bg-muted/60 cursor-pointer",
+                  "aria-label": "前の期間",
+                  title: "前の期間",
+                  onClick: () => stepPeriod(-1),
+                  children: "◀",
+                }),
+                jsx.jsx("button", {
+                  type: "button",
+                  className: "h-5 max-w-[8.5rem] truncate rounded px-1.5 font-medium text-primary hover:bg-primary/10 cursor-pointer",
+                  title: "詳細・日付指定を開く",
+                  onClick: () => {
+                    setPeriodOpen(true);
+                    searchState.setOpen(true);
+                  },
+                  children: periodLabel,
+                }),
+                jsx.jsx("button", {
+                  type: "button",
+                  className: "flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-background text-[10px] hover:bg-muted/60 cursor-pointer",
+                  "aria-label": "次の期間",
+                  title: "次の期間",
+                  onClick: () => stepPeriod(1),
+                  children: "▶",
+                }),
+              ],
+            }),
+            jsx.jsxs("div", {
+              className: "flex shrink-0 items-center gap-1",
+              children: [
+                jsx.jsx("div", {
+                  role: "group",
+                  "aria-label": tr(t, "search_filter_period_unit", "期間単位"),
+                  className: "flex shrink-0 overflow-hidden rounded border border-border bg-background",
+                  children: PERIOD_UNITS.map(u => jsx.jsx("button", {
+                    type: "button",
+                    "aria-pressed": periodUnit === u.value,
+                    className: `px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors cursor-pointer ${
+                      periodUnit === u.value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted/50"
+                    }`,
+                    onClick: () => setPeriodUnit(u.value),
+                    children: tr(t, u.labelKey, u.fallback),
+                  }, `mini-${u.value}`)),
+                }),
+                jsx.jsx("button", {
+                  type: "button",
+                  className: "h-5 shrink-0 rounded border border-border bg-background px-1.5 text-[10px] font-medium hover:bg-muted/60 cursor-pointer",
+                  onClick: () => stepPeriod(0),
+                  children: tr(t, currentUnitMeta.currentKey, currentUnitMeta.currentFallback),
+                }),
+                jsx.jsx("button", {
+                  type: "button",
+                  className: "flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground cursor-pointer",
+                  "aria-label": "期間を解除",
+                  title: "期間を解除",
+                  onClick: clearCustomDateRange,
+                  children: "×",
+                }),
+              ],
+            }),
+          ],
+        })
+      : null;
+
+    if (!isOpen) {
+      return miniBar;
+    }
+
+    const popover = jsx.jsxs(FragmentComp, {
       children: [
+        jsx.jsx("div", {
+          className: "rd-search-filter-backdrop fixed inset-0 z-[900]",
+          "aria-hidden": true,
+          onClick: () => searchState.setOpen(false),
+        }),
+        jsx.jsx("div", {
+          className: "relative z-[1000] h-0 overflow-visible",
+          children: jsx.jsxs("div", {
+            className: "rd-search-filter-panel absolute left-1.5 right-1.5 top-1 flex max-h-[min(32rem,calc(100vh-7rem))] flex-col gap-2 overflow-y-auto overscroll-y-contain rounded-xl border border-border bg-popover px-2.5 py-2 text-xs text-foreground shadow-xl select-none",
+            onClick: (ev) => ev?.stopPropagation?.(),
+            children: [
         // 1. Presets header + list
         jsx.jsxs("div", {
           className: "flex flex-col gap-1.5",
@@ -1010,6 +1117,14 @@
                         setIncludeTab(tab !== "top");
                       },
                       children: showSaveForm ? tr(t, "common_cancel", "キャンセル") : `+ ${tr(t, "search_filter_save_preset", "保存")}`,
+                    }),
+                    jsx.jsx("button", {
+                      type: "button",
+                      className: `${miniBtnBase} text-muted-foreground hover:bg-muted/60 hover:text-foreground`,
+                      "aria-label": tr(t, "common_close", "閉じる"),
+                      title: tr(t, "common_close", "閉じる"),
+                      onClick: () => searchState.setOpen(false),
+                      children: "×",
                     }),
                   ],
                 }),
@@ -1395,6 +1510,13 @@
           ],
         }),
       ],
+          }),
+        }),
+      ],
+    });
+
+    return jsx.jsxs(FragmentComp, {
+      children: [miniBar, popover],
     });
   }
 
