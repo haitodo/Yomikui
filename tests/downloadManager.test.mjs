@@ -142,8 +142,28 @@ test('video preference, filenames, and unknown transfer sizes retain their behav
   await settle();
   await env.clock.advance(0);
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].filename, 'someone_123_v1.mp4');
+  assert.equal(requests[0].filename, 'Yomikui-videos/someone_123_v1.mp4');
+  assert.equal(env.manager.items.get(1).filename, 'someone_123_v1.mp4');
   assert.equal(env.manager.items.get(1).totalBytes, -1);
   env.api.downloads.onChanged.emit({ id: 1, state: { current: 'interrupted' }, error: { current: 'USER_CANCELED' } });
   assert.equal(env.manager.items.get(1).error, 'USER_CANCELED');
+});
+
+test('images are saved under the Yomikui-images folder while keeping basename in progress items', async () => {
+  const env = downloadEnvironment();
+  const requests = [];
+  env.api.downloads.download = async options => { requests.push(options); return requests.length; };
+  env.snapshots.set(1, { state: 'complete', bytesReceived: 100, totalBytes: 100 });
+  env.snapshots.set(2, { state: 'complete', bytesReceived: 200, totalBytes: 200 });
+  env.manager.start(media(2), 'images');
+  await settle();
+  await env.clock.advance(0);
+  assert.deepEqual(requests.map(r => r.filename), [
+    'Yomikui-images/someone_123_1.jpg',
+    'Yomikui-images/someone_123_2.jpg',
+  ]);
+  assert.deepEqual(env.sends.at(-1).message.items.map(item => item.filename), [
+    'someone_123_1.jpg',
+    'someone_123_2.jpg',
+  ]);
 });

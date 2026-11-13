@@ -3,6 +3,8 @@ const RETENTION_DELAY = 5000;
 const DECK_URLS = ['https://x.com/yomikui*', 'https://twitter.com/yomikui*'];
 const MEDIA_HOSTS = ['pbs.twimg.com', 'video.twimg.com', 'ton.twimg.com', 'x.com'];
 const FILE_EXT_RE = /\.([a-zA-Z0-9]+)$/;
+const IMAGE_FOLDER = 'Yomikui-images';
+const VIDEO_FOLDER = 'Yomikui-videos';
 
 function isAllowedUrl(url) {
   try {
@@ -27,9 +29,10 @@ function mediaTasks(media) {
   const videos = media.videos;
   const hasVideos = Boolean(videos.length);
   const items = hasVideos ? videos : media.images;
+  const folder = hasVideos ? VIDEO_FOLDER : IMAGE_FOLDER;
   return items.map(item => ({
     url: item.url,
-    filename: `${media.screenName}_${media.tweetId}_${hasVideos ? 'v' : ''}${item.index + 1}.${extensionFor(item.url)}`,
+    filename: `${folder}/${media.screenName}_${media.tweetId}_${hasVideos ? 'v' : ''}${item.index + 1}.${extensionFor(item.url)}`,
   }));
 }
 
