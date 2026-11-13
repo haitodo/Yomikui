@@ -47,11 +47,13 @@ test("buildMediaSizeCss generates responsive rules for default mode and proper o
   // 1. default mode: responsive breakpoint at 36rem (576px)
   const defaultCss = WideMedia.buildMediaSizeCss("default");
   assert.ok(defaultCss.includes(`@media (min-width: ${WideMedia.WIDE_MIN_WIDTH_REM}rem)`));
-  assert.ok(defaultCss.includes("max-height: 82vh !important;"));
+  assert.ok(defaultCss.includes("max-height: max(82vh, 100vw) !important;"));
   assert.ok(defaultCss.includes("padding-bottom: 75% !important;")); // 4:3 grid expansion
   assert.ok(defaultCss.includes("object-fit: contain !important;"));
   assert.ok(defaultCss.includes("object-fit: cover !important;"));
   assert.ok(defaultCss.includes("align-items: stretch !important;"));
+  assert.ok(defaultCss.includes("align-self: stretch !important;"));
+  assert.ok(defaultCss.includes("flex-basis: auto !important;"));
   // Safeguards against nested text/small-card collapse and nested tweet selector bug
   assert.ok(defaultCss.includes('[data-testid="tweetText"]'));
   assert.ok(defaultCss.includes('[data-testid^="card.layoutSmall"]'));
@@ -68,9 +70,75 @@ test("buildMediaSizeCss generates responsive rules for default mode and proper o
   const largeCss = WideMedia.buildMediaSizeCss("large");
   assert.ok(largeCss.includes("flex-direction: column !important;"));
   assert.ok(largeCss.includes("min-height: 420px !important;"));
-  assert.ok(largeCss.includes("max-height: 85vh !important;"));
+  assert.ok(largeCss.includes("max-height: max(85vh, 100vw) !important;"));
   assert.ok(!largeCss.includes("padding-bottom: 110%"));
   assert.ok(!largeCss.includes(':has(article[data-testid="tweet"]'));
+});
+
+test("wide styles release inline size limits on single media frames and preserve galleries", () => {
+  const WideMedia = loadWideMedia();
+  const spacer = '<div style="padding-bottom: 177.78%;"></div>';
+  const photo = '<div data-testid="tweetPhoto"><img></div>';
+  const { document } = parseHTML(`
+    <article data-testid="tweet">
+      <div id="post-content">
+        <div data-testid="tweetText">Photo post</div>
+        <div id="photo-wrapper" style="max-width: 287px;">
+          <a role="link" href="/demo/status/1/photo/1">
+            <div id="photo-frame" style="width: 287px; height: 510px;">
+              ${spacer}<div id="photo-layer">${photo}</div>
+            </div>
+          </a>
+        </div>
+        <div role="group">Post actions</div>
+      </div>
+    </article>
+    <article data-testid="tweet">
+      <div id="preview-wrapper" style="max-width: 287px;">
+        <div data-testid="tweetPhoto"><div><div id="preview-frame">
+          ${spacer}<div id="preview-layer"><div data-testid="previewInterstitial"><img></div></div>
+        </div></div></div>
+      </div>
+    </article>
+    <article data-testid="tweet">
+      <div id="video-wrapper" style="max-width: 287px;">
+        <div data-testid="videoPlayer"><div id="video-frame">
+          ${spacer}<div id="video-layer"><div data-testid="videoComponent">
+            <video></video><div role="group">Video controls</div>
+          </div></div>
+        </div></div>
+      </div>
+    </article>
+    <article data-testid="tweet">
+      <div id="grid">${spacer}<div><div>
+        <div>${photo}</div><div>${photo}</div>
+      </div></div></div>
+      <div data-testid="ScrollSnap-SwipeableList"><div id="carousel-frame">
+        ${spacer}<div>${photo}</div>
+      </div></div>
+    </article>
+  `);
+
+  for (const mode of ["default", "large"]) {
+    const rules = [...WideMedia.buildMediaSizeCss(mode).matchAll(/([^{}]+)\{([^{}]+)\}/g)];
+    function declarations(selector) {
+      const node = document.querySelector(selector);
+      return rules.filter(([, rule]) => node.matches(rule.trim())).map(([, , css]) => css).join("\n");
+    }
+
+    for (const name of ["photo", "preview", "video"]) {
+      assert.match(declarations(`#${name}-wrapper`), /max-width: 100% !important/);
+      assert.match(declarations(`#${name}-frame`), /height: auto !important/);
+      assert.match(declarations(`#${name}-layer`), /position: absolute !important/);
+      assert.match(declarations(`#${name}-layer :is(img, video)`), /object-fit: contain !important/);
+    }
+    assert.doesNotMatch(declarations("#post-content"), /max-width: 100% !important/);
+    assert.doesNotMatch(declarations("#carousel-frame"), /height: auto !important/);
+    assert.doesNotMatch(declarations("#grid"), /height: auto !important/);
+    if (mode === "default") {
+      assert.match(declarations("#grid > div:first-child"), /padding-bottom: 75% !important/);
+    }
+  }
 });
 
 test("upgradeImageUrl only promotes eligible twimg thumbnails and respects idempotency", () => {

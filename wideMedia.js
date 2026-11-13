@@ -12,22 +12,36 @@
   const PHOTO_LINK = 'a[role="link"][href*="/photo/"]';
   const VIDEO_PLAYER = `${TWEET} [data-testid="videoPlayer"], ${TWEET} [data-testid="videoComponent"]`;
   const TWEET_PHOTO = `${TWEET} [data-testid="tweetPhoto"]`;
+  const MEDIA = ':is([data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"], [data-testid="card.layoutLarge.media"])';
+  const MEDIA_CONTENT = ':is(img, video, [data-testid="previewInterstitial"], div[style*="background-image"])';
+  const RATIO_SPACER = 'div[style*="padding-bottom"]';
+  const SMALL_CARD = '[data-testid^="card.layoutSmall"]';
+  const CAROUSEL = '[data-testid="ScrollSnap-SwipeableList"]';
+  const CONDENSED_MEDIA = '[data-testid="testCondensedMedia"]';
 
   // Exclude overlays, dialogs, menus, and popovers from structural width rules
   const NOT_POPUP = ':not(#layers):not(#layers *):not([role="dialog"]):not([role="dialog"] *):not([role="menu"]):not([role="menu"] *):not([role="listbox"]):not([role="listbox"] *)';
 
-  // Grid container with 2 columns of media (2, 3, or 4 photos/videos)
-  const MULTI_GRID = `${TWEET} div:has(> div[style*="padding-bottom"] + div > div > div:nth-child(1):has([data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"])):has(> div[style*="padding-bottom"] + div > div > div:nth-child(2):has([data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"]))`;
+  // Keep each :has() independent so browsers can parse the grid and its exclusions.
+  const GRID_TRACK = `${RATIO_SPACER} + div > div`;
+  const GRID_FRAME = `div:has(> ${GRID_TRACK} > div:first-child ${MEDIA}):has(> ${GRID_TRACK} > div:nth-child(2) ${MEDIA})`;
+  const PHOTO_GRID_FRAME = `div:has(> ${RATIO_SPACER} + div ${PHOTO_LINK}:is([href*="/photo/2"], [href*="/photo/3"], [href*="/photo/4"]))`;
+  const MULTI_GRID = `${TWEET} ${GRID_FRAME}`;
+  const OUTSIDE_GALLERY = `:not(${GRID_FRAME} *, ${PHOTO_GRID_FRAME} *, ${CAROUSEL}, ${CAROUSEL} *, ${CONDENSED_MEDIA}, ${CONDENSED_MEDIA} *)`;
+  const OUTSIDE_SMALL_CARD = `:not(${SMALL_CARD}, ${SMALL_CARD} *)`;
 
-  // Single photo and single video aspect-ratio frames (outside multi-item grids)
-  const SINGLE_PHOTO_FRAME = `${TWEET} div:has(> div[style*="padding-bottom"]):has([data-testid="tweetPhoto"]):not(${MULTI_GRID}):not(${MULTI_GRID} *)`;
-  const SINGLE_VIDEO_FRAME = `${TWEET} div:has(> div[style*="padding-bottom"]):has([data-testid="videoPlayer"], [data-testid="videoComponent"]):not(${MULTI_GRID}):not(${MULTI_GRID} *)`;
+  // X places the aspect-ratio spacer outside photos and inside video previews.
+  const RATIO_FRAME = `:has(> ${RATIO_SPACER} + div)`;
+  const SINGLE_MEDIA_FRAME = `${TWEET} :is(div:has(> ${RATIO_SPACER} + ${MEDIA}, > ${RATIO_SPACER} + div ${MEDIA}), ${MEDIA}${RATIO_FRAME}, ${MEDIA} > div${RATIO_FRAME}, ${MEDIA} > div > div${RATIO_FRAME}):not(${GRID_FRAME}, ${PHOTO_GRID_FRAME})${OUTSIDE_GALLERY}${OUTSIDE_SMALL_CARD}`;
+  const SINGLE_MEDIA_LAYER = `${SINGLE_MEDIA_FRAME} > ${RATIO_SPACER} + div`;
+  const SINGLE_MEDIA = `${TWEET} ${MEDIA}${OUTSIDE_GALLERY}${OUTSIDE_SMALL_CARD}`;
 
-  // Ancestor containers that X clamps with inline width (e.g. style="width: 382px"), max-height: 510px, or align-items: flex-start
-  const MEDIA_ANCESTOR = `${TWEET} div:has([data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"], [data-testid="card.layoutLarge.media"]):not(:has([data-testid="Tweet-User-Avatar"], [data-testid="User-Name"], [data-testid="tweetText"], [role="group"], [data-testid="reply"], [data-testid="like"], [data-testid="unlike"])):not(:has([data-testid^="card.layoutSmall"])):not([data-testid^="card.layoutSmall"] *):not(${MULTI_GRID} *):not([data-testid="videoPlayer"] *):not([data-testid="videoComponent"] *):not([data-testid="tweetPhoto"] *):not([data-testid="card.layoutLarge.media"] *)`;
+  // Media-only ancestors can carry a fixed inline max-width independently of the frame.
+  const POST_CONTENT = `[data-testid="Tweet-User-Avatar"], [data-testid="User-Name"], [data-testid="tweetText"], [role="group"]:not(${MEDIA} *), [data-testid="reply"], [data-testid="like"], [data-testid="unlike"]`;
+  const MEDIA_ANCESTOR = `${TWEET} div:has(${MEDIA}):not(${RATIO_FRAME}, ${MEDIA} *):not(:has(${POST_CONTENT}, ${SMALL_CARD}, ${CAROUSEL}))${OUTSIDE_GALLERY}${OUTSIDE_SMALL_CARD}`;
 
   // Selectors for explicit small / large modes
-  const IR = `${TWEET} div:has(> div[style*="padding-bottom"]):has(${PHOTO_LINK}[href*="/photo/2"], ${PHOTO_LINK}[href*="/photo/3"], ${PHOTO_LINK}[href*="/photo/4"])`;
+  const IR = `${TWEET} ${PHOTO_GRID_FRAME}`;
   const AH = `${IR} > div[style*="padding-bottom"] + div > div`;
   const SH = `${AH} > div`;
   const DOLLAR_H = `${IR} ${PHOTO_LINK} > div`;
@@ -129,6 +143,65 @@
     }
 
     return rules.join("\n");
+  }
+
+  function buildSingleMediaCss(maxHeight) {
+    // Let the height limit grow with a wide iframe while bounding very tall media.
+    return `
+      ${MEDIA_ANCESTOR},
+      ${TWEET} ${PHOTO_LINK}${OUTSIDE_GALLERY}${OUTSIDE_SMALL_CARD} {
+        width: 100% !important;
+        max-width: 100% !important;
+        max-height: none !important;
+        flex-basis: auto !important;
+        align-self: stretch !important;
+        align-items: stretch !important;
+      }
+      ${SINGLE_MEDIA}:not(${RATIO_FRAME}) {
+        width: 100% !important;
+        max-width: 100% !important;
+      }
+      ${SINGLE_MEDIA_FRAME} {
+        width: 100% !important;
+        max-width: 100% !important;
+        height: auto !important;
+        max-height: max(${maxHeight}, 100vw) !important;
+        position: relative !important;
+        overflow: hidden !important;
+      }
+      ${SINGLE_MEDIA_LAYER} {
+        position: absolute !important;
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-width: none !important;
+        max-height: none !important;
+      }
+      ${SINGLE_MEDIA_LAYER} > [data-testid="tweetPhoto"] {
+        margin: 0 !important;
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      ${SINGLE_MEDIA} ${MEDIA_CONTENT} {
+        width: 100% !important;
+        height: 100% !important;
+      }
+      ${SINGLE_MEDIA} :is(img, video) {
+        max-width: none !important;
+        max-height: none !important;
+        object-fit: contain !important;
+        object-position: center !important;
+      }
+      ${SINGLE_MEDIA} [data-testid="previewInterstitial"] {
+        inset: 0 !important;
+      }
+      ${SINGLE_MEDIA} div[style*="background-image"] {
+        background-size: contain !important;
+        background-repeat: no-repeat !important;
+        background-position: center !important;
+      }
+    `;
   }
 
   function buildMediaSizeCss(mode = "default") {
@@ -258,16 +331,7 @@
       `;
 
       return `
-        ${MEDIA_ANCESTOR} {
-          width: 100% !important;
-          max-width: 100% !important;
-          max-height: none !important;
-          align-items: stretch !important;
-        }
-        ${TWEET} ${PHOTO_LINK}:not(${IR} *) {
-          width: 100% !important;
-          max-width: 100% !important;
-        }
+        ${buildSingleMediaCss("85vh")}
         ${IR} {
           width: 100% !important;
           max-width: 100% !important;
@@ -314,22 +378,11 @@
           height: 100% !important;
           margin: 0 !important;
         }
-        ${SINGLE_PHOTO_FRAME},
-        ${SINGLE_VIDEO_FRAME} {
-          width: 100% !important;
-          max-width: 100% !important;
-          max-height: 85vh !important;
-          position: relative !important;
-          overflow: hidden !important;
-        }
-        ${VIDEO_PLAYER} {
-          width: 100% !important;
-          max-width: 100% !important;
-          max-height: 85vh !important;
-        }
         ${mediaContent} {
           width: 100% !important;
           height: 100% !important;
+          max-width: none !important;
+          max-height: none !important;
           object-fit: contain !important;
           object-position: center !important;
         }
@@ -347,68 +400,7 @@
     // Default mode: responsive expansion when column viewport >= 36rem (576px)
     return `
       @media (min-width: ${WIDE_MIN_WIDTH_REM}rem) {
-        ${MEDIA_ANCESTOR} {
-          width: 100% !important;
-          max-width: 100% !important;
-          max-height: none !important;
-          align-items: stretch !important;
-        }
-
-        ${TWEET} ${PHOTO_LINK}:not(${MULTI_GRID} *),
-        ${TWEET} [data-testid="card.layoutLarge.media"] {
-          width: 100% !important;
-          max-width: 100% !important;
-        }
-
-        ${SINGLE_PHOTO_FRAME} {
-          width: 100% !important;
-          max-width: 100% !important;
-          max-height: 82vh !important;
-          position: relative !important;
-          overflow: hidden !important;
-        }
-        ${SINGLE_PHOTO_FRAME} [data-testid="tweetPhoto"] {
-          margin: 0 !important;
-          inset: 0 !important;
-          width: 100% !important;
-          height: 100% !important;
-        }
-        ${SINGLE_PHOTO_FRAME} [data-testid="tweetPhoto"] img,
-        ${SINGLE_PHOTO_FRAME} [data-testid="tweetPhoto"] video {
-          width: 100% !important;
-          height: 100% !important;
-          object-fit: contain !important;
-          object-position: center !important;
-        }
-        ${SINGLE_PHOTO_FRAME} [data-testid="tweetPhoto"] div[style*="background-image"] {
-          background-size: contain !important;
-          background-repeat: no-repeat !important;
-          background-position: center !important;
-        }
-
-        ${SINGLE_VIDEO_FRAME},
-        ${TWEET} [data-testid="videoPlayer"]:not(${MULTI_GRID} *),
-        ${TWEET} [data-testid="videoPlayer"]:not(${MULTI_GRID} *) > div,
-        ${TWEET} [data-testid="videoComponent"]:not(${MULTI_GRID} *) {
-          width: 100% !important;
-          max-width: 100% !important;
-          max-height: 82vh !important;
-        }
-        ${SINGLE_VIDEO_FRAME} {
-          position: relative !important;
-          overflow: hidden !important;
-        }
-        ${TWEET} [data-testid="videoPlayer"]:not(${MULTI_GRID} *) video,
-        ${TWEET} [data-testid="videoComponent"]:not(${MULTI_GRID} *) video {
-          width: 100% !important;
-          height: 100% !important;
-          object-fit: contain !important;
-        }
-        ${TWEET} [data-testid="videoPlayer"]:not(${MULTI_GRID} *) div[style*="background-image"] {
-          background-size: contain !important;
-          background-repeat: no-repeat !important;
-          background-position: center !important;
-        }
+        ${buildSingleMediaCss("82vh")}
 
         ${MULTI_GRID} {
           width: 100% !important;
