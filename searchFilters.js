@@ -38,6 +38,7 @@
     { value: "year", labelKey: "search_filter_unit_year", fallback: "年", currentKey: "search_filter_current_year", currentFallback: "今年" },
   ]);
   const VALID_TABS = new Set(["top", "live", "media", "user", "list"]);
+  const VALID_PERIOD_UNITS = new Set(["day", "week", "month", "year"]);
 
   const DEFAULT_PRESETS = Object.freeze([
     {
@@ -183,6 +184,12 @@
     return null;
   }
 
+  function isMatchingCurrentPeriod(unit, sinceDate, untilDate, now = Date.now()) {
+    if (!unit || !sinceDate || !untilDate) return false;
+    const current = getPeriodBounds(unit, todayYmd(now));
+    return Boolean(current && current.sinceDate === sinceDate && current.untilDate === untilDate);
+  }
+
   function shiftPeriodRange(unit, currentSince, currentUntil, delta = 0, now = Date.now()) {
     if (delta === 0) {
       return getPeriodBounds(unit, todayYmd(now));
@@ -209,6 +216,10 @@
 
   function formatPeriodLabel(filters) {
     const f = normalizeFilters(filters);
+    if (f.relativePeriod) {
+      const meta = PERIOD_UNITS.find(u => u.value === f.relativePeriod);
+      return meta ? meta.currentFallback : "";
+    }
     if (!f.sinceDate && !f.untilDate) return "";
     const unit = detectPeriodUnit(f.sinceDate, f.untilDate);
     if (unit === "year") {
@@ -249,10 +260,12 @@
 
   function normalizeFilters(raw = {}) {
     const media = raw?.media === "images" || raw?.media === "videos" || raw?.media === "media" ? raw.media : null;
-    const untilDate = parseYmd(raw?.untilDate) ? raw.untilDate : null;
+    const rawRelativePeriod = typeof raw?.relativePeriod === "string" ? raw.relativePeriod.toLowerCase() : null;
+    const relativePeriod = rawRelativePeriod && VALID_PERIOD_UNITS.has(rawRelativePeriod) ? rawRelativePeriod : null;
+    const untilDate = !relativePeriod && parseYmd(raw?.untilDate) ? raw.untilDate : null;
     const rawDays = Number(raw?.sinceDays);
-    const sinceDays = !untilDate && Number.isInteger(rawDays) && rawDays > 0 ? rawDays : null;
-    const sinceDate = !sinceDays && parseYmd(raw?.sinceDate)
+    const sinceDays = !relativePeriod && !untilDate && Number.isInteger(rawDays) && rawDays > 0 ? rawDays : null;
+    const sinceDate = !relativePeriod && !sinceDays && parseYmd(raw?.sinceDate)
       ? raw.sinceDate
       : null;
     return {
@@ -264,8 +277,23 @@
       minFaves: normalizePositiveInt(raw?.minFaves),
       minRetweets: normalizePositiveInt(raw?.minRetweets),
       sinceDays,
+      ...(relativePeriod ? { relativePeriod } : {}),
       sinceDate,
       untilDate,
+    };
+  }
+
+  function resolveFilterPeriod(filters, now = Date.now()) {
+    const f = normalizeFilters(filters);
+    if (!f.relativePeriod) return f;
+    const bounds = getPeriodBounds(f.relativePeriod, todayYmd(now));
+    const { relativePeriod: _ignored, ...rest } = f;
+    if (!bounds) return rest;
+    return {
+      ...rest,
+      sinceDays: null,
+      sinceDate: bounds.sinceDate,
+      untilDate: bounds.untilDate,
     };
   }
 
@@ -279,7 +307,7 @@
     if (f.langJa) count++;
     if (f.minFaves) count++;
     if (f.minRetweets) count++;
-    if (f.sinceDays || f.sinceDate || f.untilDate) count++;
+    if (f.sinceDays || f.relativePeriod || f.sinceDate || f.untilDate) count++;
     return count;
   }
 
@@ -295,6 +323,7 @@
       fa.minFaves === fb.minFaves &&
       fa.minRetweets === fb.minRetweets &&
       fa.sinceDays === fb.sinceDays &&
+      (fa.relativePeriod ?? null) === (fb.relativePeriod ?? null) &&
       fa.sinceDate === fb.sinceDate &&
       fa.untilDate === fb.untilDate
     );
@@ -388,7 +417,7 @@
   }
 
   function buildSearchQuery(baseText, filters, now = Date.now()) {
-    const f = normalizeFilters(filters);
+    const f = resolveFilterPeriod(filters, now);
     const parts = [];
     const trimmedBase = typeof baseText === "string" ? baseText.trim() : "";
     if (trimmedBase) parts.push(trimmedBase);
@@ -454,7 +483,7 @@
     if (f.sinceDays) {
       const rec = RECENCY_OPTIONS.find(r => r.days === f.sinceDays);
       labels.push(rec ? rec.fallback : `${f.sinceDays}日`);
-    } else if (f.sinceDate || f.untilDate) {
+    } else if (f.relativePeriod || f.sinceDate || f.untilDate) {
       labels.push(formatPeriodLabel(f));
     }
     return labels.length ? labels.slice(0, 3).join(" · ") : "マイプリセット";
@@ -563,7 +592,7 @@
     const parsedUrl = parseSearchUrl(currentUrl) ?? { q: "", tab: "top" };
     const { baseText } = parseSearchQuery(parsedUrl.q, now);
     const nextBase = preset?.includeQuery ? (preset.query ?? "") : baseText;
-    const nextFilters = normalizeFilters(preset?.filters);
+    const nextFilters = resolveFilterPeriod(preset?.filters, now);
     const nextTab = preset?.tab || parsedUrl.tab || "top";
     return buildSearchPath(nextBase, nextFilters, nextTab, now);
   }
@@ -877,6 +906,7 @@
     const [endDateDraft, setEndDateDraft] = useState(() => (
       searchState?.filters?.untilDate ? (addDaysYmd(searchState.filters.untilDate, -1) ?? "") : ""
     ));
+    const [saveAsRelativePeriod, setSaveAsRelativePeriod] = useState(false);
 
     useEffect(() => {
       setKeywordDraft(searchState?.baseText ?? "");
@@ -897,6 +927,7 @@
       setEndDateDraft(u ? (addDaysYmd(u, -1) ?? "") : "");
       const detected = detectPeriodUnit(s || null, u || null);
       if (detected) setPeriodUnit(detected);
+      setSaveAsRelativePeriod(isMatchingCurrentPeriod(detected, s || null, u || null));
     }, [searchState?.filters?.sinceDate, searchState?.filters?.untilDate]);
 
     useEffect(() => {
@@ -925,6 +956,20 @@
     if (!isOpen && !hasCustomPeriod) return null;
 
     const activeBaseText = isOpen ? keywordDraft : baseText;
+    const detectedPeriodUnit = detectPeriodUnit(filters.sinceDate, filters.untilDate);
+    const detectedPeriodMeta = detectedPeriodUnit
+      ? PERIOD_UNITS.find(u => u.value === detectedPeriodUnit) ?? null
+      : null;
+    const isCurrentPeriod = isMatchingCurrentPeriod(detectedPeriodUnit, filters.sinceDate, filters.untilDate);
+    const filtersForSave = saveAsRelativePeriod && detectedPeriodUnit
+      ? normalizeFilters({
+          ...filters,
+          sinceDays: null,
+          sinceDate: null,
+          untilDate: null,
+          relativePeriod: detectedPeriodUnit,
+        })
+      : normalizeFilters(filters);
 
     const updateFilters = (patch, nextTab = tab, nextBase = activeBaseText) => {
       const nextFilters = normalizeFilters({ ...filters, ...patch });
@@ -977,11 +1022,11 @@
 
     const handleSavePreset = async (ev) => {
       ev?.preventDefault?.();
-      const fallbackName = suggestPresetName(filters, baseText, includeQuery);
+      const fallbackName = suggestPresetName(filtersForSave, baseText, includeQuery);
       const finalName = presetName.trim() || fallbackName;
       await searchState.addPreset({
         name: finalName,
-        filters,
+        filters: filtersForSave,
         tab: includeTab ? tab : null,
         includeQuery: Boolean(includeQuery && baseText.trim()),
         query: includeQuery ? baseText.trim() : "",
@@ -1115,6 +1160,7 @@
                         setShowSaveForm(v => !v);
                         setIncludeQuery(false);
                         setIncludeTab(tab !== "top");
+                        setSaveAsRelativePeriod(isCurrentPeriod);
                       },
                       children: showSaveForm ? tr(t, "common_cancel", "キャンセル") : `+ ${tr(t, "search_filter_save_preset", "保存")}`,
                     }),
@@ -1135,9 +1181,15 @@
                   className: "flex flex-wrap items-center gap-1",
                   children: presets.map(preset => {
                     const isMatched =
-                      filtersEqual(preset.filters, filters) &&
+                      filtersEqual(resolveFilterPeriod(preset.filters), filters) &&
                       (!preset.tab || preset.tab === tab) &&
                       (!preset.includeQuery || (preset.query ?? "") === baseText);
+                    const relativeLabel = preset.filters?.relativePeriod ? formatPeriodLabel(preset.filters) : "";
+                    const presetTitle = [
+                      preset.name,
+                      preset.includeQuery && preset.query ? `(${preset.query})` : "",
+                      relativeLabel ? `[実行時の${relativeLabel}]` : "",
+                    ].filter(Boolean).join(" ");
                     return jsx.jsxs("div", {
                       className: `rd-search-preset-chip group inline-flex items-center rounded-md border text-[11px] font-medium transition-colors ${
                         isMatched ? chipActive : chipIdle
@@ -1146,9 +1198,7 @@
                         jsx.jsx("button", {
                           type: "button",
                           className: "px-2 py-0.5 text-left cursor-pointer",
-                          title: preset.includeQuery && preset.query
-                            ? `${preset.name} (${preset.query})`
-                            : preset.name,
+                          title: presetTitle,
                           onClick: () => searchState.navigateSearch(applyPresetToUrl(searchState.currentUrl, preset)),
                           children: preset.name,
                         }),
@@ -1182,7 +1232,7 @@
                         jsx.jsx("input", {
                           type: "text",
                           value: presetName,
-                          placeholder: suggestPresetName(filters, baseText, includeQuery),
+                          placeholder: suggestPresetName(filtersForSave, baseText, includeQuery),
                           className: "h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary",
                           onChange: (ev) => setPresetName(ev.currentTarget.value),
                           onKeyDown: (ev) => {
@@ -1226,6 +1276,21 @@
                             jsx.jsx("span", { children: `タブ (${TAB_OPTIONS.find(x => x.value === tab)?.fallback ?? tab}) も含める` }),
                           ],
                         }),
+                        detectedPeriodMeta
+                          ? jsx.jsxs("label", {
+                              className: "inline-flex items-center gap-1 cursor-pointer",
+                              children: [
+                                jsx.jsx("input", {
+                                  type: "checkbox",
+                                  checked: saveAsRelativePeriod,
+                                  onChange: (ev) => setSaveAsRelativePeriod(ev.currentTarget.checked),
+                                }),
+                                jsx.jsx("span", {
+                                  children: `相対期間として保存 (実行時の${tr(t, detectedPeriodMeta.currentKey, detectedPeriodMeta.currentFallback)})`,
+                                }),
+                              ],
+                            })
+                          : null,
                       ],
                     }),
                   ],
@@ -1543,10 +1608,12 @@
     addMonthsYmd,
     getPeriodBounds,
     detectPeriodUnit,
+    isMatchingCurrentPeriod,
     shiftPeriodRange,
     formatPeriodLabel,
     formatDaysAgo,
     normalizeFilters,
+    resolveFilterPeriod,
     countActiveFilters,
     filtersEqual,
     tokenizeQuery,

@@ -446,6 +446,160 @@ test('FilterPanel renders only slim 1-row period minibar when closed with active
   assert.equal(navigated.at(-1), '/search?q=rust&f=live');
 });
 
+test('relativePeriod presets resolve dynamically to current day/week/month/year when applied later', async () => {
+  const { api } = setup();
+  const saveDayNow = new Date(2026, 10, 13, 12, 0, 0).getTime(); // 2026-11-13
+  const nextWeekNow = new Date(2026, 10, 20, 12, 0, 0).getTime(); // 2026-11-20 (Fri)
+  const nextMonthNow = new Date(2026, 11, 5, 12, 0, 0).getTime(); // 2026-12-05
+  const nextYearNow = new Date(2027, 2, 10, 12, 0, 0).getTime(); // 2027-03-10
+
+  const dayPresetFilters = api.normalizeFilters({ media: 'images', relativePeriod: 'day' });
+  assert.equal(dayPresetFilters.relativePeriod, 'day');
+  assert.equal(dayPresetFilters.sinceDate, null);
+  assert.equal(dayPresetFilters.untilDate, null);
+  assert.equal(api.countActiveFilters(dayPresetFilters), 2);
+  assert.equal(api.formatPeriodLabel(dayPresetFilters), '今日');
+  assert.equal(api.suggestPresetName(dayPresetFilters), '画像 · 今日');
+
+  await api.savePresets([
+    { id: 'rel-day', name: '今日の画像', filters: { media: 'images', relativePeriod: 'day' }, tab: 'live' },
+    { id: 'rel-week', name: '今週', filters: { relativePeriod: 'week' }, tab: null },
+    { id: 'rel-month', name: '今月', filters: { relativePeriod: 'month' }, tab: null },
+    { id: 'rel-year', name: '今年', filters: { relativePeriod: 'year' }, tab: null },
+  ]);
+  const loaded = await api.loadPresets();
+  assert.equal(loaded[0].filters.relativePeriod, 'day');
+
+  // Applied on save day -> 2026-11-13
+  assert.equal(
+    api.applyPresetToUrl('/search?q=ai', loaded[0], saveDayNow),
+    '/search?q=ai+filter%3Aimages+since%3A2026-11-13+until%3A2026-11-14&f=live',
+  );
+  // Applied next week -> 2026-11-20
+  assert.equal(
+    api.applyPresetToUrl('/search?q=ai', loaded[0], nextWeekNow),
+    '/search?q=ai+filter%3Aimages+since%3A2026-11-20+until%3A2026-11-21&f=live',
+  );
+  // Week (Mon..Sun for 2026-11-20 is 2026-11-16..2026-11-22 -> until 2026-11-23)
+  assert.equal(
+    api.applyPresetToUrl('/search?q=ai', loaded[1], nextWeekNow),
+    '/search?q=ai+since%3A2026-11-16+until%3A2026-11-23',
+  );
+  // Month -> 2026-12-01..2027-01-01
+  assert.equal(
+    api.applyPresetToUrl('/search?q=ai', loaded[2], nextMonthNow),
+    '/search?q=ai+since%3A2026-12-01+until%3A2027-01-01',
+  );
+  // Year -> 2027-01-01..2028-01-01
+  assert.equal(
+    api.applyPresetToUrl('/search?q=ai', loaded[3], nextYearNow),
+    '/search?q=ai+since%3A2027-01-01+until%3A2028-01-01',
+  );
+});
+
+test('FilterPanel save form supports relative period toggle defaulting ON for current period and OFF for past period', async () => {
+  const { api } = setup();
+  const jsx = makeJsx();
+  const added = [];
+  const todayBounds = api.getPeriodBounds('day', api.todayYmd());
+  const yesterdayBounds = api.shiftPeriodRange('day', todayBounds.sinceDate, todayBounds.untilDate, -1);
+  const pastMonthFilters = api.normalizeFilters({ sinceDate: '2025-01-01', untilDate: '2025-02-01' });
+
+  const renderPanelWith = (filters, hooks, presets = []) => {
+    let hookIdx = 0;
+    const useState = (init) => {
+      const idx = hookIdx++;
+      if (!(idx in hooks)) hooks[idx] = typeof init === 'function' ? init() : init;
+      return [hooks[idx], val => { hooks[idx] = typeof val === 'function' ? val(hooks[idx]) : val; }];
+    };
+    return api.FilterPanel({
+      searchState: {
+        open: true,
+        setOpen: () => {},
+        toggleOpen: () => {},
+        isSearchPage: true,
+        isLiveFeed: false,
+        currentUrl: api.buildSearchPath('rust', filters, 'top'),
+        tab: 'top',
+        baseText: 'rust',
+        filters,
+        activeCount: api.countActiveFilters(filters),
+        presets,
+        navigateSearch: () => {},
+        addPreset: async (item) => added.push(item),
+        deletePreset: async () => {},
+      },
+      jsx,
+      useState,
+      useEffect: () => {},
+    });
+  };
+
+  // 1. Current day selected -> checkbox defaults ON, placeholder is "今日", saves relativePeriod: 'day'
+  const hooksToday = [];
+  const todayFilters = api.normalizeFilters({ sinceDate: todayBounds.sinceDate, untilDate: todayBounds.untilDate });
+  const initialTree = renderPanelWith(todayFilters, hooksToday, [
+    { id: 'p-rel', name: '今日の検索', filters: { relativePeriod: 'day' }, tab: null, includeQuery: false, query: '' },
+  ]);
+  const initialNodes = flattenNodes(initialTree);
+  // Active preset chip matches resolved today dates
+  const chip = initialNodes.find(n => String(n.props?.className).includes('rd-search-preset-chip'));
+  assert.ok(String(chip.props.className).includes('border-primary'));
+  initialNodes.filter(n => n.type === 'button').find(b => textContent(b).trim() === '+ 保存').props.onClick();
+
+  const formTree = renderPanelWith(todayFilters, hooksToday);
+  const formNodes = flattenNodes(formTree.find ? formTree : formTree);
+  const form = formNodes.find(n => n.type === 'form');
+  assert.ok(form);
+  const formDescendants = flattenNodes(form);
+  const nameInput = formDescendants.find(n => n.type === 'input' && n.props.type === 'text');
+  assert.equal(nameInput.props.placeholder, '今日');
+  const relativeLabelNode = formDescendants.find(n => n.type === 'label' && textContent(n).includes('実行時の今日'));
+  assert.ok(relativeLabelNode);
+  const relativeCheckbox = flattenNodes(relativeLabelNode).find(n => n.type === 'input' && n.props.type === 'checkbox');
+  assert.equal(relativeCheckbox.props.checked, true);
+
+  await form.props.onSubmit({ preventDefault() {} });
+  assert.equal(added.at(-1).name, '今日');
+  assert.equal(added.at(-1).filters.relativePeriod, 'day');
+  assert.equal(added.at(-1).filters.sinceDate, null);
+
+  // Yesterday search does NOT match the relative 'day' preset chip
+  const yesterdayFilters = api.normalizeFilters({ sinceDate: yesterdayBounds.sinceDate, untilDate: yesterdayBounds.untilDate });
+  const yesterdayNodes = flattenNodes(renderPanelWith(yesterdayFilters, [], [
+    { id: 'p-rel', name: '今日の検索', filters: { relativePeriod: 'day' }, tab: null, includeQuery: false, query: '' },
+  ]));
+  const yesterdayChip = yesterdayNodes.find(n => String(n.props?.className).includes('rd-search-preset-chip'));
+  assert.equal(String(yesterdayChip.props.className).includes('border-primary'), false);
+
+  // Unchecking the checkbox saves fixed dates instead
+  hooksToday.length = 0;
+  flattenNodes(renderPanelWith(todayFilters, hooksToday))
+    .filter(n => n.type === 'button')
+    .find(b => textContent(b).trim() === '+ 保存')
+    .props.onClick();
+  const form2Nodes = flattenNodes(renderPanelWith(todayFilters, hooksToday));
+  const relCb2 = flattenNodes(form2Nodes.find(n => n.type === 'label' && textContent(n).includes('実行時の今日')))
+    .find(n => n.type === 'input');
+  relCb2.props.onChange({ currentTarget: { checked: false } });
+  const form2 = flattenNodes(renderPanelWith(todayFilters, hooksToday)).find(n => n.type === 'form');
+  await form2.props.onSubmit({ preventDefault() {} });
+  assert.equal(added.at(-1).filters.relativePeriod, undefined);
+  assert.equal(added.at(-1).filters.sinceDate, todayBounds.sinceDate);
+  assert.equal(added.at(-1).filters.untilDate, todayBounds.untilDate);
+
+  // 2. Past month selected -> checkbox defaults OFF
+  const hooksPast = [];
+  flattenNodes(renderPanelWith(pastMonthFilters, hooksPast))
+    .filter(n => n.type === 'button')
+    .find(b => textContent(b).trim() === '+ 保存')
+    .props.onClick();
+  const pastFormNodes = flattenNodes(renderPanelWith(pastMonthFilters, hooksPast));
+  const pastRelCb = flattenNodes(pastFormNodes.find(n => n.type === 'label' && textContent(n).includes('実行時の今月')))
+    .find(n => n.type === 'input');
+  assert.equal(pastRelCb.props.checked, false);
+});
+
 test('installFrameSearchBridge reports path changes and handles search navigation messages', () => {
   const win = new Events();
   const doc = new Events();
