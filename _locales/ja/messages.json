@@ -1015,5 +1015,71 @@
   },
   "column_settings_home_refresh_preserve_desc": {
     "message": "読んでいた投稿の位置を保ち、新着は上へスクロールして読みます。"
+  },
+  "search_filter_button": {
+    "message": "検索フィルター"
+  },
+  "search_filter_presets": {
+    "message": "プリセット"
+  },
+  "search_filter_save_preset": {
+    "message": "保存"
+  },
+  "search_filter_no_presets": {
+    "message": "保存済みのプリセットはありません"
+  },
+  "search_filter_clear": {
+    "message": "解除"
+  },
+  "search_filter_keyword_placeholder": {
+    "message": "キーワード (Enterで検索)"
+  },
+  "search_filter_keyword_label": {
+    "message": "検索キーワード"
+  },
+  "search_filter_apply": {
+    "message": "検索"
+  },
+  "search_filter_tab_group": {
+    "message": "検索タブ"
+  },
+  "search_filter_tab_top": {
+    "message": "話題"
+  },
+  "search_filter_tab_live": {
+    "message": "最新"
+  },
+  "search_filter_tab_media": {
+    "message": "メディア"
+  },
+  "search_filter_media_images": {
+    "message": "画像"
+  },
+  "search_filter_media_videos": {
+    "message": "動画"
+  },
+  "search_filter_media_all": {
+    "message": "メディア"
+  },
+  "search_filter_exclude_retweets": {
+    "message": "RT除外"
+  },
+  "search_filter_exclude_replies": {
+    "message": "返信除外"
+  },
+  "search_filter_exclude_links": {
+    "message": "リンク除外"
+  },
+  "search_filter_lang_ja": {
+    "message": "日本語"
+  },
+  "search_filter_since_1d": {
+    "message": "24時間"
+  },
+  "search_filter_since_7d": {
+    "message": "7日"
+  },
+  "search_filter_since_30d": {
+    "message": "30日"
   }
 }

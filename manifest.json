@@ -56,6 +56,7 @@
         "floatingControls.js",
         "homeRefresh.js",
         "mediaPip.js",
+        "searchFilters.js",
         "contentDeck.js"
       ],
       "run_at": "document_idle"
@@ -77,6 +78,7 @@
         "homeRefresh.js",
         "wideMedia.js",
         "mediaPipFrame.js",
+        "searchFilters.js",
         "contentIframe.js"
       ],
       "all_frames": true,
