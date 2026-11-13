@@ -362,8 +362,11 @@ test('FilterButton and FilterPanel render controls, toggle filters, and manage p
   findInPanel(getButtons(), '適用').props.onClick();
   assert.equal(
     navigated.at(-1),
-    '/search?q=rust+filter%3Aimages+-filter%3Aretweets+since%3A2026-05-01+until%3A2026-05-11&f=live',
+    api.buildSearchPath('rust', { media: 'images', excludeRetweets: true, sinceDate: '2026-05-01', untilDate: '2026-05-11' }, 'live'),
   );
+  const customRangeParsed = api.parseSearchQuery(new URL(navigated.at(-1), 'https://x.com').searchParams.get('q'));
+  assert.equal(customRangeParsed.filters.sinceDate, '2026-05-01');
+  assert.equal(customRangeParsed.filters.untilDate, '2026-05-11');
 });
 
 test('FilterPanel renders only slim 1-row period minibar when closed with active period, and opens overlay popover on demand', () => {
@@ -417,7 +420,10 @@ test('FilterPanel renders only slim 1-row period minibar when closed with active
   // Step previous month directly from closed minibar
   const miniBtns = closedNodes.filter(n => n.type === 'button');
   miniBtns.find(b => b.props['aria-label'] === '前の期間').props.onClick();
-  assert.equal(navigated.at(-1), '/search?q=rust+since%3A2026-10-01+until%3A2026-11-01&f=live');
+  assert.equal(
+    navigated.at(-1),
+    api.buildSearchPath('rust', { sinceDate: '2026-10-01', untilDate: '2026-11-01' }, 'live'),
+  );
 
   // Switch unit to 週 on minibar and jump to 今週
   miniBtns.find(b => textContent(b).trim() === '週').props.onClick();
@@ -473,27 +479,27 @@ test('relativePeriod presets resolve dynamically to current day/week/month/year 
   // Applied on save day -> 2026-11-13
   assert.equal(
     api.applyPresetToUrl('/search?q=ai', loaded[0], saveDayNow),
-    '/search?q=ai+filter%3Aimages+since%3A2026-11-13+until%3A2026-11-14&f=live',
+    api.buildSearchPath('ai', { media: 'images', sinceDate: '2026-11-13', untilDate: '2026-11-14' }, 'live', saveDayNow),
   );
   // Applied next week -> 2026-11-20
   assert.equal(
     api.applyPresetToUrl('/search?q=ai', loaded[0], nextWeekNow),
-    '/search?q=ai+filter%3Aimages+since%3A2026-11-20+until%3A2026-11-21&f=live',
+    api.buildSearchPath('ai', { media: 'images', sinceDate: '2026-11-20', untilDate: '2026-11-21' }, 'live', nextWeekNow),
   );
   // Week (Mon..Sun for 2026-11-20 is 2026-11-16..2026-11-22 -> until 2026-11-23)
   assert.equal(
     api.applyPresetToUrl('/search?q=ai', loaded[1], nextWeekNow),
-    '/search?q=ai+since%3A2026-11-16+until%3A2026-11-23',
+    api.buildSearchPath('ai', { sinceDate: '2026-11-16', untilDate: '2026-11-23' }, 'top', nextWeekNow),
   );
   // Month -> 2026-12-01..2027-01-01
   assert.equal(
     api.applyPresetToUrl('/search?q=ai', loaded[2], nextMonthNow),
-    '/search?q=ai+since%3A2026-12-01+until%3A2027-01-01',
+    api.buildSearchPath('ai', { sinceDate: '2026-12-01', untilDate: '2027-01-01' }, 'top', nextMonthNow),
   );
   // Year -> 2027-01-01..2028-01-01
   assert.equal(
     api.applyPresetToUrl('/search?q=ai', loaded[3], nextYearNow),
-    '/search?q=ai+since%3A2027-01-01+until%3A2028-01-01',
+    api.buildSearchPath('ai', { sinceDate: '2027-01-01', untilDate: '2028-01-01' }, 'top', nextYearNow),
   );
 });
 
@@ -659,4 +665,56 @@ test('manifest, locales, and contentDeck wire searchFilters cleanly', () => {
   assert.ok(deckSource.includes('YomikuiSearchFilters?.useColumnSearch'));
   assert.ok(deckSource.includes('YomikuiSearchFilters.FilterButton'));
   assert.ok(deckSource.includes('YomikuiSearchFilters.FilterPanel'));
+});
+
+test('day period boundaries align to local midnight in UTC queries and separate Today from Previous Day cleanly', () => {
+  const { api, clock } = setup();
+  const today = api.todayYmd(clock.now);
+  const todayBounds = api.getPeriodBounds('day', today);
+  const prevBounds = api.shiftPeriodRange('day', todayBounds.sinceDate, todayBounds.untilDate, -1, clock.now);
+
+  const todayQuery = api.buildSearchQuery('cats', { sinceDate: todayBounds.sinceDate, untilDate: todayBounds.untilDate }, clock.now);
+  const prevQuery = api.buildSearchQuery('cats', { sinceDate: prevBounds.sinceDate, untilDate: prevBounds.untilDate }, clock.now);
+
+  const expectedPrevSince = api.formatSearchDateBoundary(prevBounds.sinceDate);
+  const expectedPrevUntil = api.formatSearchDateBoundary(prevBounds.untilDate);
+  const expectedTodaySince = api.formatSearchDateBoundary(todayBounds.sinceDate);
+  const expectedTodayUntil = api.formatSearchDateBoundary(todayBounds.untilDate);
+
+  // Previous day ends at the exact boundary where Today starts (no UTC 09:00 JST bleed)
+  assert.equal(expectedPrevUntil, expectedTodaySince);
+  assert.equal(prevQuery, `cats since:${expectedPrevSince} until:${expectedPrevUntil}`);
+  assert.equal(todayQuery, `cats since:${expectedTodaySince} until:${expectedTodayUntil}`);
+
+  // When timezone has a non-zero offset (e.g. JST +09:00), explicit _UTC midnight timestamps are emitted
+  if (new Date(2026, 10, 13, 0, 0, 0, 0).getTimezoneOffset() === -540) {
+    assert.equal(todayQuery, 'cats since:2026-11-12_15:00:00_UTC until:2026-11-13_15:00:00_UTC');
+    assert.equal(prevQuery, 'cats since:2026-11-11_15:00:00_UTC until:2026-11-12_15:00:00_UTC');
+    // _JST midnight tokens also parse into the same local calendar dates
+    const parsedJst = api.parseSearchQuery('cats since:2026-11-12_00:00:00_JST until:2026-11-13_00:00:00_JST', clock.now);
+    assert.equal(parsedJst.filters.sinceDate, '2026-11-12');
+    assert.equal(parsedJst.filters.untilDate, '2026-11-13');
+  }
+
+  // Round-trip parsing recovers the local calendar dates without collapsing into recency chips
+  const parsedPrev = api.parseSearchQuery(prevQuery, clock.now);
+  assert.equal(parsedPrev.baseText, 'cats');
+  assert.equal(parsedPrev.filters.sinceDays, null);
+  assert.equal(parsedPrev.filters.sinceDate, prevBounds.sinceDate);
+  assert.equal(parsedPrev.filters.untilDate, prevBounds.untilDate);
+  assert.equal(api.detectPeriodUnit(parsedPrev.filters.sinceDate, parsedPrev.filters.untilDate), 'day');
+
+  // Start-date-only custom period (without untilDate) stays a custom date rather than collapsing to 24時間
+  const startOnlyQuery = api.buildSearchQuery('cats', { sinceDate: prevBounds.sinceDate }, clock.now);
+  const parsedStartOnly = api.parseSearchQuery(startOnlyQuery, clock.now);
+  if (new Date(2026, 10, 12, 0, 0, 0, 0).getTimezoneOffset() !== 0) {
+    assert.equal(parsedStartOnly.filters.sinceDays, null);
+    assert.equal(parsedStartOnly.filters.sinceDate, prevBounds.sinceDate);
+  }
+
+  // Non-midnight custom timestamps remain untouched in baseText
+  const midDay = api.parseSearchQuery('cats since:2026-11-12_12:34:56_UTC until:2026-11-13_01:02:03_UTC', clock.now);
+  assert.equal(midDay.baseText, 'cats since:2026-11-12_12:34:56_UTC until:2026-11-13_01:02:03_UTC');
+  assert.equal(midDay.filters.sinceDate, null);
+  assert.equal(midDay.filters.untilDate, null);
 });

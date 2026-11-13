@@ -68,6 +68,7 @@
   ]);
 
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const SEARCH_DATETIME_RE = /^(\d{4}-\d{2}-\d{2})_(\d{2}):(\d{2}):(\d{2})_(utc|jst)$/i;
   const NON_NEG_INT_RE = /^\d+$/;
 
   function tr(t, key, fallback) {
@@ -108,18 +109,69 @@
   }
 
   function formatUtcYmd(date) {
-    const y = date.getUTCFullYear();
+    const y = String(date.getUTCFullYear()).padStart(4, "0");
     const m = String(date.getUTCMonth() + 1).padStart(2, "0");
     const d = String(date.getUTCDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
   }
 
-  function todayYmd(now = Date.now()) {
-    const date = new Date(now);
-    const y = date.getFullYear();
+  function formatLocalYmd(date) {
+    const y = String(date.getFullYear()).padStart(4, "0");
     const m = String(date.getMonth() + 1).padStart(2, "0");
     const d = String(date.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
+  }
+
+  function formatSearchDateBoundary(ymd) {
+    const parsed = parseYmd(ymd);
+    if (!parsed) return null;
+    // X treats bare since:/until: YYYY-MM-DD as 00:00:00 UTC, so convert local midnight to UTC
+    // to keep date boundaries aligned with the user's calendar dates.
+    const localMidnight = new Date(0);
+    localMidnight.setFullYear(parsed.y, parsed.m - 1, parsed.d);
+    localMidnight.setHours(0, 0, 0, 0);
+    if (Number.isNaN(localMidnight.getTime())) return null;
+    const uy = String(localMidnight.getUTCFullYear()).padStart(4, "0");
+    const um = String(localMidnight.getUTCMonth() + 1).padStart(2, "0");
+    const ud = String(localMidnight.getUTCDate()).padStart(2, "0");
+    const hh = String(localMidnight.getUTCHours()).padStart(2, "0");
+    const mm = String(localMidnight.getUTCMinutes()).padStart(2, "0");
+    const ss = String(localMidnight.getUTCSeconds()).padStart(2, "0");
+    if (hh === "00" && mm === "00" && ss === "00") {
+      return `${uy}-${um}-${ud}`;
+    }
+    return `${uy}-${um}-${ud}_${hh}:${mm}:${ss}_UTC`;
+  }
+
+  function parseSearchDateToken(value) {
+    if (typeof value !== "string") return null;
+    if (parseYmd(value)) {
+      return { ymd: value, isDateOnly: true };
+    }
+    const match = value.match(SEARCH_DATETIME_RE);
+    if (!match) return null;
+    const parsed = parseYmd(match[1]);
+    if (!parsed) return null;
+    const hh = Number(match[2]);
+    const mm = Number(match[3]);
+    const ss = Number(match[4]);
+    if (hh > 23 || mm > 59 || ss > 59) return null;
+    const tz = match[5].toLowerCase();
+    const utcMs = Date.UTC(parsed.y, parsed.m - 1, parsed.d, hh, mm, ss) - (tz === "jst" ? 9 * 3600000 : 0);
+    const local = new Date(utcMs);
+    if (
+      Number.isNaN(local.getTime()) ||
+      local.getHours() !== 0 ||
+      local.getMinutes() !== 0 ||
+      local.getSeconds() !== 0
+    ) {
+      return null;
+    }
+    return { ymd: formatLocalYmd(local), isDateOnly: false };
+  }
+
+  function todayYmd(now = Date.now()) {
+    return formatLocalYmd(new Date(now));
   }
 
   function addDaysYmd(ymd, deltaDays) {
@@ -243,11 +295,7 @@
 
   function formatDaysAgo(days, now = Date.now()) {
     const safeDays = Math.max(1, Math.trunc(Number(days) || 0));
-    const date = new Date(now - safeDays * 86400000);
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
+    return formatLocalYmd(new Date(now - safeDays * 86400000));
   }
 
   function normalizePositiveInt(value) {
@@ -368,7 +416,7 @@
     const baseTokens = [];
     const filters = normalizeFilters();
     const recencyDates = new Map(RECENCY_DAYS.map(days => [formatDaysAgo(days, now), days]));
-    let rawSinceDate = null;
+    let rawSince = null;
 
     for (const token of tokens) {
       const lower = token.toLowerCase();
@@ -390,23 +438,35 @@
         filters.minFaves = normalizePositiveInt(lower.slice(10));
       } else if (lower.startsWith("min_retweets:") && NON_NEG_INT_RE.test(lower.slice(13))) {
         filters.minRetweets = normalizePositiveInt(lower.slice(13));
-      } else if (lower.startsWith("since:") && parseYmd(lower.slice(6))) {
-        rawSinceDate = lower.slice(6);
-      } else if (lower.startsWith("until:") && parseYmd(lower.slice(6))) {
-        filters.untilDate = lower.slice(6);
+      } else if (lower.startsWith("since:")) {
+        const parsedSince = parseSearchDateToken(lower.slice(6));
+        if (parsedSince) {
+          rawSince = parsedSince;
+        } else {
+          baseTokens.push(token);
+        }
+      } else if (lower.startsWith("until:")) {
+        const parsedUntil = parseSearchDateToken(lower.slice(6));
+        if (parsedUntil) {
+          filters.untilDate = parsedUntil.ymd;
+        } else {
+          baseTokens.push(token);
+        }
       } else {
         baseTokens.push(token);
       }
     }
 
-    if (rawSinceDate) {
-      const matchedDays = !filters.untilDate ? (recencyDates.get(rawSinceDate) ?? null) : null;
+    if (rawSince) {
+      const matchedDays = rawSince.isDateOnly && !filters.untilDate
+        ? (recencyDates.get(rawSince.ymd) ?? null)
+        : null;
       if (matchedDays) {
         filters.sinceDays = matchedDays;
         filters.sinceDate = null;
       } else {
         filters.sinceDays = null;
-        filters.sinceDate = rawSinceDate;
+        filters.sinceDate = rawSince.ymd;
       }
     }
 
@@ -430,10 +490,10 @@
     if (f.sinceDays) {
       parts.push(`since:${formatDaysAgo(f.sinceDays, now)}`);
     } else if (f.sinceDate) {
-      parts.push(`since:${f.sinceDate}`);
+      parts.push(`since:${formatSearchDateBoundary(f.sinceDate)}`);
     }
     if (f.untilDate) {
-      parts.push(`until:${f.untilDate}`);
+      parts.push(`until:${formatSearchDateBoundary(f.untilDate)}`);
     }
     return parts.join(" ");
   }
@@ -1487,8 +1547,8 @@
                   ? jsx.jsx("div", {
                       className: "text-[10px] text-muted-foreground tabular-nums",
                       children: [
-                        filters.sinceDate ? `since:${filters.sinceDate}` : null,
-                        filters.untilDate ? `until:${filters.untilDate}` : null,
+                        filters.sinceDate ? `since:${formatSearchDateBoundary(filters.sinceDate)}` : null,
+                        filters.untilDate ? `until:${formatSearchDateBoundary(filters.untilDate)}` : null,
                       ].filter(Boolean).join(" "),
                     })
                   : null,
@@ -1603,6 +1663,8 @@
     FAVES_PRESETS,
     RETWEETS_PRESETS,
     parseYmd,
+    formatSearchDateBoundary,
+    parseSearchDateToken,
     todayYmd,
     addDaysYmd,
     addMonthsYmd,
