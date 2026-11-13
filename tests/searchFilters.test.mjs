@@ -86,6 +86,7 @@ test('parseSearchQuery and buildSearchQuery preserve phrases, groups, and unmana
     minRetweets: 20,
     sinceDays: 7,
     sinceDate: null,
+    untilDate: null,
   });
   assert.equal(api.countActiveFilters(parsed.filters), 7);
 
@@ -113,6 +114,68 @@ test('parseSearchQuery preserves custom fixed since dates and parseSearchUrl val
   assert.equal(api.buildSearchPath('cats', { media: 'videos', excludeRetweets: true }, 'top', clock.now), '/search?q=cats+filter%3Avideos+-filter%3Aretweets');
   assert.equal(api.buildSearchPath('cats', {}, 'live', clock.now), '/search?q=cats&f=live');
   assert.equal(api.buildSearchPath('', {}, 'top', clock.now), '/search');
+});
+
+test('period helpers compute day/week/month/year bounds, step backwards/forwards, and keep bounded ranges distinct from recency chips', () => {
+  const { api, clock } = setup();
+  // 2026-11-13 (Friday)
+  const monthNow = api.shiftPeriodRange('month', null, null, 0, clock.now);
+  assert.deepEqual(clone(monthNow), {
+    startYmd: '2026-11-01',
+    endYmd: '2026-11-30',
+    sinceDate: '2026-11-01',
+    untilDate: '2026-12-01',
+  });
+  assert.equal(api.detectPeriodUnit(monthNow.sinceDate, monthNow.untilDate), 'month');
+  assert.equal(api.formatPeriodLabel(monthNow), '2026年11月');
+
+  const prevMonth = api.shiftPeriodRange('month', monthNow.sinceDate, monthNow.untilDate, -1, clock.now);
+  assert.deepEqual(clone(prevMonth), {
+    startYmd: '2026-10-01',
+    endYmd: '2026-10-31',
+    sinceDate: '2026-10-01',
+    untilDate: '2026-11-01',
+  });
+  const nextMonth = api.shiftPeriodRange('month', prevMonth.sinceDate, prevMonth.untilDate, 1, clock.now);
+  assert.deepEqual(clone(nextMonth), clone(monthNow));
+
+  // Month rollover across Jan -> Dec and Feb leap/non-leap clamping
+  const jan = api.getPeriodBounds('month', '2026-01-31');
+  const dec = api.shiftPeriodRange('month', jan.sinceDate, jan.untilDate, -1, clock.now);
+  assert.equal(dec.sinceDate, '2025-12-01');
+  assert.equal(dec.untilDate, '2026-01-01');
+  assert.equal(api.addMonthsYmd('2024-01-31', 1), '2024-02-29');
+  assert.equal(api.addMonthsYmd('2026-01-31', 1), '2026-02-28');
+
+  // Week (Monday 2026-11-09 .. Sunday 2026-11-15 -> until 2026-11-16)
+  const thisWeek = api.shiftPeriodRange('week', null, null, 0, clock.now);
+  assert.equal(thisWeek.startYmd, '2026-11-09');
+  assert.equal(thisWeek.endYmd, '2026-11-15');
+  assert.equal(thisWeek.untilDate, '2026-11-16');
+  assert.equal(api.detectPeriodUnit(thisWeek.sinceDate, thisWeek.untilDate), 'week');
+  assert.equal(api.formatPeriodLabel(thisWeek), '11/09週');
+  const prevWeek = api.shiftPeriodRange('week', thisWeek.sinceDate, thisWeek.untilDate, -1, clock.now);
+  assert.equal(prevWeek.sinceDate, '2026-11-02');
+  assert.equal(prevWeek.untilDate, '2026-11-09');
+
+  // Year
+  const thisYear = api.shiftPeriodRange('year', null, null, 0, clock.now);
+  assert.equal(thisYear.sinceDate, '2026-01-01');
+  assert.equal(thisYear.untilDate, '2027-01-01');
+  assert.equal(api.detectPeriodUnit(thisYear.sinceDate, thisYear.untilDate), 'year');
+  assert.equal(api.formatPeriodLabel(thisYear), '2026年');
+  const prevYear = api.shiftPeriodRange('year', thisYear.sinceDate, thisYear.untilDate, -1, clock.now);
+  assert.equal(prevYear.sinceDate, '2025-01-01');
+  assert.equal(prevYear.untilDate, '2026-01-01');
+
+  // Bounded 1-day range for yesterday must NOT collapse into sinceDays: 1 (24時間)
+  const yesterday = api.shiftPeriodRange('day', null, null, -1, clock.now);
+  assert.equal(api.detectPeriodUnit(yesterday.sinceDate, yesterday.untilDate), 'day');
+  const query = api.buildSearchQuery('cats', { sinceDate: yesterday.sinceDate, untilDate: yesterday.untilDate }, clock.now);
+  const parsed = api.parseSearchQuery(query, clock.now);
+  assert.equal(parsed.filters.sinceDays, null);
+  assert.equal(parsed.filters.sinceDate, yesterday.sinceDate);
+  assert.equal(parsed.filters.untilDate, yesterday.untilDate);
 });
 
 test('presets initialize with starters, preserve empty array after deletion, and serialize concurrent updates', async () => {
@@ -263,6 +326,43 @@ test('FilterButton and FilterPanel render controls, toggle filters, and manage p
   assert.equal(added.length, 1);
   assert.equal(added[0].name, 'テストプリセット');
   assert.equal(added[0].tab, 'live');
+
+  // Open period selector, step month backwards, switch unit to week, and apply custom date range
+  const getButtons = (statePatch = {}) => flattenNodes(renderPanel(statePatch)).filter(n => n.type === 'button');
+  const findInPanel = (btns, label) => btns.find(b => textContent(b).trim() === label);
+
+  findInPanel(getButtons(), '📅 期間指定').props.onClick();
+  let periodPanel = renderPanel();
+  let periodBtns = flattenNodes(periodPanel).filter(n => n.type === 'button');
+  // Current month button ("今月")
+  findInPanel(periodBtns, '今月').props.onClick();
+  const thisMonthQuery = navigated.at(-1);
+  assert.ok(thisMonthQuery.includes('since%3A') && thisMonthQuery.includes('until%3A'));
+
+  // Step previous month from that URL
+  const monthFilters = api.parseSearchQuery(new URL(thisMonthQuery, 'https://x.com').searchParams.get('q')).filters;
+  periodBtns = getButtons({ filters: monthFilters });
+  findInPanel(periodBtns, '◀ 前').props.onClick();
+  const prevMonthParsed = api.parseSearchQuery(new URL(navigated.at(-1), 'https://x.com').searchParams.get('q')).filters;
+  assert.equal(api.detectPeriodUnit(prevMonthParsed.sinceDate, prevMonthParsed.untilDate), 'month');
+  assert.notEqual(prevMonthParsed.sinceDate, monthFilters.sinceDate);
+
+  // Switch unit to 週 and step forward ("次 ▶")
+  findInPanel(getButtons({ filters: prevMonthParsed }), '週').props.onClick();
+  findInPanel(getButtons({ filters: prevMonthParsed }), '次 ▶').props.onClick();
+  const nextWeekParsed = api.parseSearchQuery(new URL(navigated.at(-1), 'https://x.com').searchParams.get('q')).filters;
+  assert.equal(api.detectPeriodUnit(nextWeekParsed.sinceDate, nextWeekParsed.untilDate), 'week');
+
+  // Enter reversed custom dates (start > end) and apply -> auto-swaps & sets untilDate = end + 1 day
+  const dateInputs = flattenNodes(renderPanel()).filter(n => n.type === 'input' && n.props.type === 'date');
+  assert.equal(dateInputs.length, 2);
+  dateInputs[0].props.onChange({ currentTarget: { value: '2026-05-10' } });
+  dateInputs[1].props.onChange({ currentTarget: { value: '2026-05-01' } });
+  findInPanel(getButtons(), '適用').props.onClick();
+  assert.equal(
+    navigated.at(-1),
+    '/search?q=rust+filter%3Aimages+-filter%3Aretweets+since%3A2026-05-01+until%3A2026-05-11&f=live',
+  );
 });
 
 test('installFrameSearchBridge reports path changes and handles search navigation messages', () => {

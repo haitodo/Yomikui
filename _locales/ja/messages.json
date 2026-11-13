@@ -1081,5 +1081,38 @@
   },
   "search_filter_since_30d": {
     "message": "30日"
+  },
+  "search_filter_period_range": {
+    "message": "📅 期間指定"
+  },
+  "search_filter_period_unit": {
+    "message": "期間単位"
+  },
+  "search_filter_period_apply": {
+    "message": "適用"
+  },
+  "search_filter_unit_day": {
+    "message": "日"
+  },
+  "search_filter_unit_week": {
+    "message": "週"
+  },
+  "search_filter_unit_month": {
+    "message": "月"
+  },
+  "search_filter_unit_year": {
+    "message": "年"
+  },
+  "search_filter_current_day": {
+    "message": "今日"
+  },
+  "search_filter_current_week": {
+    "message": "今週"
+  },
+  "search_filter_current_month": {
+    "message": "今月"
+  },
+  "search_filter_current_year": {
+    "message": "今年"
   }
 }

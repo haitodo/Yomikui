@@ -31,6 +31,12 @@
     { value: "live", labelKey: "search_filter_tab_live", fallback: "最新" },
     { value: "media", labelKey: "search_filter_tab_media", fallback: "メディア" },
   ]);
+  const PERIOD_UNITS = Object.freeze([
+    { value: "day", labelKey: "search_filter_unit_day", fallback: "日", currentKey: "search_filter_current_day", currentFallback: "今日" },
+    { value: "week", labelKey: "search_filter_unit_week", fallback: "週", currentKey: "search_filter_current_week", currentFallback: "今週" },
+    { value: "month", labelKey: "search_filter_unit_month", fallback: "月", currentKey: "search_filter_current_month", currentFallback: "今月" },
+    { value: "year", labelKey: "search_filter_unit_year", fallback: "年", currentKey: "search_filter_current_year", currentFallback: "今年" },
+  ]);
   const VALID_TABS = new Set(["top", "live", "media", "user", "list"]);
 
   const DEFAULT_PRESETS = Object.freeze([
@@ -86,6 +92,144 @@
     }
   }
 
+  function parseYmd(value) {
+    if (typeof value !== "string" || !DATE_RE.test(value)) return null;
+    const [y, m, d] = value.split("-").map(Number);
+    const probe = new Date(Date.UTC(y, m - 1, d));
+    if (
+      probe.getUTCFullYear() !== y ||
+      probe.getUTCMonth() + 1 !== m ||
+      probe.getUTCDate() !== d
+    ) {
+      return null;
+    }
+    return { y, m, d };
+  }
+
+  function formatUtcYmd(date) {
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(date.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function todayYmd(now = Date.now()) {
+    const date = new Date(now);
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function addDaysYmd(ymd, deltaDays) {
+    const parsed = parseYmd(ymd);
+    if (!parsed) return null;
+    const date = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d + Math.trunc(deltaDays)));
+    return formatUtcYmd(date);
+  }
+
+  function addMonthsYmd(ymd, deltaMonths) {
+    const parsed = parseYmd(ymd);
+    if (!parsed) return null;
+    const targetMonthStart = new Date(Date.UTC(parsed.y, parsed.m - 1 + Math.trunc(deltaMonths), 1));
+    const targetY = targetMonthStart.getUTCFullYear();
+    const targetM = targetMonthStart.getUTCMonth() + 1;
+    const maxDay = new Date(Date.UTC(targetY, targetM, 0)).getUTCDate();
+    const clampedD = Math.min(parsed.d, maxDay);
+    return formatUtcYmd(new Date(Date.UTC(targetY, targetM - 1, clampedD)));
+  }
+
+  function getPeriodBounds(unit, anchorYmd) {
+    const parsed = parseYmd(anchorYmd);
+    if (!parsed) return null;
+    let startYmd;
+    let endYmd;
+    if (unit === "day") {
+      startYmd = anchorYmd;
+      endYmd = anchorYmd;
+    } else if (unit === "week") {
+      const dow = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d)).getUTCDay();
+      const offsetFromMonday = (dow + 6) % 7;
+      startYmd = addDaysYmd(anchorYmd, -offsetFromMonday);
+      endYmd = addDaysYmd(startYmd, 6);
+    } else if (unit === "month") {
+      const mm = String(parsed.m).padStart(2, "0");
+      const lastDay = new Date(Date.UTC(parsed.y, parsed.m, 0)).getUTCDate();
+      startYmd = `${parsed.y}-${mm}-01`;
+      endYmd = `${parsed.y}-${mm}-${String(lastDay).padStart(2, "0")}`;
+    } else if (unit === "year") {
+      startYmd = `${parsed.y}-01-01`;
+      endYmd = `${parsed.y}-12-31`;
+    } else {
+      return null;
+    }
+    return {
+      startYmd,
+      endYmd,
+      sinceDate: startYmd,
+      untilDate: addDaysYmd(endYmd, 1),
+    };
+  }
+
+  function detectPeriodUnit(sinceDate, untilDate) {
+    const s = parseYmd(sinceDate);
+    const u = parseYmd(untilDate);
+    if (!s || !u) return null;
+    if (untilDate === addDaysYmd(sinceDate, 1)) return "day";
+    const sDow = new Date(Date.UTC(s.y, s.m - 1, s.d)).getUTCDay();
+    if (sDow === 1 && untilDate === addDaysYmd(sinceDate, 7)) return "week";
+    if (s.d === 1 && untilDate === addMonthsYmd(sinceDate, 1)) return "month";
+    if (s.m === 1 && s.d === 1 && u.y === s.y + 1 && u.m === 1 && u.d === 1) return "year";
+    return null;
+  }
+
+  function shiftPeriodRange(unit, currentSince, currentUntil, delta = 0, now = Date.now()) {
+    if (delta === 0) {
+      return getPeriodBounds(unit, todayYmd(now));
+    }
+    const baseAnchor = parseYmd(currentSince)
+      ? currentSince
+      : parseYmd(currentUntil)
+        ? addDaysYmd(currentUntil, -1)
+        : todayYmd(now);
+    let shiftedAnchor;
+    if (unit === "day") {
+      shiftedAnchor = addDaysYmd(baseAnchor, delta);
+    } else if (unit === "week") {
+      shiftedAnchor = addDaysYmd(baseAnchor, delta * 7);
+    } else if (unit === "month") {
+      shiftedAnchor = addMonthsYmd(baseAnchor, delta);
+    } else if (unit === "year") {
+      shiftedAnchor = addMonthsYmd(baseAnchor, delta * 12);
+    } else {
+      return null;
+    }
+    return getPeriodBounds(unit, shiftedAnchor);
+  }
+
+  function formatPeriodLabel(filters) {
+    const f = normalizeFilters(filters);
+    if (!f.sinceDate && !f.untilDate) return "";
+    const unit = detectPeriodUnit(f.sinceDate, f.untilDate);
+    if (unit === "year") {
+      return `${f.sinceDate.slice(0, 4)}年`;
+    }
+    if (unit === "month") {
+      const p = parseYmd(f.sinceDate);
+      return `${p.y}年${p.m}月`;
+    }
+    if (unit === "week") {
+      return `${f.sinceDate.slice(5).replace("-", "/")}週`;
+    }
+    if (unit === "day") {
+      return f.sinceDate;
+    }
+    const endInclusive = f.untilDate ? addDaysYmd(f.untilDate, -1) : null;
+    if (f.sinceDate && endInclusive) return `${f.sinceDate}〜${endInclusive}`;
+    if (f.sinceDate) return `${f.sinceDate}〜`;
+    return `〜${endInclusive}`;
+  }
+
   function formatDaysAgo(days, now = Date.now()) {
     const safeDays = Math.max(1, Math.trunc(Number(days) || 0));
     const date = new Date(now - safeDays * 86400000);
@@ -105,9 +249,10 @@
 
   function normalizeFilters(raw = {}) {
     const media = raw?.media === "images" || raw?.media === "videos" || raw?.media === "media" ? raw.media : null;
+    const untilDate = parseYmd(raw?.untilDate) ? raw.untilDate : null;
     const rawDays = Number(raw?.sinceDays);
-    const sinceDays = Number.isInteger(rawDays) && rawDays > 0 ? rawDays : null;
-    const sinceDate = !sinceDays && typeof raw?.sinceDate === "string" && DATE_RE.test(raw.sinceDate)
+    const sinceDays = !untilDate && Number.isInteger(rawDays) && rawDays > 0 ? rawDays : null;
+    const sinceDate = !sinceDays && parseYmd(raw?.sinceDate)
       ? raw.sinceDate
       : null;
     return {
@@ -120,6 +265,7 @@
       minRetweets: normalizePositiveInt(raw?.minRetweets),
       sinceDays,
       sinceDate,
+      untilDate,
     };
   }
 
@@ -133,7 +279,7 @@
     if (f.langJa) count++;
     if (f.minFaves) count++;
     if (f.minRetweets) count++;
-    if (f.sinceDays || f.sinceDate) count++;
+    if (f.sinceDays || f.sinceDate || f.untilDate) count++;
     return count;
   }
 
@@ -149,7 +295,8 @@
       fa.minFaves === fb.minFaves &&
       fa.minRetweets === fb.minRetweets &&
       fa.sinceDays === fb.sinceDays &&
-      fa.sinceDate === fb.sinceDate
+      fa.sinceDate === fb.sinceDate &&
+      fa.untilDate === fb.untilDate
     );
   }
 
@@ -192,6 +339,7 @@
     const baseTokens = [];
     const filters = normalizeFilters();
     const recencyDates = new Map(RECENCY_DAYS.map(days => [formatDaysAgo(days, now), days]));
+    let rawSinceDate = null;
 
     for (const token of tokens) {
       const lower = token.toLowerCase();
@@ -213,18 +361,23 @@
         filters.minFaves = normalizePositiveInt(lower.slice(10));
       } else if (lower.startsWith("min_retweets:") && NON_NEG_INT_RE.test(lower.slice(13))) {
         filters.minRetweets = normalizePositiveInt(lower.slice(13));
-      } else if (lower.startsWith("since:") && DATE_RE.test(lower.slice(6))) {
-        const dateStr = lower.slice(6);
-        const matchedDays = recencyDates.get(dateStr) ?? null;
-        if (matchedDays) {
-          filters.sinceDays = matchedDays;
-          filters.sinceDate = null;
-        } else {
-          filters.sinceDays = null;
-          filters.sinceDate = dateStr;
-        }
+      } else if (lower.startsWith("since:") && parseYmd(lower.slice(6))) {
+        rawSinceDate = lower.slice(6);
+      } else if (lower.startsWith("until:") && parseYmd(lower.slice(6))) {
+        filters.untilDate = lower.slice(6);
       } else {
         baseTokens.push(token);
+      }
+    }
+
+    if (rawSinceDate) {
+      const matchedDays = !filters.untilDate ? (recencyDates.get(rawSinceDate) ?? null) : null;
+      if (matchedDays) {
+        filters.sinceDays = matchedDays;
+        filters.sinceDate = null;
+      } else {
+        filters.sinceDays = null;
+        filters.sinceDate = rawSinceDate;
       }
     }
 
@@ -249,6 +402,9 @@
       parts.push(`since:${formatDaysAgo(f.sinceDays, now)}`);
     } else if (f.sinceDate) {
       parts.push(`since:${f.sinceDate}`);
+    }
+    if (f.untilDate) {
+      parts.push(`until:${f.untilDate}`);
     }
     return parts.join(" ");
   }
@@ -298,8 +454,8 @@
     if (f.sinceDays) {
       const rec = RECENCY_OPTIONS.find(r => r.days === f.sinceDays);
       labels.push(rec ? rec.fallback : `${f.sinceDays}日`);
-    } else if (f.sinceDate) {
-      labels.push(`${f.sinceDate}〜`);
+    } else if (f.sinceDate || f.untilDate) {
+      labels.push(formatPeriodLabel(f));
     }
     return labels.length ? labels.slice(0, 3).join(" · ") : "マイプリセット";
   }
@@ -715,6 +871,12 @@
     const [keywordDraft, setKeywordDraft] = useState(searchState?.baseText ?? "");
     const [customMinFaves, setCustomMinFaves] = useState(searchState?.filters?.minFaves ? String(searchState.filters.minFaves) : "");
     const [customMinRetweets, setCustomMinRetweets] = useState(searchState?.filters?.minRetweets ? String(searchState.filters.minRetweets) : "");
+    const [periodOpen, setPeriodOpen] = useState(false);
+    const [periodUnit, setPeriodUnit] = useState(() => detectPeriodUnit(searchState?.filters?.sinceDate, searchState?.filters?.untilDate) || "month");
+    const [startDateDraft, setStartDateDraft] = useState(() => searchState?.filters?.sinceDate ?? "");
+    const [endDateDraft, setEndDateDraft] = useState(() => (
+      searchState?.filters?.untilDate ? (addDaysYmd(searchState.filters.untilDate, -1) ?? "") : ""
+    ));
 
     useEffect(() => {
       setKeywordDraft(searchState?.baseText ?? "");
@@ -728,13 +890,57 @@
       setCustomMinRetweets(searchState?.filters?.minRetweets ? String(searchState.filters.minRetweets) : "");
     }, [searchState?.filters?.minRetweets]);
 
+    useEffect(() => {
+      const s = searchState?.filters?.sinceDate ?? "";
+      const u = searchState?.filters?.untilDate ?? "";
+      setStartDateDraft(s);
+      setEndDateDraft(u ? (addDaysYmd(u, -1) ?? "") : "");
+      const detected = detectPeriodUnit(s || null, u || null);
+      if (detected) setPeriodUnit(detected);
+    }, [searchState?.filters?.sinceDate, searchState?.filters?.untilDate]);
+
     if (!searchState?.open || !searchState?.isSearchPage || searchState?.isLiveFeed) return null;
 
     const { filters, baseText, tab, activeCount, presets = [] } = searchState;
+    const hasCustomPeriod = Boolean(filters.sinceDate || filters.untilDate);
+    const periodLabel = formatPeriodLabel(filters);
+    const currentUnitMeta = PERIOD_UNITS.find(u => u.value === periodUnit) ?? PERIOD_UNITS[2];
 
     const updateFilters = (patch, nextTab = tab, nextBase = keywordDraft) => {
       const nextFilters = normalizeFilters({ ...filters, ...patch });
       searchState.navigateSearch(buildSearchPath(nextBase, nextFilters, nextTab));
+    };
+
+    const applyPeriodBounds = (bounds) => {
+      if (!bounds) return;
+      setStartDateDraft(bounds.startYmd);
+      setEndDateDraft(bounds.endYmd);
+      updateFilters({ sinceDays: null, sinceDate: bounds.sinceDate, untilDate: bounds.untilDate });
+    };
+
+    const stepPeriod = (delta) => {
+      applyPeriodBounds(shiftPeriodRange(periodUnit, filters.sinceDate, filters.untilDate, delta));
+    };
+
+    const applyCustomDateRange = () => {
+      let start = parseYmd(startDateDraft) ? startDateDraft : null;
+      let end = parseYmd(endDateDraft) ? endDateDraft : null;
+      if (start && end && start > end) {
+        [start, end] = [end, start];
+        setStartDateDraft(start);
+        setEndDateDraft(end);
+      }
+      updateFilters({
+        sinceDays: null,
+        sinceDate: start,
+        untilDate: end ? addDaysYmd(end, 1) : null,
+      });
+    };
+
+    const clearCustomDateRange = () => {
+      setStartDateDraft("");
+      setEndDateDraft("");
+      updateFilters({ sinceDate: null, untilDate: null });
     };
 
     const submitKeyword = () => {
@@ -994,21 +1200,121 @@
                 type: "button",
                 "aria-pressed": pressed,
                 className: `${chipBase} ${pressed ? chipActive : chipIdle}`,
-                onClick: () => updateFilters({ sinceDays: pressed ? null : opt.days, sinceDate: null }),
+                onClick: () => updateFilters({ sinceDays: pressed ? null : opt.days, sinceDate: null, untilDate: null }),
                 children: tr(t, opt.labelKey, opt.fallback),
               }, `since-${opt.days}`);
             }),
-            filters.sinceDate
-              ? jsx.jsx("button", {
-                  type: "button",
-                  "aria-pressed": true,
-                  className: `${chipBase} ${chipActive}`,
-                  onClick: () => updateFilters({ sinceDate: null, sinceDays: null }),
-                  children: `${filters.sinceDate}〜 ×`,
-                }, "since-custom")
-              : null,
+            jsx.jsx("button", {
+              type: "button",
+              "aria-expanded": periodOpen,
+              "aria-pressed": periodOpen || hasCustomPeriod,
+              className: `${chipBase} ${hasCustomPeriod ? chipActive : periodOpen ? "border-border bg-accent text-accent-foreground" : chipIdle}`,
+              onClick: () => setPeriodOpen(v => !v),
+              children: hasCustomPeriod
+                ? `📅 ${periodLabel}`
+                : tr(t, "search_filter_period_range", "📅 期間指定"),
+            }, "period-toggle"),
           ],
         }),
+
+        // 3.5 Expandable period range & unit stepper
+        periodOpen
+          ? jsx.jsxs("div", {
+              className: "rd-search-period-box flex flex-col gap-1.5 rounded-lg border border-border bg-background/80 p-2",
+              children: [
+                jsx.jsxs("div", {
+                  className: "flex flex-wrap items-center justify-between gap-1.5",
+                  children: [
+                    jsx.jsx("div", {
+                      role: "group",
+                      "aria-label": tr(t, "search_filter_period_unit", "期間単位"),
+                      className: "flex shrink-0 overflow-hidden rounded-md border border-border bg-background",
+                      children: PERIOD_UNITS.map(u => jsx.jsx("button", {
+                        type: "button",
+                        "aria-pressed": periodUnit === u.value,
+                        className: `px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                          periodUnit === u.value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted/50"
+                        }`,
+                        onClick: () => setPeriodUnit(u.value),
+                        children: tr(t, u.labelKey, u.fallback),
+                      }, u.value)),
+                    }),
+                    jsx.jsxs("div", {
+                      className: "flex shrink-0 items-center gap-1",
+                      children: [
+                        jsx.jsx("button", {
+                          type: "button",
+                          className: `${chipBase} ${chipIdle}`,
+                          "aria-label": "前の期間",
+                          onClick: () => stepPeriod(-1),
+                          children: "◀ 前",
+                        }),
+                        jsx.jsx("button", {
+                          type: "button",
+                          className: `${chipBase} ${chipIdle}`,
+                          onClick: () => stepPeriod(0),
+                          children: tr(t, currentUnitMeta.currentKey, currentUnitMeta.currentFallback),
+                        }),
+                        jsx.jsx("button", {
+                          type: "button",
+                          className: `${chipBase} ${chipIdle}`,
+                          "aria-label": "次の期間",
+                          onClick: () => stepPeriod(1),
+                          children: "次 ▶",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+                jsx.jsxs("div", {
+                  className: "flex flex-wrap items-center gap-1",
+                  children: [
+                    jsx.jsx("input", {
+                      type: "date",
+                      value: startDateDraft,
+                      "aria-label": "開始日",
+                      className: "h-6 min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 text-[11px] text-foreground outline-none focus:border-primary",
+                      onChange: (ev) => setStartDateDraft(ev.currentTarget.value),
+                    }),
+                    jsx.jsx("span", {
+                      className: "text-[11px] text-muted-foreground",
+                      children: "〜",
+                    }),
+                    jsx.jsx("input", {
+                      type: "date",
+                      value: endDateDraft,
+                      "aria-label": "終了日",
+                      className: "h-6 min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 text-[11px] text-foreground outline-none focus:border-primary",
+                      onChange: (ev) => setEndDateDraft(ev.currentTarget.value),
+                    }),
+                    jsx.jsx("button", {
+                      type: "button",
+                      className: "h-6 shrink-0 rounded-md bg-primary px-2 text-[11px] font-medium text-primary-foreground hover:opacity-90 cursor-pointer",
+                      onClick: applyCustomDateRange,
+                      children: tr(t, "search_filter_period_apply", "適用"),
+                    }),
+                    hasCustomPeriod || startDateDraft || endDateDraft
+                      ? jsx.jsx("button", {
+                          type: "button",
+                          className: `${miniBtnBase} text-muted-foreground hover:bg-muted/60 hover:text-foreground`,
+                          onClick: clearCustomDateRange,
+                          children: tr(t, "search_filter_clear", "解除"),
+                        })
+                      : null,
+                  ],
+                }),
+                filters.sinceDate || filters.untilDate
+                  ? jsx.jsx("div", {
+                      className: "text-[10px] text-muted-foreground tabular-nums",
+                      children: [
+                        filters.sinceDate ? `since:${filters.sinceDate}` : null,
+                        filters.untilDate ? `until:${filters.untilDate}` : null,
+                      ].filter(Boolean).join(" "),
+                    })
+                  : null,
+              ],
+            })
+          : null,
 
         // 4. Engagement thresholds (min_faves & min_retweets)
         jsx.jsxs("div", {
@@ -1105,9 +1411,18 @@
     MEDIA_OPTIONS,
     BOOLEAN_OPTIONS,
     RECENCY_OPTIONS,
+    PERIOD_UNITS,
     TAB_OPTIONS,
     FAVES_PRESETS,
     RETWEETS_PRESETS,
+    parseYmd,
+    todayYmd,
+    addDaysYmd,
+    addMonthsYmd,
+    getPeriodBounds,
+    detectPeriodUnit,
+    shiftPeriodRange,
+    formatPeriodLabel,
     formatDaysAgo,
     normalizeFilters,
     countActiveFilters,
