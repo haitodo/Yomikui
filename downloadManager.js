@@ -5,6 +5,7 @@ const MEDIA_HOSTS = ['pbs.twimg.com', 'video.twimg.com', 'ton.twimg.com', 'x.com
 const FILE_EXT_RE = /\.([a-zA-Z0-9]+)$/;
 const IMAGE_FOLDER = 'Yomikui-images';
 const VIDEO_FOLDER = 'Yomikui-videos';
+const FILE_EXISTENCE_GRACE_MS = 500;
 const X_SNOWFLAKE_EPOCH_MS = 1288834974657n;
 // Older IDs were sequential and do not encode the publication time.
 const FIRST_SNOWFLAKE_TWEET_ID = 29700859247n;
@@ -68,6 +69,17 @@ function mediaTasks(media) {
   });
 }
 
+function downloadPathKey(filename) {
+  return filename.replace(/\\/g, '/').toLowerCase();
+}
+
+function downloadPathRegex(path) {
+  // History stores absolute paths; compare the Yomikui folder and filename at the end.
+  const separator = String.raw`[/\\]`;
+  const escaped = path.split('/').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return `(?i)(^|${separator})${escaped.join(separator)}$`;
+}
+
 export class DownloadManager {
   constructor(api, { progressMessageType = 'yomikui-download-progress' } = {}) {
     this.api = api;
@@ -75,9 +87,10 @@ export class DownloadManager {
     this.items = new Map();
     this.batches = new Map();
     this.activeIds = new Set();
+    this.reservedPaths = new Set();
     this.refreshIds = new Set();
     this.dirtyBatches = new Set();
-    this.nextFailureId = -1;
+    this.nextSyntheticId = -1;
     this.pollTimer = null;
     this.pollPromise = null;
     this.broadcastTimer = null;
@@ -107,28 +120,69 @@ export class DownloadManager {
   }
 
   async startItem(batch, media, task) {
+    let reservedPath;
     try {
       if (!isAllowedUrl(task.url)) {
         this.recordFailure(batch, media, task.filename, 'BLOCKED_HOST');
         return;
       }
-      const id = await this.api.downloads.download({ url: task.url, filename: task.filename, saveAs: false });
+      const path = downloadPathKey(task.filename);
+      if (this.reservedPaths.has(path)) {
+        this.recordTerminalItem(batch, media, task.filename, 'skipped');
+        return;
+      }
+      // Hold the path while consulting history and until the download ends.
+      this.reservedPaths.add(path);
+      reservedPath = path;
+      if (await this.hasDuplicate(path)) {
+        this.recordTerminalItem(batch, media, task.filename, 'skipped');
+        return;
+      }
+      const id = await this.api.downloads.download({
+        url: task.url,
+        filename: task.filename,
+        saveAs: false,
+        // A file without a history entry must not be renamed or overwritten automatically.
+        conflictAction: 'prompt',
+      });
       if (typeof id !== 'number') {
         this.recordFailure(batch, media, task.filename, 'START_FAILED');
         return;
       }
       const item = this.createItem(batch, media, task.filename, id);
+      item.path = path;
       batch.items.set(id, item);
       this.items.set(id, item);
       this.activeIds.add(id);
       batch.activeCount++;
+      reservedPath = undefined;
       this.requestPoll(0);
     } catch (error) {
       console.warn('[Yomikui] Download failed:', error);
       this.recordFailure(batch, media, task.filename, String(error));
     } finally {
+      if (reservedPath !== undefined) this.reservedPaths.delete(reservedPath);
       batch.pendingStarts--;
       this.touch(batch);
+    }
+  }
+
+  async hasDuplicate(path) {
+    const query = { filenameRegex: downloadPathRegex(path), limit: 0 };
+    const isSaved = item => item.state === 'complete' && item.exists === true;
+    try {
+      const matches = await this.api.downloads.search(query);
+      if (matches.some(item => item.state === 'in_progress')) return true;
+      if (!matches.some(isSaved)) return false;
+
+      // Chrome returns cached existence flags and refreshes them asynchronously.
+      await new Promise(resolve => setTimeout(resolve, FILE_EXISTENCE_GRACE_MS));
+      const refreshed = await this.api.downloads.search(query);
+      return refreshed.some(item => isSaved(item) || item.state === 'in_progress');
+    } catch (error) {
+      // If history is unavailable, Chrome still prompts on a path conflict.
+      console.warn('[Yomikui] Download history lookup failed:', error);
+      return false;
     }
   }
 
@@ -146,9 +200,13 @@ export class DownloadManager {
   }
 
   recordFailure(batch, media, filename, error) {
-    const item = this.createItem(batch, media, filename, this.nextFailureId--);
-    item.state = 'interrupted';
-    item.error = error;
+    this.recordTerminalItem(batch, media, filename, 'interrupted', error);
+  }
+
+  recordTerminalItem(batch, media, filename, state, error) {
+    const item = this.createItem(batch, media, filename, this.nextSyntheticId--);
+    item.state = state;
+    if (error !== undefined) item.error = error;
     batch.items.set(item.downloadId, item);
     this.items.set(item.downloadId, item);
   }
@@ -222,7 +280,10 @@ export class DownloadManager {
     update('bytesReceived', snapshot.bytesReceived ?? item.bytesReceived);
     const total = snapshot.totalBytes > 0 ? snapshot.totalBytes : snapshot.fileSize > 0 ? snapshot.fileSize : item.totalBytes;
     if (snapshot.state === 'complete' || snapshot.state === 'interrupted') {
-      if (item.state === 'in_progress') this.batches.get(item.batchId).activeCount--;
+      if (item.state === 'in_progress') {
+        this.batches.get(item.batchId).activeCount--;
+        this.reservedPaths.delete(item.path);
+      }
       update('state', snapshot.state);
       this.activeIds.delete(item.downloadId);
       if (total > 0) update('totalBytes', total);
@@ -266,6 +327,8 @@ export class DownloadManager {
     for (const id of this.dirtyBatches) {
       const batch = this.batches.get(id);
       if (!batch?.items.size) continue;
+      // Do not report a batch as finished while some files are still starting.
+      if (batch.pendingStarts && !batch.activeCount) continue;
       const first = batch.items.values().next().value;
       messages.push({
         type: this.progressMessageType,

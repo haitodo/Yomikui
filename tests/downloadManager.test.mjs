@@ -23,7 +23,11 @@ test('slow polls never overlap, and stale snapshots cannot undo completion event
   const env = downloadEnvironment();
   const first = deferred();
   let calls = 0;
-  env.api.downloads.search = () => ++calls === 1 ? first.promise : Promise.resolve([{ state: 'complete', bytesReceived: 100, totalBytes: 100 }]);
+  const search = env.api.downloads.search;
+  env.api.downloads.search = query => {
+    if (query.id === undefined) return search(query);
+    return ++calls === 1 ? first.promise : Promise.resolve([{ state: 'complete', bytesReceived: 100, totalBytes: 100 }]);
+  };
   env.manager.start(media(), 'batch');
   await settle();
   await env.clock.advance(1200);
@@ -43,7 +47,7 @@ test('all changed batches share one tab lookup and duplicate events send nothing
   env.snapshots.set(1, { state: 'in_progress', bytesReceived: 0 });
   env.snapshots.set(2, { state: 'in_progress', bytesReceived: 0 });
   env.manager.start(media(), 'a');
-  env.manager.start(media(), 'b');
+  env.manager.start({ ...media(), tweetId: '456' }, 'b');
   await settle();
   await env.clock.advance(0);
   assert.equal(env.tabQueries, 1);
@@ -121,6 +125,80 @@ test('download start failures are reported and released', async () => {
   assert.match(env.sends[0].message.items[0].error, /NETWORK_FAILED/);
   await env.clock.advance(5000);
   assert.equal(env.manager.items.size, 0);
+});
+
+test('a batch skips existing and active paths while downloading interrupted or missing files', async () => {
+  const env = downloadEnvironment();
+  const requests = [];
+  env.api.downloads.download = async options => { requests.push(options); return requests.length; };
+  const folder = 'Yomikui-images/2026-11-14';
+  const history = (index, state, exists) => ({
+    filename: String.raw`C:\Users\local\Downloads\YOMIKUI-images\2026-11-14\Someone_123_${index}.jpg`,
+    state,
+    exists,
+  });
+  env.history.push(history(1, 'complete', true), history(2, 'interrupted', true),
+    history(3, 'complete', false), history(4, 'in_progress', false), {
+      filename: '/home/local/Downloads/Yomikui-images/2026-11-13/someone_123_5.jpg',
+      state: 'complete',
+      exists: true,
+    });
+  for (const id of [1, 2, 3]) env.snapshots.set(id, { state: 'complete', bytesReceived: 100, totalBytes: 100 });
+  env.manager.start({ ...media(5), tweetCreatedAt: new Date(2026, 10, 14, 12).getTime() }, 'mixed');
+  await settle();
+  await env.clock.advance(1000);
+  assert.deepEqual(requests.map(({ filename, conflictAction }) => [filename, conflictAction]), [
+    [folder + '/someone_123_2.jpg', 'prompt'],
+    [folder + '/someone_123_3.jpg', 'prompt'],
+    [folder + '/someone_123_5.jpg', 'prompt'],
+  ]);
+  assert.deepEqual(env.sends.at(-1).message.items.filter(item => item.state === 'skipped').map(item => item.filename).sort(),
+    ['someone_123_1.jpg', 'someone_123_4.jpg']);
+});
+
+test('a newly removed file can be saved again after the browser refreshes its history', async () => {
+  const env = downloadEnvironment();
+  const saved = { filename: '/downloads/Yomikui-images/unknown-date/someone_123_1.jpg', state: 'complete', exists: true };
+  env.history.push(saved);
+  let starts = 0;
+  env.api.downloads.download = async () => ++starts;
+  env.manager.start(media(), 'deleted');
+  await settle();
+  assert.equal(starts, 0);
+  saved.exists = false;
+  await env.clock.advance(1000);
+  assert.equal(starts, 1);
+});
+
+test('rapid requests share a destination reservation and can retry after interruption', async () => {
+  const env = downloadEnvironment();
+  const first = deferred();
+  let starts = 0;
+  env.api.downloads.download = () => ++starts === 1 ? first.promise : Promise.resolve(2);
+  env.snapshots.set(1, { state: 'in_progress', bytesReceived: 10, totalBytes: 100 });
+  env.snapshots.set(2, { state: 'complete', bytesReceived: 100, totalBytes: 100 });
+
+  env.manager.start(media(), 'first');
+  env.manager.start(media(), 'second');
+  await settle();
+  await env.clock.advance(0);
+  assert.equal(starts, 1);
+  assert.equal(env.sends.find(({ message }) => message.batchId === 'second').message.items[0].state, 'skipped');
+
+  first.resolve(1);
+  await settle();
+  await env.clock.advance(0);
+  env.manager.start(media(), 'during');
+  await env.clock.advance(0);
+  assert.equal(starts, 1);
+
+  env.snapshots.set(1, { state: 'interrupted', error: 'NETWORK_FAILED' });
+  env.api.downloads.onChanged.emit({ id: 1, state: { current: 'interrupted' }, error: { current: 'NETWORK_FAILED' } });
+  env.manager.start(media(), 'retry');
+  await settle();
+  await env.clock.advance(0);
+  assert.equal(starts, 2);
+  assert.equal(env.sends.findLast(({ message }) => message.batchId === 'retry').message.items[0].state, 'complete');
 });
 
 test('downloads removed from browser history do not keep the polling worker alive', async () => {

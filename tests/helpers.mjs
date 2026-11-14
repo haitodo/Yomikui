@@ -204,6 +204,7 @@ export function hook() {
 export function downloadEnvironment() {
   const env = browserEnvironment();
   const snapshots = new Map();
+  const history = [];
   const searches = [];
   const sends = [];
   let nextId = 1;
@@ -212,7 +213,15 @@ export function downloadEnvironment() {
     downloads: {
       onChanged: hook(),
       download: async () => nextId++,
-      search: async ({ id }) => { searches.push(id); return snapshots.has(id) ? [{ ...snapshots.get(id) }] : []; },
+      search: async ({ id, filenameRegex }) => {
+        if (filenameRegex) {
+          // Chrome accepts RE2's leading case-insensitive flag; JS uses a separate flag.
+          const pattern = new RegExp(filenameRegex.replace(/^\(\?i\)/, ''), filenameRegex.startsWith('(?i)') ? 'i' : '');
+          return history.filter(item => pattern.test(item.filename)).map(item => ({ ...item }));
+        }
+        searches.push(id);
+        return snapshots.has(id) ? [{ ...snapshots.get(id) }] : [];
+      },
     },
     tabs: {
       query: async () => { tabQueries++; return [{ id: 1 }, { id: 2 }]; },
@@ -221,7 +230,7 @@ export function downloadEnvironment() {
   };
   evaluate(env.context, 'downloadManager.js', source => source.replace('export class DownloadManager', 'globalThis.DownloadManager = class DownloadManager'));
   const manager = new env.context.DownloadManager(api);
-  return { ...env, api, manager, searches, sends, snapshots, get tabQueries() { return tabQueries; } };
+  return { ...env, api, manager, history, searches, sends, snapshots, get tabQueries() { return tabQueries; } };
 }
 
 export const media = (count = 1) => ({

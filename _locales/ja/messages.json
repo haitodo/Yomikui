@@ -478,6 +478,18 @@
   "download_toast_failed": {
     "message": "ダウンロードに失敗しました"
   },
+  "download_toast_all_skipped": {
+    "message": "重複するダウンロードをスキップしました"
+  },
+  "download_toast_skipped_count": {
+    "message": "$1$ 件の重複をスキップ",
+    "placeholders": {
+      "1": {
+        "content": "$1",
+        "example": "2"
+      }
+    }
+  },
   "download_toast_files": {
     "message": "$1$ ファイル",
     "placeholders": {
