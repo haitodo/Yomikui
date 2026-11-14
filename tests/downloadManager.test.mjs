@@ -3,7 +3,16 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { parseHTML } from 'linkedom';
-import { deferred, downloadEnvironment, evaluate, media, settle } from './helpers.mjs';
+import { browserEnvironment, deferred, downloadEnvironment, evaluate, media, settle } from './helpers.mjs';
+
+const deck = readFileSync(new URL('../contentDeck.js', import.meta.url), 'utf8');
+
+function deckSection(from, to) {
+  const start = deck.indexOf(from);
+  const end = deck.indexOf(to, start + from.length);
+  assert.ok(start >= 0 && end > start);
+  return deck.slice(start, end);
+}
 
 test('unchanged polls do not enumerate tabs or resend progress', async () => {
   const env = downloadEnvironment();
@@ -40,6 +49,112 @@ test('slow polls never overlap, and stale snapshots cannot undo completion event
   assert.equal(calls, 2);
   assert.equal(env.manager.items.get(1).bytesReceived, 100);
   assert.equal(env.manager.pollTimer, null);
+});
+
+test('video progress advances with unknown size and reports the browser choosing a destination', async () => {
+  const env = downloadEnvironment();
+  const video = { ...media(), videos: [{ index: 0, url: 'https://video.twimg.com/video.mp4' }] };
+  const lastItem = () => env.sends.at(-1).message.items[0];
+  env.snapshots.set(1, { state: 'in_progress', filename: '', bytesReceived: 0, totalBytes: -1 });
+  await env.manager.start(video, 'video');
+  await env.clock.advance(0);
+  assert.equal(lastItem().awaitingTarget, true);
+
+  const filename = '/downloads/Yomikui-videos/unknown-date/someone_123_v1.mp4';
+  env.api.downloads.onChanged.emit({ id: 1, filename: { current: filename } });
+  await env.clock.advance(0);
+  assert.equal(lastItem().awaitingTarget, false);
+  env.snapshots.set(1, { state: 'in_progress', filename, bytesReceived: 50, totalBytes: -1 });
+  await env.clock.advance(400);
+  assert.equal(lastItem().totalBytes, -1);
+  assert.equal(lastItem().bytesReceived, 50);
+
+  env.snapshots.set(1, { state: 'in_progress', filename, bytesReceived: 100, totalBytes: 100 });
+  await env.clock.advance(400);
+  assert.equal(lastItem().state, 'in_progress');
+  assert.equal(lastItem().totalBytes, 100);
+
+  env.snapshots.set(1, { state: 'complete', filename, bytesReceived: 100, totalBytes: 100 });
+  env.api.downloads.onChanged.emit({ id: 1, state: { current: 'complete' } });
+  await env.clock.advance(0);
+  assert.equal(lastItem().state, 'complete');
+});
+
+test('the shipped dashboard keeps unknown-size progress animated and distinguishes save stages', async () => {
+  const { context } = browserEnvironment();
+  const { document, window } = parseHTML('<html><head><title>X</title></head><body></body></html>');
+  Object.assign(context, {
+    document, MutationObserver: window.MutationObserver,
+    P4: 'Yomikui', owe() {}, Hee: '', chrome: { runtime: { getURL: url => url } },
+  });
+  vm.runInContext([
+    deckSection('function Pve(', 'var Ove=({batch:'),
+    deckSection('function swe(){', 'function lwe(){'),
+  ].join('\n'), context);
+
+  const maintenance = context.swe();
+  try {
+    const unknown = { state: 'in_progress', bytesReceived: 50, totalBytes: -1 };
+    assert.equal(context.activeDownloadLabel([]), 'download_toast_preparing');
+    assert.equal(context.activeDownloadLabel([{ ...unknown, awaitingTarget: true }]), 'download_toast_waiting_for_path');
+    assert.equal(context.activeDownloadLabel([unknown]), 'download_toast_downloading');
+    assert.equal(context.Pve([unknown]).percent, undefined);
+    const saving = [{ ...unknown, totalBytes: 50 }];
+    assert.equal(context.Pve(saving).percent, 99);
+    assert.equal(context.activeDownloadLabel(saving), 'download_toast_waiting_for_save');
+    const inaccurate = [{ ...unknown, totalBytes: 10 }];
+    assert.equal(context.Pve(inaccurate).percent, undefined);
+    assert.equal(context.activeDownloadLabel(inaccurate), 'download_toast_downloading');
+
+    document.head.appendChild(document.createElement('meta'));
+    await settle();
+    assert.match(document.getElementById('yomikui-styles').textContent, /@keyframes download-indeterminate/);
+  } finally {
+    maintenance.headObserver.disconnect();
+    maintenance.titleObserver?.disconnect();
+  }
+});
+
+test('the dashboard retains simultaneous preparations and lets a failed request be retried', async () => {
+  const { context } = browserEnvironment();
+  const state = { downloadBatches: [] };
+  const requests = [];
+  const first = deferred();
+  const second = deferred();
+  Object.assign(context, {
+    state,
+    e: change => change(state),
+    Ut: { getState: () => state },
+    crypto: { randomUUID: () => 'retry' },
+    chrome: { runtime: { sendMessage: async request => {
+      requests.push(request);
+      return request.batchId === 'first' ? first.promise : second.promise;
+    } } },
+  });
+  vm.runInContext([
+    'Object.assign(state, {' + deckSection('cacheDownloadRequest(c,d){', ',setTheme(c){') + '});',
+    deckSection('async function requestMediaDownload(', 'var eK=()'),
+  ].join('\n'), context);
+  const batch = id => state.downloadBatches.find(item => item.batchId === id);
+
+  const request = media();
+  const firstRequest = context.requestMediaDownload(request, 'first');
+  const secondRequest = context.requestMediaDownload(request, 'second');
+  first.reject(new Error('message channel closed'));
+  await firstRequest;
+  assert.equal(batch('first').items[0].state, 'interrupted');
+  assert.equal(batch('second').items.length, 0);
+  context.Uve(batch('first'));
+  assert.equal(batch('first'), undefined);
+  assert.equal(requests.at(-1).batchId, 'retry');
+  assert.equal(requests.at(-1).media, request);
+
+  state.upsertDownloadBatch({ batchId: 'second', items: [{ state: 'in_progress' }] });
+  second.reject(new Error('reply channel closed after progress arrived'));
+  await secondRequest;
+  await settle();
+  assert.equal(batch('second').items[0].state, 'in_progress');
+  assert.equal(batch('retry').items[0].state, 'interrupted');
 });
 
 test('all changed batches share one tab lookup and duplicate events send nothing', async () => {
@@ -230,7 +345,7 @@ test('videos use the original publication date even when the timeline entry ID d
   assert.equal(requests.length, 1);
   assert.equal(requests[0].filename, 'Yomikui-videos/2024-04-09/someone_1990000000000000000_v1.mp4');
   assert.equal(env.manager.items.get(1).filename, 'someone_1990000000000000000_v1.mp4');
-  assert.equal(env.manager.items.get(1).totalBytes, -1);
+  assert.equal(env.manager.items.get(1).totalBytes, 100);
   env.api.downloads.onChanged.emit({ id: 1, state: { current: 'interrupted' }, error: { current: 'USER_CANCELED' } });
   assert.equal(env.manager.items.get(1).error, 'USER_CANCELED');
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { downloadEnvironment, evaluate, hook, settle } from './helpers.mjs';
+import { deferred, downloadEnvironment, evaluate, hook, media, settle } from './helpers.mjs';
 
 function setup() {
   const env = downloadEnvironment();
@@ -22,7 +22,7 @@ function setup() {
   };
   api.action = { onClicked: hook() };
   env.context.chrome = api;
-  evaluate(env.context, 'background.js', source => source.replace(/^import .*;\n/, ''));
+  evaluate(env.context, 'background.js', source => source.replace(/^import .*;\r?\n/, ''));
   return { ...env, api, writes, dnrUpdates, get reads() { return reads; } };
 }
 
@@ -64,6 +64,29 @@ test('a failed persistence attempt can retry on the next response', async () => 
   env.api.webRequest.onCompleted.emit(details);
   await settle();
   assert.equal(calls, 2);
+});
+
+test('the download request keeps the response channel open until browser startup settles', async () => {
+  const env = setup();
+  const startup = deferred();
+  env.api.downloads.download = () => startup.promise;
+  const responses = [];
+  const request = { type: 'yomikui-download-media', media: media(), batchId: 'batch' };
+  const replies = env.api.runtime.onMessage.callbacks.map(listener =>
+    listener(request, { id: 'extension' }, response => responses.push(response)),
+  );
+  assert.ok(replies.includes(true));
+  await settle();
+  assert.equal(responses.length, 0);
+
+  startup.resolve(1);
+  await settle();
+  assert.equal(responses[0]?.success, true);
+  assert.equal(responses[0].batchId, 'batch');
+
+  env.api.runtime.onMessage.emit({ ...request, media: {} }, { id: 'extension' }, response => responses.push(response));
+  await settle();
+  assert.equal(responses[1]?.success, false);
 });
 
 test('declarativeNetRequest dynamic rules include telemetry and ad blocks for x.com and twitter.com', async () => {

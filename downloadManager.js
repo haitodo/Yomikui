@@ -1,6 +1,6 @@
 const POLL_DELAY = 400;
 const RETENTION_DELAY = 5000;
-const DECK_URLS = ['https://x.com/yomikui*', 'https://twitter.com/yomikui*'];
+const DECK_URLS = ['https://*.x.com/yomikui*', 'https://*.twitter.com/yomikui*'];
 const MEDIA_HOSTS = ['pbs.twimg.com', 'video.twimg.com', 'ton.twimg.com', 'x.com'];
 const FILE_EXT_RE = /\.([a-zA-Z0-9]+)$/;
 const IMAGE_FOLDER = 'Yomikui-images';
@@ -99,7 +99,8 @@ export class DownloadManager {
     api.downloads.onChanged.addListener(this.onChanged);
   }
 
-  start(media, batchId) {
+  async start(media, batchId) {
+    const tasks = mediaTasks(media);
     let batch = this.batches.get(batchId);
     if (!batch) {
       batch = { id: batchId, items: new Map(), pendingStarts: 0, activeCount: 0, cleanupTimer: null };
@@ -107,7 +108,6 @@ export class DownloadManager {
     }
     if (batch.cleanupTimer !== null) clearTimeout(batch.cleanupTimer);
     batch.cleanupTimer = null;
-    const tasks = mediaTasks(media);
     // Account for every pending start before any one of them can finish.
     batch.pendingStarts += Math.max(1, tasks.length);
     if (!tasks.length) {
@@ -116,7 +116,7 @@ export class DownloadManager {
       this.touch(batch);
       return;
     }
-    for (const task of tasks) void this.startItem(batch, media, task);
+    await Promise.all(tasks.map(task => this.startItem(batch, media, task)));
   }
 
   async startItem(batch, media, task) {
@@ -196,6 +196,7 @@ export class DownloadManager {
       state: 'in_progress',
       bytesReceived: 0,
       totalBytes: -1,
+      targetConfirmed: undefined,
     };
   }
 
@@ -278,7 +279,9 @@ export class DownloadManager {
       changed = true;
     };
     update('bytesReceived', snapshot.bytesReceived ?? item.bytesReceived);
-    const total = snapshot.totalBytes > 0 ? snapshot.totalBytes : snapshot.fileSize > 0 ? snapshot.fileSize : item.totalBytes;
+    if (snapshot.totalBytes > 0) update('totalBytes', snapshot.totalBytes);
+    else if (snapshot.fileSize > 0) update('totalBytes', snapshot.fileSize);
+    else if (snapshot.totalBytes !== undefined) update('totalBytes', -1);
     if (snapshot.state === 'complete' || snapshot.state === 'interrupted') {
       if (item.state === 'in_progress') {
         this.batches.get(item.batchId).activeCount--;
@@ -286,12 +289,11 @@ export class DownloadManager {
       }
       update('state', snapshot.state);
       this.activeIds.delete(item.downloadId);
-      if (total > 0) update('totalBytes', total);
       if (snapshot.state === 'complete' && item.totalBytes > 0) update('bytesReceived', item.totalBytes);
       if (snapshot.state === 'interrupted') update('error', snapshot.error ?? item.error ?? 'UNKNOWN');
-    } else if (total > 0) {
-      if (item.bytesReceived >= total) update('totalBytes', -1);
-      else if (item.totalBytes <= 0 || total >= item.totalBytes) update('totalBytes', total);
+    } else if (typeof snapshot.filename === 'string' && item.targetConfirmed !== true) {
+      // Chrome leaves the filename empty while determining or confirming the target path.
+      update('targetConfirmed', snapshot.filename !== '');
     }
     if (changed) this.touch(this.batches.get(item.batchId));
   }
@@ -305,6 +307,7 @@ export class DownloadManager {
       bytesReceived: delta.bytesReceived?.current,
       totalBytes: delta.totalBytes?.current,
       fileSize: delta.fileSize?.current,
+      filename: delta.filename?.current,
       error: delta.error?.current,
     });
     if (terminal) {
@@ -341,6 +344,7 @@ export class DownloadManager {
           state: item.state,
           bytesReceived: item.bytesReceived,
           totalBytes: item.totalBytes,
+          awaitingTarget: item.state === 'in_progress' && item.targetConfirmed === false,
           error: item.error,
         })),
       });

@@ -475,6 +475,15 @@
   "download_toast_downloading": {
     "message": "ダウンロード中…"
   },
+  "download_toast_preparing": {
+    "message": "ダウンロードを準備中…"
+  },
+  "download_toast_waiting_for_path": {
+    "message": "保存先の確定を待っています…"
+  },
+  "download_toast_waiting_for_save": {
+    "message": "ブラウザーでの保存完了を待っています…"
+  },
   "download_toast_failed": {
     "message": "ダウンロードに失敗しました"
   },
