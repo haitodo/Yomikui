@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deferred, downloadEnvironment, media, settle } from './helpers.mjs';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { parseHTML } from 'linkedom';
+import { deferred, downloadEnvironment, evaluate, media, settle } from './helpers.mjs';
 
 test('unchanged polls do not enumerate tabs or resend progress', async () => {
   const env = downloadEnvironment();
@@ -133,37 +136,122 @@ test('downloads removed from browser history do not keep the polling worker aliv
   assert.equal(env.manager.items.size, 0);
 });
 
-test('video preference, filenames, and unknown transfer sizes retain their behavior', async () => {
+test('videos use the original publication date even when the timeline entry ID differs', async () => {
   const env = downloadEnvironment();
   const requests = [];
   env.api.downloads.download = async options => { requests.push(options); return 1; };
   env.snapshots.set(1, { state: 'in_progress', bytesReceived: 100, totalBytes: 100 });
-  env.manager.start({ ...media(), videos: [{ index: 0, url: 'https://video.twimg.com/video.mp4' }] }, 'batch');
+  env.manager.start({
+    ...media(),
+    tweetId: '1990000000000000000',
+    tweetCreatedAt: new Date(2024, 3, 9, 0, 1).getTime(),
+    videos: [{ index: 0, url: 'https://video.twimg.com/video.mp4' }],
+  }, 'batch');
   await settle();
   await env.clock.advance(0);
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].filename, 'Yomikui-videos/someone_123_v1.mp4');
-  assert.equal(env.manager.items.get(1).filename, 'someone_123_v1.mp4');
+  assert.equal(requests[0].filename, 'Yomikui-videos/2024-04-09/someone_1990000000000000000_v1.mp4');
+  assert.equal(env.manager.items.get(1).filename, 'someone_1990000000000000000_v1.mp4');
   assert.equal(env.manager.items.get(1).totalBytes, -1);
   env.api.downloads.onChanged.emit({ id: 1, state: { current: 'interrupted' }, error: { current: 'USER_CANCELED' } });
   assert.equal(env.manager.items.get(1).error, 'USER_CANCELED');
 });
 
-test('images are saved under the Yomikui-images folder while keeping basename in progress items', async () => {
+test('images use each source post date and keep basenames in progress items', async () => {
   const env = downloadEnvironment();
   const requests = [];
   env.api.downloads.download = async options => { requests.push(options); return requests.length; };
   env.snapshots.set(1, { state: 'complete', bytesReceived: 100, totalBytes: 100 });
   env.snapshots.set(2, { state: 'complete', bytesReceived: 200, totalBytes: 200 });
-  env.manager.start(media(2), 'images');
+  env.snapshots.set(3, { state: 'complete', bytesReceived: 300, totalBytes: 300 });
+  const request = { ...media(3), tweetCreatedAt: new Date(2025, 10, 6, 23, 59).getTime() };
+  request.images[1].sourcePost = { tweetId: '456', tweetCreatedAt: new Date(2024, 0, 8, 12).getTime() };
+  request.images[2].sourcePost = { tweetId: '456' };
+  env.manager.start(request, 'images');
   await settle();
   await env.clock.advance(0);
   assert.deepEqual(requests.map(r => r.filename), [
-    'Yomikui-images/someone_123_1.jpg',
-    'Yomikui-images/someone_123_2.jpg',
+    'Yomikui-images/2025-11-06/someone_123_1.jpg',
+    'Yomikui-images/2024-01-08/someone_123_2.jpg',
+    'Yomikui-images/unknown-date/someone_123_3.jpg',
   ]);
   assert.deepEqual(env.sends.at(-1).message.items.map(item => item.filename), [
     'someone_123_1.jpg',
     'someone_123_2.jpg',
+    'someone_123_3.jpg',
+  ]);
+});
+
+test('the original post ID is a fallback when only the ID is available', async () => {
+  const env = downloadEnvironment();
+  const requests = [];
+  env.api.downloads.download = async options => { requests.push(options); return requests.length; };
+  // This ID encodes 2024-11-04T15:00:00.000Z, exactly midnight on November 5 in Japan.
+  const sourceTweetId = '1853452138705846273';
+  const localDate = new Date('2024-11-04T15:00:00Z');
+  const expectedDay = localDate.getDate() === 4 ? '04' : '05';
+  env.manager.start({ ...media(), tweetId: '1990000000000000000', sourceTweetId }, 'snowflake');
+  env.manager.start({ ...media(), tweetId: '29000000000', tweetCreatedAt: NaN }, 'legacy');
+  await settle();
+  assert.deepEqual(requests.map(r => r.filename), [
+    `Yomikui-images/2024-11-${expectedDay}/someone_1990000000000000000_1.jpg`,
+    'Yomikui-images/unknown-date/someone_29000000000_1.jpg',
+  ]);
+});
+
+test('native download clicks use timeline or DOM dates and keep quoted media on its own date', async () => {
+  const env = downloadEnvironment();
+  const { context, api, manager } = env;
+  const requested = [];
+  api.downloads.download = async options => { requested.push(options.filename); return requested.length; };
+  evaluate(context, 'tweetActions.js');
+  context.crypto = { randomUUID: () => 'batch' };
+  context.window.parent.postMessage = ({ media, batchId }) => manager.start(media, batchId);
+
+  const frame = readFileSync(new URL('../contentIframe.js', import.meta.url), 'utf8');
+  const section = (from, to) => {
+    const start = frame.indexOf(from);
+    const end = frame.indexOf(to, start + from.length);
+    assert.ok(start >= 0 && end > start);
+    return frame.slice(start, end);
+  };
+  vm.runInContext([
+    section('function Yd(e){', 'function PD(e){'),
+    section('function hX(e){', 'var Ri="yomikui-download-btn"'),
+    section('var Ri="yomikui-download-btn"', 'function AX(e,t){'),
+    'globalThis.cacheTimelinePost = result => kH(wH(result)); globalThis.clickDownload = EX;',
+    'globalThis.Tr = url => url; globalThis.Le = () => "https://x.com";',
+  ].join('\n'), context);
+
+  const authorDate = new Date(2025, 10, 6, 0, 1).toISOString();
+  const quoteDate = new Date(2024, 0, 8, 12).toISOString();
+  const image = name => ({ type: 'photo', media_url_https: `https://pbs.twimg.com/media/${name}.jpg` });
+  const quoted = { legacy: { id_str: '456', created_at: quoteDate, extended_entities: { media: [image('quoted')] } } };
+  const result = {
+    core: { user_results: { result: { core: { screen_name: 'author' } } } },
+    legacy: { id_str: '123', created_at: authorDate, extended_entities: { media: [image('direct')] } },
+    quoted_status_result: { result: quoted },
+  };
+  const { document } = parseHTML(`<article>
+    <div role="link" data-testid="quoteTweet">
+      <a href="/quoted/status/456/photo/1"><img src="https://pbs.twimg.com/media/quoted.jpg"></a>
+      <a href="/quoted/status/456"><time datetime="${quoteDate}"></time></a>
+    </div>
+    <a href="/author/status/123"><time datetime="${authorDate}"></time></a>
+    <a href="/author/status/123/photo/1"><img src="https://pbs.twimg.com/media/direct.jpg"></a>
+    <button class="yomikui-download-btn" data-tweet-id="123" data-screen-name="author"></button>
+  </article>`);
+  const button = document.querySelector('button');
+  const click = () => context.clickDownload({ target: button, stopPropagation() {}, preventDefault() {} });
+  click();
+  await env.clock.advance(1500);
+  context.cacheTimelinePost(result);
+  click();
+  await settle();
+  assert.deepEqual(requested, [
+    'Yomikui-images/2024-01-08/author_123_1.jpg',
+    'Yomikui-images/2025-11-06/author_123_2.jpg',
+    'Yomikui-images/2025-11-06/author_123_1.jpg',
+    'Yomikui-images/2024-01-08/author_123_2.jpg',
   ]);
 });

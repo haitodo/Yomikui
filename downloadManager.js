@@ -5,6 +5,10 @@ const MEDIA_HOSTS = ['pbs.twimg.com', 'video.twimg.com', 'ton.twimg.com', 'x.com
 const FILE_EXT_RE = /\.([a-zA-Z0-9]+)$/;
 const IMAGE_FOLDER = 'Yomikui-images';
 const VIDEO_FOLDER = 'Yomikui-videos';
+const X_SNOWFLAKE_EPOCH_MS = 1288834974657n;
+// Older IDs were sequential and do not encode the publication time.
+const FIRST_SNOWFLAKE_TWEET_ID = 29700859247n;
+const LAST_SNOWFLAKE_ID = (1n << 63n) - 1n;
 
 function isAllowedUrl(url) {
   try {
@@ -25,15 +29,43 @@ function extensionFor(url) {
   }
 }
 
+function postDateFolder(tweetCreatedAt, tweetId) {
+  if (Number.isFinite(tweetCreatedAt)) {
+    const date = new Date(tweetCreatedAt);
+    if (date.getFullYear() >= 2006 && date.getFullYear() <= 9999) return formatLocalDate(date);
+  }
+
+  if (typeof tweetId === 'string' && /^\d{11,19}$/.test(tweetId)) {
+    const snowflake = BigInt(tweetId);
+    if (snowflake >= FIRST_SNOWFLAKE_TWEET_ID && snowflake <= LAST_SNOWFLAKE_ID) {
+      const timestamp = Number((snowflake >> 22n) + X_SNOWFLAKE_EPOCH_MS);
+      return formatLocalDate(new Date(timestamp));
+    }
+  }
+  return 'unknown-date';
+}
+
+function formatLocalDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 function mediaTasks(media) {
   const videos = media.videos;
   const hasVideos = Boolean(videos.length);
   const items = hasVideos ? videos : media.images;
   const folder = hasVideos ? VIDEO_FOLDER : IMAGE_FOLDER;
-  return items.map(item => ({
-    url: item.url,
-    filename: `${folder}/${media.screenName}_${media.tweetId}_${hasVideos ? 'v' : ''}${item.index + 1}.${extensionFor(item.url)}`,
-  }));
+  const tweetId = media.sourceTweetId ?? media.tweetId;
+  const date = postDateFolder(media.tweetCreatedAt, tweetId);
+  return items.map(item => {
+    const source = item.sourcePost;
+    const itemDate = source ? postDateFolder(source.tweetCreatedAt, source.tweetId) : date;
+    return {
+      url: item.url,
+      filename: `${folder}/${itemDate}/${media.screenName}_${media.tweetId}_${hasVideos ? 'v' : ''}${item.index + 1}.${extensionFor(item.url)}`,
+    };
+  });
 }
 
 export class DownloadManager {
