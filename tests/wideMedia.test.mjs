@@ -20,6 +20,14 @@ function loadWideMedia(customGlobals = {}) {
   return sandbox.globalThis.YomikuiWideMedia;
 }
 
+function mediaDeclarations(document, css) {
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]+)\}/g)];
+  return selector => {
+    const node = document.querySelector(selector);
+    return rules.filter(([, rule]) => node.matches(rule.trim())).map(([, , declarations]) => declarations).join("\n");
+  };
+}
+
 test("buildLayoutCss outputs 100% width rules across full X ancestor chain and branches on hideBanner", () => {
   const WideMedia = loadWideMedia();
   const hiddenBannerCss = WideMedia.buildLayoutCss({ hideBanner: true });
@@ -120,11 +128,7 @@ test("wide styles release inline size limits on single media frames and preserve
   `);
 
   for (const mode of ["default", "large"]) {
-    const rules = [...WideMedia.buildMediaSizeCss(mode).matchAll(/([^{}]+)\{([^{}]+)\}/g)];
-    function declarations(selector) {
-      const node = document.querySelector(selector);
-      return rules.filter(([, rule]) => node.matches(rule.trim())).map(([, , css]) => css).join("\n");
-    }
+    const declarations = mediaDeclarations(document, WideMedia.buildMediaSizeCss(mode));
 
     for (const name of ["photo", "preview", "video"]) {
       assert.match(declarations(`#${name}-wrapper`), /max-width: 100% !important/);
@@ -137,6 +141,47 @@ test("wide styles release inline size limits on single media frames and preserve
     assert.doesNotMatch(declarations("#grid"), /height: auto !important/);
     if (mode === "default") {
       assert.match(declarations("#grid > div:first-child"), /padding-bottom: 75% !important/);
+    }
+  }
+});
+
+test("video sizing preserves the original poster link's avatar and emoji", () => {
+  const WideMedia = loadWideMedia();
+  const { document } = parseHTML(`
+    <article data-testid="tweet">
+      <div data-testid="tweetPhoto">
+        <div data-testid="videoPlayer"><div>
+          <div style="padding-bottom: 56.25%"></div>
+          <div>
+            <div data-testid="videoComponent">
+              <video></video>
+              <a href="/creator/status/123/video/1?t=83%2C132">
+                <div id="avatar-background" style="background-image: url(avatar.jpg)"></div>
+                <img id="avatar" src="avatar.jpg">
+                <span>Creator <img id="emoji" alt="🥽" src="emoji.svg"></span>
+              </a>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </article>
+    <article data-testid="tweet">
+      <div data-testid="tweetPhoto">
+        <a href="/creator/status/123/video/1">
+          <div data-testid="previewInterstitial"><img id="poster" src="poster.jpg"></div>
+        </a>
+      </div>
+    </article>
+  `);
+
+  for (const mode of ["default", "small", "large"]) {
+    const declarations = mediaDeclarations(document, WideMedia.buildMediaSizeCss(mode));
+    for (const selector of ["video", "#poster"]) {
+      assert.match(declarations(selector), /height: 100% !important/, `${mode}: ${selector}`);
+      assert.match(declarations(selector), /object-fit: contain !important/, `${mode}: ${selector}`);
+    }
+    for (const selector of ["#avatar-background", "#avatar", "#emoji"]) {
+      assert.doesNotMatch(declarations(selector), /(?:width|height|object-fit|background-size):/, `${mode}: ${selector}`);
     }
   }
 });

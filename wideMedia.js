@@ -10,10 +10,15 @@
 
   const TWEET = 'article[data-testid="tweet"]';
   const PHOTO_LINK = 'a[role="link"][href*="/photo/"]';
-  const VIDEO_PLAYER = `${TWEET} [data-testid="videoPlayer"], ${TWEET} [data-testid="videoComponent"]`;
+  const PLAYER = ':is([data-testid="videoPlayer"], [data-testid="videoComponent"])';
+  const VIDEO_PLAYER = `${TWEET} ${PLAYER}`;
   const TWEET_PHOTO = `${TWEET} [data-testid="tweetPhoto"]`;
-  const MEDIA = ':is([data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"], [data-testid="card.layoutLarge.media"])';
-  const MEDIA_CONTENT = ':is(img, video, [data-testid="previewInterstitial"], div[style*="background-image"])';
+  const MEDIA = `:is([data-testid="tweetPhoto"], ${PLAYER}, [data-testid="card.layoutLarge.media"])`;
+  // X renders the original poster's avatar and emoji inside a video link in the player.
+  const OUTSIDE_VIDEO_CREDIT = `:where(:not(${PLAYER} a[href*="/status/"][href*="/video/"] *))`;
+  const MEDIA_IMAGE = `img${OUTSIDE_VIDEO_CREDIT}`;
+  const MEDIA_BACKGROUND = `div[style*="background-image"]${OUTSIDE_VIDEO_CREDIT}`;
+  const MEDIA_CONTENT = `:is(${MEDIA_IMAGE}, video, [data-testid="previewInterstitial"], ${MEDIA_BACKGROUND})`;
   const RATIO_SPACER = 'div[style*="padding-bottom"]';
   const SMALL_CARD = '[data-testid^="card.layoutSmall"]';
   const CAROUSEL = '[data-testid="ScrollSnap-SwipeableList"]';
@@ -46,6 +51,16 @@
   const SH = `${AH} > div`;
   const DOLLAR_H = `${IR} ${PHOTO_LINK} > div`;
   const R1 = `${TWEET} ${PHOTO_LINK} div:has(> div[style*="padding-bottom"])`;
+  const VIDEO_BACKGROUND = `${VIDEO_PLAYER} > div > ${RATIO_SPACER} + div > ${MEDIA_BACKGROUND}`;
+  const EXPLICIT_MEDIA_CONTENT = `
+    ${TWEET_PHOTO} ${MEDIA_CONTENT},
+    ${VIDEO_PLAYER} :is(${MEDIA_IMAGE}, video),
+    ${VIDEO_BACKGROUND}
+  `;
+  const EXPLICIT_MEDIA_BACKGROUNDS = `
+    ${TWEET_PHOTO} ${MEDIA_BACKGROUND},
+    ${VIDEO_BACKGROUND}
+  `;
 
   function buildLayoutCss({ hideBanner } = {}) {
     const rules = [];
@@ -187,7 +202,7 @@
         width: 100% !important;
         height: 100% !important;
       }
-      ${SINGLE_MEDIA} :is(img, video) {
+      ${SINGLE_MEDIA} :is(${MEDIA_IMAGE}, video) {
         max-width: none !important;
         max-height: none !important;
         object-fit: contain !important;
@@ -196,7 +211,7 @@
       ${SINGLE_MEDIA} [data-testid="previewInterstitial"] {
         inset: 0 !important;
       }
-      ${SINGLE_MEDIA} div[style*="background-image"] {
+      ${SINGLE_MEDIA} ${MEDIA_BACKGROUND} {
         background-size: contain !important;
         background-repeat: no-repeat !important;
         background-position: center !important;
@@ -228,20 +243,6 @@
         ${TWEET} ${PHOTO_LINK} [data-testid="tweetPhoto"],
         ${TWEET_PHOTO} [data-testid="previewInterstitial"]
       `;
-      const mediaContent = `
-        ${TWEET} ${PHOTO_LINK} [data-testid="tweetPhoto"] img,
-        ${TWEET} ${PHOTO_LINK} [data-testid="tweetPhoto"] > div[style*="background-image"],
-        ${TWEET_PHOTO} img,
-        ${TWEET_PHOTO} video,
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"],
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"] img,
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"] > div[style*="background-image"],
-        ${TWEET_PHOTO} div[style*="background-image"],
-        ${VIDEO_PLAYER} video,
-        ${VIDEO_PLAYER} img,
-        ${VIDEO_PLAYER} > div > div[style*="padding-bottom"] + div > div[style*="background-image"]
-      `;
-
       return `
         ${mediaContainers} {
           height: ${smallHeight} !important;
@@ -271,16 +272,13 @@
         ${TWEET_PHOTO} [data-testid="previewInterstitial"] {
           background-color: rgb(0, 0, 0) !important;
         }
-        ${mediaContent} {
+        ${EXPLICIT_MEDIA_CONTENT} {
           width: 100% !important;
           height: 100% !important;
           object-fit: contain !important;
           object-position: center !important;
         }
-        ${TWEET_PHOTO} div[style*="background-image"],
-        ${TWEET} ${PHOTO_LINK} [data-testid="tweetPhoto"] > div[style*="background-image"],
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"] > div[style*="background-image"],
-        ${VIDEO_PLAYER} > div > div[style*="padding-bottom"] + div > div[style*="background-image"] {
+        ${EXPLICIT_MEDIA_BACKGROUNDS} {
           background-size: contain !important;
           background-repeat: no-repeat !important;
           background-position: center !important;
@@ -316,20 +314,6 @@
     }
 
     if (mode === "large") {
-      const mediaContent = `
-        ${TWEET} ${PHOTO_LINK} [data-testid="tweetPhoto"] img,
-        ${TWEET} ${PHOTO_LINK} [data-testid="tweetPhoto"] > div[style*="background-image"],
-        ${TWEET_PHOTO} img,
-        ${TWEET_PHOTO} video,
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"],
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"] img,
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"] > div[style*="background-image"],
-        ${TWEET_PHOTO} div[style*="background-image"],
-        ${VIDEO_PLAYER} video,
-        ${VIDEO_PLAYER} img,
-        ${VIDEO_PLAYER} > div > div[style*="padding-bottom"] + div > div[style*="background-image"]
-      `;
-
       return `
         ${buildSingleMediaCss("85vh")}
         ${IR} {
@@ -378,7 +362,7 @@
           height: 100% !important;
           margin: 0 !important;
         }
-        ${mediaContent} {
+        ${EXPLICIT_MEDIA_CONTENT} {
           width: 100% !important;
           height: 100% !important;
           max-width: none !important;
@@ -386,10 +370,7 @@
           object-fit: contain !important;
           object-position: center !important;
         }
-        ${TWEET_PHOTO} div[style*="background-image"],
-        ${TWEET} ${PHOTO_LINK} [data-testid="tweetPhoto"] > div[style*="background-image"],
-        ${TWEET_PHOTO} [data-testid="previewInterstitial"] > div[style*="background-image"],
-        ${VIDEO_PLAYER} > div > div[style*="padding-bottom"] + div > div[style*="background-image"] {
+        ${EXPLICIT_MEDIA_BACKGROUNDS} {
           background-size: contain !important;
           background-repeat: no-repeat !important;
           background-position: center !important;
@@ -424,13 +405,13 @@
           width: 100% !important;
           height: 100% !important;
         }
-        ${MULTI_GRID} [data-testid="tweetPhoto"] img {
+        ${MULTI_GRID} [data-testid="tweetPhoto"] ${MEDIA_IMAGE} {
           width: 100% !important;
           height: 100% !important;
           object-fit: cover !important;
           object-position: center !important;
         }
-        ${MULTI_GRID} [data-testid="tweetPhoto"] div[style*="background-image"] {
+        ${MULTI_GRID} [data-testid="tweetPhoto"] ${MEDIA_BACKGROUND} {
           background-size: cover !important;
           background-position: center !important;
         }
