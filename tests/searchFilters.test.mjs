@@ -26,6 +26,7 @@ function setup(options = {}) {
         async get(key) { return { [key]: clone(saved[key]) }; },
         async set(patch) { Object.assign(saved, clone(patch)); },
       },
+      ...(options.sync ? { sync: options.sync } : {}),
     },
     i18n: {
       getMessage(key) { return jaMessages[key]?.message ?? ''; },
@@ -717,4 +718,291 @@ test('day period boundaries align to local midnight in UTC queries and separate 
   assert.equal(midDay.baseText, 'cats since:2026-11-12_12:34:56_UTC until:2026-11-13_01:02:03_UTC');
   assert.equal(midDay.filters.sinceDate, null);
   assert.equal(midDay.filters.untilDate, null);
+});
+
+test('parseQueryDraft parses full X search queries and cursor presets track progress without overwriting on today peek', async () => {
+  const { api } = setup();
+  const sampleNow = new Date(2026, 10, 14, 16, 0, 0).getTime();
+
+  const parsedDraft = api.parseQueryDraft(
+    '撮影 and (model or モデル) filter:images min_faves:50 since:2026-11-04_15:00:00_UTC until:2026-11-05_15:00:00_UTC',
+    sampleNow,
+  );
+  assert.equal(parsedDraft.baseText, '撮影 and (model or モデル)');
+  assert.equal(parsedDraft.filters.media, 'images');
+  assert.equal(parsedDraft.filters.minFaves, 50);
+  if (new Date(2026, 10, 5, 0, 0, 0, 0).getTimezoneOffset() === -540) {
+    assert.equal(parsedDraft.filters.sinceDate, '2026-11-05');
+    assert.equal(parsedDraft.filters.untilDate, '2026-11-06');
+  }
+
+  await api.savePresets([
+    {
+      id: 'photo-monthly',
+      name: '撮影 model',
+      tags: ['写真', '日課'],
+      pinned: true,
+      includeQuery: true,
+      query: '撮影 and (model or モデル)',
+      tab: 'live',
+      filters: { media: 'images', minFaves: 50 },
+      periodMode: 'cursor',
+      cursorUnit: 'month',
+      cursorSince: '2026-10-01',
+      cursorUntil: '2026-11-01',
+    },
+    {
+      id: 'fx-daily',
+      name: 'FX ドル円',
+      tags: ['投資'],
+      pinned: true,
+      includeQuery: true,
+      query: 'FX and ドル円',
+      tab: 'top',
+      filters: { media: 'images', minFaves: 50, relativePeriod: 'day' },
+      periodMode: 'relative',
+    },
+  ]);
+
+  let presets = await api.loadPresets();
+  const photo = presets.find(p => p.id === 'photo-monthly');
+  assert.equal(photo.periodMode, 'cursor');
+  assert.equal(api.formatPresetPeriodBadge(photo), '進捗: 2026年10月');
+
+  // Applying cursor preset opens stored cursor month (Oct 2026)
+  const octUrl = api.applyPresetToUrl('/search?q=old', photo, sampleNow);
+  assert.equal(
+    octUrl,
+    api.buildSearchPath('撮影 and (model or モデル)', { media: 'images', minFaves: 50, sinceDate: '2026-10-01', untilDate: '2026-11-01' }, 'live', sampleNow),
+  );
+
+  // Peeking at Today resolves to 2026-11-14 without altering saved Oct 2026 cursor
+  const todayUrl = api.applyPresetToUrl('/search?q=old', photo, sampleNow, { mode: 'today' });
+  assert.equal(
+    todayUrl,
+    api.buildSearchPath('撮影 and (model or モデル)', { media: 'images', minFaves: 50, sinceDate: '2026-11-14', untilDate: '2026-11-15' }, 'live', sampleNow),
+  );
+  presets = await api.loadPresets();
+  assert.equal(presets.find(p => p.id === 'photo-monthly').cursorSince, '2026-10-01');
+
+  // Advancing cursor to previous month (Sep 2026) persists progress in place (no duplicate presets)
+  const sepBounds = api.shiftPeriodRange('month', photo.cursorSince, photo.cursorUntil, -1, sampleNow);
+  await api.advancePresetCursor('photo-monthly', sepBounds.sinceDate, sepBounds.untilDate, 'month', sampleNow);
+  presets = await api.loadPresets();
+  assert.equal(presets.length, 2);
+  const updatedPhoto = presets.find(p => p.id === 'photo-monthly');
+  assert.equal(updatedPhoto.cursorSince, '2026-09-01');
+  assert.equal(updatedPhoto.cursorUntil, '2026-10-01');
+  assert.equal(updatedPhoto.lastCheckedAt, sampleNow);
+  assert.equal(api.isSameLocalDay(updatedPhoto.lastCheckedAt, sampleNow), true);
+
+  // Search matching works on name, query, tags, and filter summary
+  assert.equal(api.matchPresetSearch(updatedPhoto, 'モデル #写真 50'), true);
+  assert.equal(api.matchPresetSearch(updatedPhoto, 'ドル円'), false);
+});
+
+test('presets persist across sync chunks, mirror backend, and JSON export/import recovery', async () => {
+  const syncStore = {};
+  const syncApi = {
+    async get(keys) {
+      if (typeof keys === 'string') return { [keys]: clone(syncStore[keys]) };
+      const out = {};
+      for (const k of keys) out[k] = clone(syncStore[k]);
+      return out;
+    },
+    async set(patch) { Object.assign(syncStore, clone(patch)); },
+    async remove(keys) {
+      for (const k of (Array.isArray(keys) ? keys : [keys])) delete syncStore[k];
+    },
+  };
+
+  let mirrorData = null;
+  const { api, saved } = setup({ sync: syncApi });
+  api.registerMirrorBackend({
+    read: async () => clone(mirrorData),
+    write: async (val) => { mirrorData = clone(val); },
+  });
+
+  // Create many presets to exercise chunked sync storage
+  const many = Array.from({ length: 18 }, (_, i) => ({
+    id: `p-${i}`,
+    name: `銘柄検索 ${i} 日本語プリセット名`,
+    tags: ['投資', `group${i % 3}`],
+    pinned: i < 3,
+    includeQuery: true,
+    query: `株 and 信用 and キーワード${i}`,
+    tab: 'live',
+    filters: { media: 'images', minFaves: 50 + i },
+    periodMode: 'cursor',
+    cursorUnit: 'month',
+    cursorSince: '2026-10-01',
+    cursorUntil: '2026-11-01',
+  }));
+  await api.savePresets(many);
+  assert.ok(syncStore.yk_sp_sync_meta_v1?.chunks >= 2);
+  assert.equal(mirrorData.length, 18);
+
+  // Simulate extension reinstall: chrome.storage.local is completely wiped, sync survives
+  delete saved[api.PRESETS_STORAGE_KEY];
+  delete saved[api.LOCAL_BACKUP_KEY];
+  const recoveredFromSync = await api.loadPresets();
+  assert.equal(recoveredFromSync.length, 18);
+  assert.equal(recoveredFromSync[0].name, '銘柄検索 0 日本語プリセット名');
+  assert.equal(saved[api.PRESETS_STORAGE_KEY].length, 18);
+
+  // Simulate both local and sync wiped, Dexie mirror survives
+  delete saved[api.PRESETS_STORAGE_KEY];
+  delete saved[api.LOCAL_BACKUP_KEY];
+  for (const k of Object.keys(syncStore)) delete syncStore[k];
+  const recoveredFromMirror = await api.loadPresets();
+  assert.equal(recoveredFromMirror.length, 18);
+
+  // Explicit empty array stays empty even across sync recovery (does not resurrect defaults)
+  await api.savePresets([]);
+  delete saved[api.PRESETS_STORAGE_KEY];
+  delete saved[api.LOCAL_BACKUP_KEY];
+  assert.deepEqual(clone(await api.loadPresets()), []);
+
+  // Export & import backup data round-trip
+  const backup = await api.exportBackupData();
+  assert.equal(backup.format, 'yomikui-search-presets');
+  await api.importBackupData(api.exportPresetsPayload(many.slice(0, 3)));
+  assert.equal((await api.loadPresets()).length, 3);
+
+  // Merge import keeps existing and adds new
+  await api.importPresets(JSON.stringify([many[2], many[5]]), 'merge');
+  assert.equal((await api.loadPresets()).length, 4);
+});
+
+test('PresetButton and Preset Switcher UI support search, tag filtering, pin toggle, cursor stepping, and today peek', async () => {
+  const { api, clock } = setup();
+  const jsx = makeJsx();
+  const Button = (props) => ({ type: 'Button', props });
+  const navigated = [];
+  const stepped = [];
+  const applied = [];
+  const pinned = [];
+  let panelMode = null;
+
+  const presets = [
+    api.normalizePreset({
+      id: 'p1',
+      name: '撮影 model',
+      tags: ['写真'],
+      pinned: true,
+      includeQuery: true,
+      query: '撮影 and (model or モデル)',
+      tab: 'live',
+      filters: { media: 'images', minFaves: 50 },
+      periodMode: 'cursor',
+      cursorUnit: 'month',
+      cursorSince: '2026-10-01',
+      cursorUntil: '2026-11-01',
+      lastCheckedAt: clock.now,
+    }),
+    api.normalizePreset({
+      id: 'p2',
+      name: 'FX ドル円',
+      tags: ['投資'],
+      pinned: false,
+      includeQuery: true,
+      query: 'FX and ドル円',
+      tab: 'top',
+      filters: { media: 'images', minFaves: 50, relativePeriod: 'day' },
+      periodMode: 'relative',
+    }),
+  ];
+
+  const baseState = {
+    get open() { return panelMode !== null; },
+    get panelMode() { return panelMode; },
+    setPanelMode: (m) => { panelMode = m; },
+    setOpen: (val) => { panelMode = (typeof val === 'function' ? val(panelMode !== null) : val) ? (panelMode || 'filters') : null; },
+    toggleOpen: () => { panelMode = panelMode === 'filters' ? null : 'filters'; },
+    toggleMode: (m) => { panelMode = panelMode === m ? null : m; },
+    isSearchPage: true,
+    isLiveFeed: false,
+    currentUrl: '/search?q=%E6%92%AE%E5%BD%B1&f=live',
+    tab: 'live',
+    baseText: '撮影 and (model or モデル)',
+    filters: api.normalizeFilters({ media: 'images', minFaves: 50, sinceDate: '2026-10-01', untilDate: '2026-11-01' }),
+    activeCount: 3,
+    presets,
+    activePresetId: 'p1',
+    activePreset: presets[0],
+    isTempToday: false,
+    navigateSearch: (path) => navigated.push(path),
+    applyPreset: (p, opts) => applied.push({ id: p.id, opts }),
+    stepPresetAndApply: (p, delta) => stepped.push({ id: p.id, delta }),
+    togglePresetPin: (id) => pinned.push(id),
+    returnToPresetCursor: () => navigated.push('return-cursor'),
+    enterTempTodayPreview: () => navigated.push('temp-today'),
+    clearActivePreset: () => {},
+    addPreset: async () => {},
+    updatePreset: async () => {},
+    deletePreset: async () => {},
+    importPresets: async () => presets,
+  };
+
+  const presetBtn = api.PresetButton({ searchState: baseState, Button, jsx });
+  assert.ok(presetBtn);
+  assert.equal(presetBtn.props['aria-expanded'], false);
+  presetBtn.props.onClick({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(panelMode, 'presets');
+
+  const hooks = [];
+  let hookIdx = 0;
+  const useState = (init) => {
+    const idx = hookIdx++;
+    if (!(idx in hooks)) hooks[idx] = typeof init === 'function' ? init() : init;
+    return [hooks[idx], val => { hooks[idx] = typeof val === 'function' ? val(hooks[idx]) : val; }];
+  };
+  const render = () => {
+    hookIdx = 0;
+    return api.FilterPanel({
+      searchState: baseState,
+      jsx,
+      useState,
+      useEffect: () => {},
+      useRef: () => ({ current: null }),
+    });
+  };
+
+  const tree = render();
+  const nodes = flattenNodes(tree);
+  assert.ok(nodes.some(n => String(n.props?.className).includes('rd-search-preset-switcher')));
+  assert.ok(nodes.some(n => String(n.props?.className).includes('rd-search-period-minibar')));
+  // Shows both presets, cursor progress badge, and today-checked badge
+  const allText = textContent(tree);
+  assert.ok(allText.includes('進捗: 2026年10月'));
+  assert.ok(allText.includes('✓ 今日確認'));
+  assert.ok(allText.includes('FX ドル円'));
+
+  // Search filter narrows list to FX ドル円 only
+  const searchInput = nodes.find(n => n.type === 'input' && n.props['aria-label'] === 'プリセット検索');
+  searchInput.props.onChange({ currentTarget: { value: 'ドル円' } });
+  const filteredTree = render();
+  const filteredText = textContent(filteredTree);
+  assert.ok(filteredText.includes('FX ドル円'));
+  assert.equal(filteredText.includes('進捗: 2026年10月'), false);
+
+  // Clear search and test quick buttons on row
+  searchInput.props.onChange({ currentTarget: { value: '' } });
+  const allBtns = flattenNodes(render()).filter(n => n.type === 'button');
+  allBtns.find(b => b.props['aria-label'] === '撮影 model を1つ前へ進める').props.onClick({ stopPropagation() {} });
+  assert.deepEqual(clone(stepped), [{ id: 'p1', delta: -1 }]);
+
+  allBtns.find(b => b.props['aria-label'] === '撮影 model を今日のみで開く').props.onClick({ stopPropagation() {} });
+  assert.deepEqual(clone(applied), [{ id: 'p1', opts: { mode: 'today' } }]);
+
+  allBtns.find(b => b.props['aria-label'] === 'FX ドル円 ピン留め切替').props.onClick({ stopPropagation() {} });
+  assert.deepEqual(clone(pinned), ['p2']);
+});
+
+test('contentDeck integrates PresetButton, excludes search filters from local storage wipe, and includes presets in backup', () => {
+  assert.ok(deckSource.includes('YomikuiSearchFilters?.PresetButton'));
+  assert.ok(deckSource.includes('!r.startsWith("yomikui_search_filter")'));
+  assert.ok(deckSource.includes('exportBackupData'));
+  assert.ok(deckSource.includes('importBackupData'));
+  assert.ok(jaMessages.search_preset_button?.message);
 });

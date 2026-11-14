@@ -1126,5 +1126,11 @@
   },
   "search_filter_current_year": {
     "message": "今年"
+  },
+  "search_preset_button": {
+    "message": "検索プリセット"
+  },
+  "search_preset_switcher_title": {
+    "message": "検索プリセット"
   }
 }
