@@ -15,7 +15,17 @@
   const EXCLUDED_INTERNAL_ROUTE_RE = /^\/i\/(?:flow|chat|grok|keyboard_shortcuts|display|verified-choose|premium_sign_up|spaces|broadcasts)(?:\/|$)/i;
   const PROFILE_PATH_RE = /^\/[A-Za-z0-9_]+$/;
   const STATUS_LIST_SUFFIX_RE = /\/status\/\d+\/(quotes|retweets|likes)$/i;
+  const REVIEW_LIST_RE = /\/status\/\d+\/(quotes|retweets)$/i;
   const PROFILE_SECTION_PATH_RE = /^\/([A-Za-z0-9_]+)(?:\/(?:all|with_replies|highlights|media|articles))?$/i;
+  const PROFILE_ALL_PATH_RE = /^\/([A-Za-z0-9_]+)\/all\/?$/i;
+  const PRIMARY_COLUMN = '[data-testid="primaryColumn"]';
+  const TWEET = 'article[data-testid="tweet"]';
+  const USER_CELL = '[data-testid="UserCell"]';
+  const USER_NAME = '[data-testid="User-Name"]';
+  const TWEET_AVATAR = '[data-testid="Tweet-User-Avatar"]';
+  const USER_DESCRIPTION = '[data-testid="UserDescription"]';
+  const QUOTED_TWEET = '[data-testid="quoteTweet"], [data-testid="tweetQuote"]';
+  const LAST_PROFILE_VIEWED = "data-yomikui-last-profile-viewed";
 
   const RESERVED_ROOT_PATHS = new Set([
     "home",
@@ -62,6 +72,11 @@
       return pathname + parsed.search;
     }
     return null;
+  }
+
+  function profileAllHandle(value) {
+    const match = parseInternalUrl(value)?.pathname.match(PROFILE_ALL_PATH_RE);
+    return match && isProfilePath(`/${match[1]}`) ? match[1].toLowerCase() : null;
   }
 
   const IGNORED_CONTAINERS_SELECTOR = [
@@ -272,7 +287,9 @@
 
   // --- Parent frame state & routing ---
   const pendingPaths = new Map();
+  const pendingProfileReviews = new Map();
   const focusTimers = new WeakMap();
+  let nextReviewId = 0;
 
   function readPendingPath(columnId, consume) {
     if (!columnId || !pendingPaths.has(columnId)) return null;
@@ -296,7 +313,68 @@
   }
 
   function clearPending(columnId) {
-    if (columnId) pendingPaths.delete(columnId);
+    if (!columnId) return;
+    pendingPaths.delete(columnId);
+    for (const [targetId, review] of pendingProfileReviews) {
+      if (targetId === columnId || review.sourceId === columnId) clearProfileReview(targetId);
+    }
+  }
+
+  function findColumn(columnId) {
+    const escapedId = globalThis.CSS?.escape
+      ? globalThis.CSS.escape(columnId)
+      : String(columnId).replace(/["\\]/g, "\\$&");
+    return document.querySelector(`[data-column-id="${escapedId}"]`);
+  }
+
+  function clearProfileReview(targetId) {
+    const pending = pendingProfileReviews.get(targetId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    pendingProfileReviews.delete(targetId);
+    if (!pendingProfileReviews.size) window.removeEventListener("message", onProfileReviewMessage);
+  }
+
+  function startProfileReview({ targetId, sourceId, sourceOrigin, reviewView, path }) {
+    clearProfileReview(targetId);
+    if (typeof reviewView !== "string" || !reviewView || !isAllowedOrigin(sourceOrigin)) return null;
+    const handle = profileAllHandle(path);
+    if (!handle) return null;
+
+    const request = { id: ++nextReviewId, handle, deadline: Date.now() + PENDING_TTL_MS };
+    const timeout = setTimeout(() => clearProfileReview(targetId), PENDING_TTL_MS);
+    if (!pendingProfileReviews.size) window.addEventListener("message", onProfileReviewMessage);
+    pendingProfileReviews.set(targetId, { request, timeout, sourceId, sourceOrigin, reviewView });
+    return request;
+  }
+
+  function onProfileReviewMessage(event) {
+    const message = event.data;
+    const ready = message?.type === "yomikui-frame-ready";
+    if (!(ready || message?.type === "yomikui-profile-review-displayed") || !isAllowedOrigin(event.origin)) return;
+    for (const [targetId, pending] of pendingProfileReviews) {
+      if (message.columnId && message.columnId !== targetId) continue;
+      if (!ready && message.id !== pending.request.id) continue;
+      const frame = findColumn(targetId)?.querySelector("iframe")?.contentWindow;
+      if (!frame || event.source !== frame) continue;
+      if (Date.now() >= pending.request.deadline) {
+        clearProfileReview(targetId);
+        return;
+      }
+      if (ready) {
+        // Profile navigation replaces the iframe document. Its existing ready
+        // message lets the new document pick up the in-memory request.
+        frame.postMessage({ type: "yomikui-profile-review-watch", request: pending.request }, event.origin);
+      } else {
+        clearProfileReview(targetId);
+        findColumn(pending.sourceId)?.querySelector("iframe")?.contentWindow?.postMessage({
+          type: "yomikui-profile-review-mark",
+          view: pending.reviewView,
+          handle: pending.request.handle,
+        }, pending.sourceOrigin);
+      }
+      return;
+    }
   }
 
   function resolveIframeOrigin(iframe) {
@@ -317,7 +395,7 @@
     return "*";
   }
 
-  function route({ columns, sourceId, statusPath, routePath, isComposing = false, columnComposing = null }) {
+  function route({ columns, sourceId, statusPath, routePath, isComposing = false, columnComposing = null, reviewView, sourceOrigin }) {
     const path = normalizeRoutePath(routePath ?? statusPath);
     if (!path || !Array.isArray(columns)) return false;
     const source = columns.find(c => c && c.id === sourceId);
@@ -326,10 +404,7 @@
     if (!target) return false;
     if (isComposing || columnComposing?.[target.id]) return false;
 
-    const escapedId = globalThis.CSS?.escape
-      ? globalThis.CSS.escape(target.id)
-      : String(target.id).replace(/["\\]/g, "\\$&");
-    const el = document.querySelector(`[data-column-id="${escapedId}"]`);
+    const el = findColumn(target.id);
     if (!el) return false;
     const iframe = el.querySelector("iframe");
 
@@ -340,12 +415,17 @@
         isAboutBlank = iframe.contentWindow.location?.href === "about:blank";
       } catch {}
     }
+    const review = startProfileReview({
+      targetId: target.id, sourceId, sourceOrigin, reviewView: isLiveFeed ? null : reviewView, path,
+    });
     if (iframe?.contentWindow && !isLiveFeed && !isAboutBlank) {
       const origin = resolveIframeOrigin(iframe);
+      const message = { type: "yomikui-tweet-route-open", path };
+      if (review) message.review = review;
       try {
-        iframe.contentWindow.postMessage({ type: "yomikui-tweet-route-open", path }, origin);
+        iframe.contentWindow.postMessage(message, origin);
       } catch {
-        iframe.contentWindow.postMessage({ type: "yomikui-tweet-route-open", path }, "*");
+        iframe.contentWindow.postMessage(message, "*");
       }
       pendingPaths.delete(target.id);
     } else if (isAboutBlank && !isLiveFeed && iframe?.src) {
@@ -385,6 +465,168 @@
   let frameInstalled = false;
   let getColumnIdFn = null;
   let getParentOriginFn = null;
+  let reviewList = null;
+  let reviewColumnVisible = true;
+  let profileWatch = null;
+
+  function reviewListKey() {
+    return normalizeStatusPath(window.location.pathname)?.match(REVIEW_LIST_RE)?.[0].toLowerCase();
+  }
+
+  function findProfileHandle(scope) {
+    for (const link of scope?.querySelectorAll("a[href]") ?? []) {
+      if (link.closest(`${USER_DESCRIPTION}, ${QUOTED_TWEET}`)) continue;
+      const handle = profileAllHandle(getProfileAllPath(link.getAttribute("href")));
+      if (handle) return handle;
+    }
+    return null;
+  }
+
+  function reviewRowHandle(row, selector) {
+    return findProfileHandle(row.querySelector(USER_NAME)) ??
+      findProfileHandle(selector === TWEET ? row.querySelector(TWEET_AVATAR) : row);
+  }
+
+  function reviewViewForClick(target, path) {
+    const key = reviewListKey();
+    const handle = key && profileAllHandle(path);
+    if (!handle) return null;
+    const selector = key.endsWith("/quotes") ? TWEET : USER_CELL;
+    const row = target.closest(selector);
+    if (!row?.closest(PRIMARY_COLUMN) || row.parentElement?.closest(selector)) return null;
+    if (selector === TWEET && !row.querySelector(USER_NAME)?.contains(target) &&
+        !row.querySelector(TWEET_AVATAR)?.contains(target)) return null;
+    if (reviewRowHandle(row, selector) !== handle) return null;
+
+    if (reviewList?.key !== key) {
+      clearReviewList();
+      reviewList = { key, selector, id: crypto.randomUUID(), last: null };
+    }
+    return reviewList.id;
+  }
+
+  function paintReviewRow(view, row) {
+    if (row.parentElement?.closest(view.selector)) return;
+    row.toggleAttribute(LAST_PROFILE_VIEWED, reviewRowHandle(row, view.selector) === view.last);
+  }
+
+  function paintChangedReviewRows(view, records) {
+    if (reviewList !== view) return;
+    if (reviewListKey() !== view.key) { clearReviewList(); return; }
+    const primary = document.querySelector(PRIMARY_COLUMN);
+    if (!primary) return;
+    const rows = new Set();
+    for (const { target, addedNodes } of records) {
+      const row = target.closest?.(view.selector);
+      if (row && primary.contains(row)) {
+        rows.add(row);
+        continue;
+      }
+      for (const node of addedNodes ?? []) {
+        if (node.nodeType !== 1) continue;
+        if (node.contains(primary)) {
+          for (const row of primary.querySelectorAll(view.selector)) rows.add(row);
+        } else if (primary.contains(node)) {
+          if (node.matches(view.selector)) rows.add(node);
+          for (const row of node.querySelectorAll(view.selector)) rows.add(row);
+        }
+      }
+    }
+    for (const row of rows) paintReviewRow(view, row);
+  }
+
+  function syncReviewMarks() {
+    const view = reviewList;
+    if (!view?.last) return;
+    if (document.hidden || !reviewColumnVisible) {
+      view.observer?.disconnect();
+      view.observer = null;
+      return;
+    }
+    if (!view.style?.isConnected) {
+      const style = document.createElement("style");
+      style.textContent = `
+        [${LAST_PROFILE_VIEWED}] { box-shadow: inset 3px 0 #1d9bf0; }
+        @media (forced-colors: active) {
+          [${LAST_PROFILE_VIEWED}] { outline: 2px solid Highlight; outline-offset: -2px; }
+        }
+      `;
+      (document.head ?? document.documentElement).appendChild(style);
+      view.style = style;
+    }
+    const primary = document.querySelector(PRIMARY_COLUMN);
+    for (const row of primary?.querySelectorAll(view.selector) ?? []) paintReviewRow(view, row);
+    if (!view.observer) {
+      view.observer = new MutationObserver(records => paintChangedReviewRows(view, records));
+      view.observer.observe(primary?.closest("main") ?? document.body, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ["href"],
+      });
+    }
+  }
+
+  function clearReviewList() {
+    const view = reviewList;
+    if (!view) return;
+    reviewList = null;
+    view.observer?.disconnect();
+    view.style?.remove();
+    if (!view.last) return;
+    for (const row of document.querySelectorAll(`[${LAST_PROFILE_VIEWED}]`)) row.removeAttribute(LAST_PROFILE_VIEWED);
+  }
+
+  function markReviewedProfile(message) {
+    if (!reviewList || reviewList.id !== message.view || typeof message.handle !== "string") return;
+    if (reviewListKey() !== reviewList.key) { clearReviewList(); return; }
+    reviewList.last = message.handle;
+    syncReviewMarks();
+  }
+
+  function stopProfileWatch() {
+    if (!profileWatch) return;
+    profileWatch.observer?.disconnect();
+    clearTimeout(profileWatch.scan);
+    clearTimeout(profileWatch.timeout);
+    profileWatch = null;
+  }
+
+  function watchProfileDisplay(request, origin) {
+    const handle = profileAllHandle(window.location.pathname);
+    const remaining = request?.deadline - Date.now();
+    if (!handle || request?.handle !== handle || !Number.isSafeInteger(request.id) ||
+        !(remaining > 0 && remaining <= PENDING_TTL_MS) || profileWatch?.id === request.id) return;
+    stopProfileWatch();
+    const watch = { id: request.id, handle, scan: null };
+    profileWatch = watch;
+    const check = () => {
+      watch.scan = null;
+      if (Date.now() >= request.deadline || profileAllHandle(window.location.pathname) !== handle) {
+        stopProfileWatch();
+        return;
+      }
+      const primary = document.querySelector(PRIMARY_COLUMN);
+      if (!primary) return;
+      const tab = primary.querySelector('[role="tab"][aria-selected="true"][href]');
+      if (profileAllHandle(tab?.getAttribute("href")) !== handle ||
+          primary.querySelector('[data-testid="error-detail"]') ||
+          !primary.querySelector(`${TWEET}, [data-testid="emptyState"]`)) return;
+      stopProfileWatch();
+      window.parent.postMessage({ type: "yomikui-profile-review-displayed", id: watch.id }, origin);
+    };
+    check();
+    if (profileWatch !== watch) return;
+    watch.observer = new MutationObserver(() => {
+      if (watch.scan === null) watch.scan = setTimeout(check, ARRIVAL_CHECK_DEBOUNCE_MS);
+    });
+    watch.observer.observe(document.body ?? document.documentElement, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected", "href"],
+    });
+    watch.timeout = setTimeout(stopProfileWatch, remaining);
+  }
+
+  function onReviewLocationChange() {
+    if (reviewList && reviewListKey() !== reviewList.key) clearReviewList();
+    if (profileWatch && profileAllHandle(window.location.pathname) !== profileWatch.handle) stopProfileWatch();
+  }
 
   function extractQuoteStatusPath(quoteCard) {
     if (!quoteCard || typeof quoteCard.querySelectorAll !== "function") return null;
@@ -406,7 +648,7 @@
     for (const link of links) {
       const allPath = getProfileAllPath(normalizeRoutePath(link.getAttribute("href")));
       if (!allPath) continue;
-      if (!link.closest?.('[data-testid="UserDescription"]')) return allPath;
+      if (!link.closest?.(USER_DESCRIPTION)) return allPath;
       if (!fallback) fallback = allPath;
     }
     return fallback;
@@ -503,10 +745,13 @@
       event.stopImmediatePropagation();
       const columnId = typeof getColumnIdFn === "function" ? getColumnIdFn() : null;
       const origin = (typeof getParentOriginFn === "function" ? getParentOriginFn() : null) || "*";
+      const message = { type: "yomikui-open-tweet", statusPath: route, columnId };
+      const view = reviewViewForClick(target, route);
+      if (view) message.reviewView = view;
       try {
-        window.parent.postMessage({ type: "yomikui-open-tweet", statusPath: route, columnId }, origin);
+        window.parent.postMessage(message, origin);
       } catch {
-        window.parent.postMessage({ type: "yomikui-open-tweet", statusPath: route, columnId }, "*");
+        window.parent.postMessage(message, "*");
       }
       return;
     }
@@ -828,7 +1073,18 @@
     getColumnIdFn = getColumnId;
     getParentOriginFn = getParentOrigin;
 
-    window.addEventListener("pagehide", cleanupPendingNavigation);
+    window.addEventListener("pagehide", () => {
+      cleanupPendingNavigation();
+      clearReviewList();
+      stopProfileWatch();
+    });
+    window.addEventListener("popstate", onReviewLocationChange);
+    window.navigation?.addEventListener("currententrychange", onReviewLocationChange);
+    document.addEventListener("visibilitychange", syncReviewMarks);
+    window.addEventListener("yomikui-frame-column-visibility", event => {
+      reviewColumnVisible = event.detail?.visible !== false;
+      syncReviewMarks();
+    });
 
     // A newly mounted column can load the list directly. History traversal
     // should continue to restore the position from the previous visit.
@@ -842,7 +1098,15 @@
       if (!event.data || typeof event.data !== "object") return;
       if (event.data.type === "yomikui-tweet-route-open") {
         const path = normalizeRoutePath(event.data.path);
-        if (path) openInPlace(path);
+        if (!path) return;
+        const alreadyOpen = normalizeRoutePath(window.location.href) === path;
+        stopProfileWatch();
+        openInPlace(path);
+        if (alreadyOpen && event.data.review) watchProfileDisplay(event.data.review, event.origin);
+      } else if (event.data.type === "yomikui-profile-review-watch") {
+        watchProfileDisplay(event.data.request, event.origin);
+      } else if (event.data.type === "yomikui-profile-review-mark") {
+        markReviewedProfile(event.data);
       }
     });
   }

@@ -42,6 +42,7 @@ function setup(html = "") {
   }
   const context = vm.createContext({
     ...clock.globals(),
+    crypto: { randomUUID },
     URL,
     URLSearchParams,
     window,
@@ -666,6 +667,7 @@ test("extension bundle and manifests integrate per-column link routing in Genera
   assert.match(deck, /resolvedTargetId:globalThis\.YomikuiTweetRouting\?\.resolveTargetColumn/);
   assert.match(deck, /routeTweets:Boolean\(TtId\)/);
   assert.match(deck, /globalThis\.YomikuiTweetRouting\.SettingsControls/);
+  assert.match(deck, /reviewView: De\.data\.reviewView, sourceOrigin: De\.origin/);
 
   // Check contentIframe.js integration
   assert.match(iframe, /globalThis\.YomikuiTweetRouting\?\.setFrameEnabled/);
@@ -765,4 +767,176 @@ test("profile clicks and routed arrivals load /all with the destination column m
     data: { type: "yomikui-tweet-route-open", path: "/frank/all" },
   });
   assert.equal(window.location.href, "https://x.com/frank/all?yomikui=1#yomikui-col1");
+});
+
+const LAST_VIEWED = "data-yomikui-last-profile-viewed";
+
+function receiveFromParent(window, data) {
+  window.emit("message", { source: window.parent, origin: "https://x.com", data });
+}
+
+test("quote progress highlights the last profile through row reuse and clears when leaving the list", () => {
+  const { routing, window, document, activate, observers } = setup(`
+    <main><div data-testid="primaryColumn">
+      <article data-testid="tweet" id="alice-row">
+        <div data-testid="Tweet-User-Avatar"><a href="/ALICE" id="avatar">Avatar</a></div>
+        <div data-testid="User-Name"><a href="/alice" id="alice">Alice</a></div>
+        <div data-testid="tweetQuote"><div data-testid="User-Name">
+          <a href="/original" id="original">Original</a>
+        </div></div>
+        <div data-testid="tweetText"><a href="/alice" id="mention">@alice</a></div>
+      </article>
+      <article data-testid="tweet" id="duplicate-row">
+        <div data-testid="User-Name"><a href="/Alice" id="duplicate">Another quote</a></div>
+      </article>
+      <article data-testid="tweet" id="bob-row">
+        <div data-testid="User-Name"><a href="/bob" id="bob">Bob</a></div>
+      </article>
+    </div></main>
+  `);
+  const listPath = "/author/status/101/quotes";
+  window.history.pushState(null, "", listPath);
+  window.navigation = new Events();
+  const messages = [];
+  window.parent.postMessage = message => messages.push(message);
+  routing.installFrame({ getColumnId: () => "c1", getParentOrigin: () => "https://x.com" });
+  routing.setFrameEnabled(true);
+  const initialObservers = observers.length;
+  for (const id of ["original", "mention"]) {
+    activate(id);
+    assert.equal(messages.pop().reviewView, undefined);
+  }
+  activate("avatar");
+  const view = messages.pop().reviewView;
+  assert.equal(typeof view, "string");
+  assert.equal(observers.length, initialObservers);
+  const highlighted = () => [...document.querySelectorAll(`[${LAST_VIEWED}]`)].map(row => row.id);
+  assert.deepEqual(highlighted(), []);
+
+  const mark = handle => receiveFromParent(window, { type: "yomikui-profile-review-mark", view, handle });
+  mark("alice");
+  assert.deepEqual(highlighted(), ["alice-row", "duplicate-row"]);
+
+  const recycled = document.getElementById("duplicate");
+  recycled.setAttribute("href", "/unviewed");
+  const observer = observers.at(-1);
+  observer.emit([{ type: "attributes", target: recycled }]);
+  assert.deepEqual(highlighted(), ["alice-row"]);
+
+  activate("bob");
+  assert.equal(messages.pop().reviewView, view);
+  assert.deepEqual(highlighted(), ["alice-row"]);
+  mark("bob");
+  assert.deepEqual(highlighted(), ["bob-row"]);
+  const newRow = document.getElementById("duplicate-row").cloneNode(true);
+  newRow.id = "new-quote-row";
+  const newLink = newRow.querySelector("a");
+  newLink.setAttribute("href", "/bob");
+  newLink.removeAttribute("id");
+  const primary = document.querySelector('[data-testid="primaryColumn"]');
+  primary.appendChild(newRow);
+  observer.emit([{ type: "childList", target: primary, addedNodes: [newRow] }]);
+  assert.deepEqual(highlighted(), ["bob-row", "new-quote-row"]);
+
+  window.history.pushState(null, "", "/author/status/101/retweets");
+  window.navigation.emit("currententrychange");
+  assert.equal(observer.connected, false);
+  assert.deepEqual(highlighted(), []);
+  window.history.pushState(null, "", listPath);
+  activate("alice");
+  assert.notEqual(messages.pop().reviewView, view);
+  mark("alice");
+  assert.deepEqual(highlighted(), []);
+});
+
+test("retweet progress waits for the latest routed profile to display in the destination frame", async () => {
+  const deck = setup(`
+    <div data-column-id="list"><iframe src="https://x.com/user/status/101/retweets"></iframe></div>
+    <div data-column-id="profile"><iframe src="https://x.com/home"></iframe></div>
+  `);
+  const deckMessageListeners = deck.window.listeners.get("message")?.length ?? 0;
+  const list = setup(`
+    <main><div data-testid="primaryColumn">
+      <div data-testid="UserCell" id="alice-row"><a href="/alice" id="alice">Alice</a>
+        <div data-testid="UserDescription"><a href="/friend" id="bio">@friend</a></div>
+      </div>
+      <div data-testid="UserCell" id="bob-row"><a href="/bob" id="bob">Bob</a></div>
+    </div></main>
+  `);
+  list.window.history.pushState(null, "", "/user/status/101/retweets");
+  list.routing.installFrame({ getColumnId: () => "list", getParentOrigin: () => "https://x.com" });
+  list.routing.setFrameEnabled(true);
+
+  let target = setup();
+  const columns = [{ id: "list", linkTarget: "profile" }, { id: "profile" }];
+  const messages = [];
+  const targetFrame = {
+    location: target.window.location,
+    postMessage(data) {
+      messages.push(data);
+      receiveFromParent(target.window, data);
+    },
+  };
+  deck.document.querySelector('[data-column-id="list"] iframe').contentWindow = {
+    postMessage: data => receiveFromParent(list.window, data),
+  };
+  deck.document.querySelector('[data-column-id="profile"] iframe').contentWindow = targetFrame;
+  list.window.parent.postMessage = message => deck.routing.route({
+    columns, sourceId: "list", statusPath: message.statusPath,
+    reviewView: message.reviewView, sourceOrigin: "https://x.com",
+  });
+  function sendToDeck(data, source = targetFrame) {
+    deck.window.emit("message", { source, origin: "https://x.com", data });
+  }
+  const installTarget = () => {
+    target.window.parent.postMessage = data => sendToDeck(data);
+    target.routing.installFrame({ getColumnId: () => "profile", getParentOrigin: () => "https://x.com" });
+  };
+  installTarget();
+  list.activate("bio");
+  assert.equal(messages.at(-1).review, undefined);
+  list.activate("alice-row");
+  const aliceRequest = messages.at(-1).review;
+  assert.equal(aliceRequest.handle, "alice");
+  assert.match(target.window.location.href, /\/alice\/all/);
+  list.activate("bob");
+  const bobRequest = messages.at(-1).review;
+  assert.notEqual(bobRequest.id, aliceRequest.id);
+
+  // A slow reply from the previous request and a reply from another window
+  // cannot complete Bob's route.
+  sendToDeck({ type: "yomikui-profile-review-displayed", id: aliceRequest.id });
+  sendToDeck({ type: "yomikui-profile-review-displayed", id: bobRequest.id }, {});
+  assert.equal(list.document.querySelector(`[${LAST_VIEWED}]`), null);
+
+  // The full /all navigation replaces the document, preserving the iframe.
+  target = setup(`<div data-testid="primaryColumn" id="profile-main">
+    <a href="/bob/all" role="tab" aria-selected="true">All</a>
+    <div data-testid="error-detail" id="retry">Retry</div>
+  </div>`);
+  target.window.history.pushState(null, "", "/bob/all");
+  targetFrame.location = target.window.location;
+  installTarget();
+  sendToDeck({ type: "yomikui-frame-ready", columnId: "profile" });
+  assert.equal(messages.at(-1).type, "yomikui-profile-review-watch");
+  assert.equal(list.document.querySelector(`[${LAST_VIEWED}]`), null);
+  const profileMain = target.document.getElementById("profile-main");
+  target.document.getElementById("retry").remove();
+  profileMain.insertAdjacentHTML("beforeend", '<div data-testid="emptyState">No posts yet</div>');
+  const watch = target.observers.at(-1);
+  watch.emit();
+  await target.clock.advance(60);
+  assert.equal(list.document.querySelector(`[${LAST_VIEWED}]`).id, "bob-row");
+  assert.equal(watch.connected, false);
+  assert.equal(deck.window.listeners.get("message").length, deckMessageListeners);
+
+  // An already open timeline can be confirmed by the existing document.
+  list.activate("bob-row");
+  assert.ok(list.document.getElementById("bob-row").hasAttribute(LAST_VIEWED));
+  assert.equal(deck.window.listeners.get("message").length, deckMessageListeners);
+
+  list.activate("alice");
+  await deck.clock.advance(15_000);
+  assert.equal(deck.window.listeners.get("message").length, deckMessageListeners);
+  assert.equal(list.document.querySelector(`[${LAST_VIEWED}]`).id, "bob-row");
 });
