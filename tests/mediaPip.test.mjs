@@ -109,15 +109,15 @@ test('a failed PiP play request leaves the original column playing', async () =>
   assert.equal(document.querySelector('video'), null);
 });
 
-function nativeFrame() {
-  const { document: dom } = parseHTML(`<article>
+function nativeFrame(markup = `<article>
     <div data-testid="previewInterstitial"><img src="${poster.split('.jpg')[0]}?format=jpg"><button data-testid="playButton"></button></div>
     <div data-testid="videoPlayer"><video></video></div>
-  </article>`);
+  </article>`) {
+  const { document: dom } = parseHTML(markup);
   const video = dom.querySelector('video');
   Object.assign(video, { poster, currentSrc: 'blob:https://x.com/native', currentTime: 1.5, muted: false, volume: .8, playbackRate: 1 });
   let paused = false;
-  video.pause = () => { paused = true; };
+  video.pause = () => { paused = true; video.paused = true; };
   const clock = new Clock(), document = new Events(), window = new Events(), sent = [];
   document.getElementById = id => dom.getElementById(id);
   window.parent = { postMessage: (data, origin, ports) => sent.push({ data, origin, ports }) };
@@ -127,7 +127,7 @@ function nativeFrame() {
   const api = context.YomikuiMediaPipFrame;
   api.install({ getColumnId: () => 'column', isVisible: () => true });
   const state = { type: 'yomikui-media-pip-state', session: 'session' };
-  return { api, context, document, window, sent, channel, state, video, button: dom.querySelector('button'), paused: () => paused };
+  return { api, context, document, dom, window, sent, channel, state, video, button: dom.querySelector('button'), paused: () => paused };
 }
 
 test('the frame pairs a manual preview click with its replacement player and skips autoplay', () => {
@@ -149,6 +149,62 @@ test('the frame pairs a manual preview click with its replacement player and ski
   window.emit('message', { source: window.parent, origin: xOrigin, data: { ...state, session: null } });
   assert.equal(api.isOpen(), false);
   assert.equal(document.listeners.get('play').length, 0);
+});
+
+test('clicking a video card surface toggles playback and leaves controls and links usable', () => {
+  const { api, document, dom, window, state, sent, video } = nativeFrame(`<article data-testid="tweet">
+    <div data-testid="card.wrapper">
+      <div data-testid="card.layoutLarge.media">
+        <div data-testid="videoPlayer"><div data-testid="videoComponent">
+          <div><video></video></div>
+          <div tabindex="0"><div id="surface"></div></div>
+          <button data-testid="mute-button"><span id="mute"></span></button>
+          <div data-testid="scrubber"><span id="scrubber"></span></div>
+          <a href="/creator/status/123/video/1" id="credit">Original clip</a>
+        </div></div>
+      </div>
+      <a href="https://example.com/" id="external">Open site</a>
+    </div>
+    <div data-testid="videoPlayer"><video id="ordinary"></video></div>
+  </article>`);
+  video.paused = false;
+  video.play = async () => {
+    video.paused = false;
+    document.emit('play', { target: video, isTrusted: true });
+  };
+
+  function interact(id, options = {}) {
+    const event = {
+      type: 'click', target: dom.getElementById(id), button: 0, isTrusted: true,
+      preventDefault() { this.defaultPrevented = true; },
+      stopImmediatePropagation() { this.stopped = true; },
+      ...options,
+    };
+    document.dispatchEvent(event);
+    return [Boolean(event.defaultPrevented), Boolean(event.stopped)];
+  }
+
+  for (const type of ['mousedown', 'mouseup', 'click']) {
+    for (const id of ['mute', 'scrubber', 'credit', 'external', 'ordinary']) {
+      assert.deepEqual(interact(id, { type }), [false, false], `${type}: ${id}`);
+    }
+    assert.deepEqual(interact('surface', { type, ctrlKey: true }), [false, false]);
+  }
+  assert.deepEqual(interact('surface', { type: 'mousedown' }), [false, true]);
+  assert.deepEqual(interact('surface', { type: 'mouseup' }), [false, true]);
+  assert.equal(video.paused, false);
+  assert.deepEqual(interact('surface'), [true, true]);
+  assert.equal(video.paused, true);
+  assert.deepEqual(interact('surface'), [true, true]);
+  assert.equal(video.paused, false);
+  assert.equal(sent.length, 0);
+
+  video.pause();
+  api.rememberVideo(poster, videoUrl, 'video');
+  window.emit('message', { source: window.parent, origin: xOrigin, data: state });
+  assert.deepEqual(interact('surface'), [true, true]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].data.media.src, videoUrl);
 });
 
 test('the shipped timeline consumer finds the video of a repost original nested under legacy', () => {
