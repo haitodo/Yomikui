@@ -12,7 +12,7 @@
     "install:guide": "cmd /c install.bat"
   },
   "devDependencies": {
-    "@types/chrome": "^0.0.313",
+    "@types/chrome": "^0.3.7",
     "@types/node": "^26.6.6",
     "linkedom": "^0.18.15"
   }
