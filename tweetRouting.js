@@ -546,7 +546,11 @@
     if (!view.style?.isConnected) {
       const style = document.createElement("style");
       style.textContent = `
-        [${LAST_PROFILE_VIEWED}] { box-shadow: inset 3px 0 #1d9bf0; }
+        [${LAST_PROFILE_VIEWED}] {
+          /* Layer the tint over the column theme's background color. */
+          background-image: linear-gradient(rgb(29 155 240 / 14%), rgb(29 155 240 / 14%));
+          box-shadow: inset 3px 0 #1d9bf0;
+        }
         @media (forced-colors: active) {
           [${LAST_PROFILE_VIEWED}] { outline: 2px solid Highlight; outline-offset: -2px; }
         }
