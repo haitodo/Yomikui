@@ -120,6 +120,9 @@
   const FOCUS_DURATION_MS = 1500;
   const ARRIVAL_CHECK_DEBOUNCE_MS = 60;
   const FALLBACK_RELOAD_MS = 2500;
+  const INITIAL_LIST_SCROLL_MS = FALLBACK_RELOAD_MS + 500;
+  const SCROLL_INPUT_EVENTS = ["wheel", "touchmove", "pointerdown", "keydown"];
+  const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
   function isAllowedOrigin(origin) {
     if (typeof origin !== "string" || !origin.startsWith("https://")) return false;
@@ -509,6 +512,15 @@
     }
 
     if (anchor) {
+      if (sameTab && frameInstalled && anchor.closest("[data-yomikui-tweet-action]")) {
+        const path = normalizeStatusPath(anchor.getAttribute("href"));
+        if (path && STATUS_LIST_SUFFIX_RE.test(path)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          openInPlace(path);
+          return;
+        }
+      }
       const url = getProfileAllUrl(anchor);
       if (!url) return;
       // X's click handler can navigate using the original React link props.
@@ -541,50 +553,101 @@
   let pendingNavigationTimer = null;
   let pendingCheckTimer = null;
   let pendingNavigationObserver = null;
+  let pendingScrollFrame = null;
+  let stopListScroll = null;
   const pendingScrollTimers = new Set();
 
   function cancelPendingScrollTimers() {
+    if (pendingScrollFrame !== null) {
+      cancelAnimationFrame(pendingScrollFrame);
+      pendingScrollFrame = null;
+    }
     for (const timer of pendingScrollTimers) {
       clearTimeout(timer);
     }
     pendingScrollTimers.clear();
   }
 
-  function resetScrollToTop() {
+  function resetScrollerToTop(scroller) {
     try {
-      if (typeof window.scrollTo === "function") {
-        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-      }
+      scroller.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
     } catch {
-      try { window.scrollTo?.(0, 0); } catch {}
+      try { scroller.scrollTo?.(0, 0); } catch {}
     }
-    const candidates = [
+    if (scroller !== window && scroller.scrollTop !== 0) scroller.scrollTop = 0;
+  }
+
+  function resetScrollToTop({ includeListScroller = false } = {}) {
+    const primary = document.querySelector?.('[data-testid="primaryColumn"]');
+    const candidates = new Set([
+      window,
       document.scrollingElement,
       document.documentElement,
       document.body,
       document.getElementById("yomikui-timeline-root"),
-      document.querySelector?.('[data-testid="primaryColumn"]'),
+      primary,
       document.querySelector?.('main[role="main"]'),
-    ];
-    for (const el of candidates) {
-      if (!el) continue;
-      try {
-        if (typeof el.scrollTo === "function") {
-          el.scrollTo({ top: 0, left: 0, behavior: "instant" });
-        }
-      } catch {
-        try { el.scrollTo?.(0, 0); } catch {}
+    ]);
+    if (includeListScroller) {
+      const firstItem = primary?.querySelector('article[data-testid="tweet"], [data-testid="UserCell"]');
+      for (let parent = firstItem?.parentElement ?? primary; parent && parent !== document.body; parent = parent.parentElement) {
+        if (parent.scrollTop > 0) candidates.add(parent);
       }
-      try {
-        if (el.scrollTop !== 0) el.scrollTop = 0;
-      } catch {}
     }
+    for (const scroller of candidates) if (scroller) resetScrollerToTop(scroller);
+  }
+
+  function isCurrentList(suffix) {
+    return normalizeStatusPath(window.location.pathname)?.toLowerCase().endsWith(suffix) === true;
+  }
+
+  function keepInitialListScrollAtTop(suffix) {
+    const options = { capture: true, passive: true };
+    const leftList = () => {
+      if (isCurrentList(suffix)) return false;
+      cleanupPendingNavigation();
+      return true;
+    };
+    const onScroll = ({ target }) => {
+      if (leftList()) return;
+      const pageScroll = target === document || target === window;
+      const scroller = pageScroll ? document.scrollingElement ?? window : target;
+      const top = scroller === window ? window.scrollY : scroller?.scrollTop;
+      if (!(top > 0)) return;
+      const primary = document.querySelector('[data-testid="primaryColumn"]');
+      if (pageScroll || scroller === document.scrollingElement ||
+          (primary && (primary.contains(scroller) || scroller.contains(primary)))) {
+        resetScrollerToTop(scroller);
+      }
+    };
+    const onInput = event => {
+      if (event.type !== "keydown" || SCROLL_KEYS.has(event.key)) stop();
+    };
+    const stop = () => {
+      clearTimeout(timer);
+      for (const type of SCROLL_INPUT_EVENTS) window.removeEventListener(type, onInput, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("popstate", leftList);
+      stopListScroll = null;
+    };
+
+    // X can restore an old offset after the list renders. Correct it during
+    // navigation until the user starts interacting with the destination.
+    stopListScroll = stop;
+    const timer = setTimeout(stop, INITIAL_LIST_SCROLL_MS);
+    for (const type of SCROLL_INPUT_EVENTS) window.addEventListener(type, onInput, options);
+    window.addEventListener("scroll", onScroll, options);
+    window.addEventListener("popstate", leftList);
+    resetScrollToTop({ includeListScroller: true });
   }
 
   function scheduleScrollToTop() {
     resetScrollToTop();
     if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(resetScrollToTop);
+      pendingScrollFrame = requestAnimationFrame(() => {
+        pendingScrollFrame = null;
+        resetScrollToTop();
+      });
     }
     const schedule = (delay) => {
       const timer = setTimeout(() => {
@@ -597,7 +660,7 @@
     schedule(150);
   }
 
-  function cleanupPendingNavigation() {
+  function cleanupPendingArrival() {
     if (pendingNavigationTimer !== null) {
       clearTimeout(pendingNavigationTimer);
       pendingNavigationTimer = null;
@@ -610,15 +673,24 @@
       pendingNavigationObserver.disconnect();
       pendingNavigationObserver = null;
     }
+  }
+
+  function cleanupPendingNavigation() {
+    cleanupPendingArrival();
     cancelPendingScrollTimers();
+    stopListScroll?.();
   }
 
   function openInPlace(path) {
     const cleanPath = normalizeRoutePath(path);
     if (!cleanPath) return;
 
+    const listMatch = normalizeStatusPath(cleanPath)?.match(STATUS_LIST_SUFFIX_RE);
+    const listSuffix = listMatch?.[0].toLowerCase();
+    const listKind = listMatch?.[1].toLowerCase();
     const currentRoute = normalizeRoutePath(window.location?.href);
-    if (currentRoute && currentRoute.toLowerCase() === cleanPath.toLowerCase() && currentRoute === cleanPath) {
+    if (currentRoute === cleanPath) {
+      if (listKind) resetScrollToTop({ includeListScroller: true });
       return;
     }
 
@@ -648,15 +720,17 @@
     const url = cleanPath + (window.location?.hash || "");
     try {
       window.history.pushState(null, "", url);
-      window.dispatchEvent(new PopStateEvent("popstate", { state: null }));
-    } catch {}
+    } catch {
+      window.location.href = withPendingPath(window.location.href, cleanPath);
+      return;
+    }
+    try { window.dispatchEvent(new PopStateEvent("popstate", { state: null })); } catch {}
 
-    scheduleScrollToTop();
+    if (listKind) keepInitialListScrollAtTop(listSuffix);
+    else scheduleScrollToTop();
 
     const idMatch = cleanPath.match(/\/status\/(\d+)/);
     const tweetId = idMatch ? idMatch[1] : null;
-    const listMatch = cleanPath.match(STATUS_LIST_SUFFIX_RE);
-    const listKind = listMatch ? listMatch[1].toLowerCase() : null;
     const profileMatch =
       !tweetId &&
       cleanPath.match(PROFILE_SECTION_PATH_RE);
@@ -708,15 +782,28 @@
       return false;
     };
 
+    const finishIfArrived = () => {
+      if (listKind && !isCurrentList(listSuffix)) {
+        cleanupPendingNavigation();
+        return true;
+      }
+      if (!checkArrival()) return false;
+      cleanupPendingArrival();
+      if (listKind) {
+        if (stopListScroll) resetScrollToTop({ includeListScroller: true });
+      } else {
+        cancelPendingScrollTimers();
+        scheduleScrollToTop();
+      }
+      return true;
+    };
+
     if (typeof MutationObserver === "function") {
       pendingNavigationObserver = new MutationObserver(() => {
         if (pendingCheckTimer !== null) return;
         pendingCheckTimer = setTimeout(() => {
           pendingCheckTimer = null;
-          if (checkArrival()) {
-            cleanupPendingNavigation();
-            scheduleScrollToTop();
-          }
+          finishIfArrived();
         }, ARRIVAL_CHECK_DEBOUNCE_MS);
       });
       const root = document.body || document.documentElement;
@@ -726,11 +813,7 @@
     }
 
     pendingNavigationTimer = setTimeout(() => {
-      if (checkArrival()) {
-        cleanupPendingNavigation();
-        scheduleScrollToTop();
-        return;
-      }
+      if (finishIfArrived()) return;
       cleanupPendingNavigation();
       try {
         const fullUrl = new URL(url, window.location?.href || "https://x.com").href;
@@ -746,6 +829,13 @@
     getParentOriginFn = getParentOrigin;
 
     window.addEventListener("pagehide", cleanupPendingNavigation);
+
+    // A newly mounted column can load the list directly. History traversal
+    // should continue to restore the position from the previous visit.
+    const freshList = normalizeStatusPath(window.location.pathname)?.match(STATUS_LIST_SUFFIX_RE);
+    if (freshList && window.performance?.getEntriesByType("navigation")[0]?.type === "navigate") {
+      keepInitialListScrollAtTop(freshList[0].toLowerCase());
+    }
 
     window.addEventListener("message", event => {
       if (event.source !== window.parent || !isAllowedOrigin(event.origin)) return;

@@ -357,6 +357,96 @@ test("openInPlace resets scroll position to top on navigation and content arriva
   assert.equal(primary.scrollTop, 0);
 });
 
+test("tweet footer list buttons open at the top in the same column", () => {
+  for (const kind of ["quotes", "retweets"]) {
+    const { context, document, window, routing, activate } = setup(`
+      <main data-testid="primaryColumn">
+        <article data-testid="tweet">
+          <a href="/alice/status/123"><time>Now</time></a>
+          <div role="group"><button data-testid="reply">Reply</button></div>
+        </article>
+      </main>
+    `);
+    routing.installFrame({ getColumnId: () => "col1" });
+    context.YomikuiTweetActions.updateNative({});
+    document.querySelector(`[data-yomikui-tweet-action="${kind}"] a`).id = "list";
+    window.scrollY = 700;
+    window.scrollTo = ({ top }) => { window.scrollY = top; };
+
+    assert.equal(activate("list", { ctrlKey: true }).defaultPrevented, false);
+    assert.equal(window.scrollY, 700);
+    assert.equal(activate("list").defaultPrevented, true);
+    assert.equal(window.location.pathname, `/alice/status/123/${kind}`);
+    assert.equal(window.scrollY, 0);
+  }
+});
+
+test("a routed list corrects delayed scroll restoration until the user scrolls", async () => {
+  const { clock, document, observers, routing, window } = setup(`
+    <main data-testid="primaryColumn"><div id="list"><article data-testid="tweet"></article></div></main>
+  `);
+  routing.installFrame({ getColumnId: () => "col1" });
+  const path = "/alice/status/123/retweets";
+  const open = () => window.emit("message", {
+    source: window.parent, origin: "https://x.com",
+    data: { type: "yomikui-tweet-route-open", path },
+  });
+  const list = document.getElementById("list");
+  list.scrollTop = 500;
+  open();
+  assert.equal(list.scrollTop, 0);
+  list.innerHTML = '<div data-testid="UserCell">@retweeter</div>';
+  const arrival = observers.at(-1);
+  arrival.emit();
+  await clock.advance(600);
+  assert.equal(arrival.connected, false);
+
+  list.scrollTop = 400;
+  window.emit("scroll", { target: list });
+  assert.equal(list.scrollTop, 0);
+
+  window.emit("wheel");
+  list.scrollTop = 180;
+  window.emit("scroll", { target: list });
+  assert.equal(list.scrollTop, 180);
+
+  window.history.pushState = () => assert.fail("Opening the same list should not add a history entry");
+  open();
+  assert.equal(list.scrollTop, 0);
+});
+
+test("leaving a loading list releases its scroll handling and reload fallback", async () => {
+  const { clock, document, observers, routing, window } = setup();
+  routing.installFrame({ getColumnId: () => "col1" });
+  const timelineUrl = window.location.href;
+  routing.openInPlace("/alice/status/123/quotes");
+
+  window.location.href = timelineUrl;
+  window.location.pathname = "/home";
+  window.emit("popstate");
+  window.scrollY = 650;
+  window.scrollTo = () => assert.fail("Do not reset the timeline scroll after going back");
+  window.emit("scroll", { target: document });
+  assert.equal(observers.at(-1).connected, false);
+  await clock.advance(4000);
+  assert.equal(window.location.href, timelineUrl);
+});
+
+test("direct list loads start at the top and history visits keep their restored position", () => {
+  for (const type of ["navigate", "back_forward", "reload"]) {
+    const { document, routing, window } = setup();
+    window.history.pushState(null, "", "/alice/status/123/quotes#yomikui-col1");
+    window.performance = { getEntriesByType: () => [{ type }] };
+    window.scrollY = 0;
+    window.scrollTo = ({ top }) => { window.scrollY = top; };
+    routing.installFrame({ getColumnId: () => "col1" });
+
+    window.scrollY = 650;
+    window.emit("scroll", { target: document });
+    assert.equal(window.scrollY, type === "navigate" ? 0 : 650);
+  }
+});
+
 test("SettingsControls renders compact segmented buttons (self, next, custom) and inline target chips", () => {
   const { routing } = setup();
   const element = (type, props, key) => ({ type, props, key });
