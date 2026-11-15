@@ -145,21 +145,31 @@ test("wide styles release inline size limits on single media frames and preserve
   }
 });
 
-test("video sizing preserves the original poster link's avatar and emoji", () => {
+test("video sizing enlarges thumbnails without enlarging playback controls or attribution", () => {
   const WideMedia = loadWideMedia();
+  const creditLinks = ["/creator/status/123/video/1?t=83%2C132", "/i/status/123"];
+  const thumbnailUrl = "https://pbs.twimg.com/ext_tw_video_thumb/123/pu/img/poster.jpg";
+  const avatarUrl = "https://pbs.twimg.com/profile_images/123/avatar.jpg";
   const { document } = parseHTML(`
     <article data-testid="tweet">
       <div data-testid="tweetPhoto">
         <div data-testid="videoPlayer"><div>
           <div style="padding-bottom: 56.25%"></div>
           <div>
+            <div id="thumbnail-background" style="background-image: url('${thumbnailUrl}')"></div>
+            <img id="thumbnail" src="${thumbnailUrl}">
             <div data-testid="videoComponent">
-              <video></video>
-              <a href="/creator/status/123/video/1?t=83%2C132">
-                <div id="avatar-background" style="background-image: url(avatar.jpg)"></div>
-                <img id="avatar" src="avatar.jpg">
-                <span>Creator <img id="emoji" alt="🥽" src="emoji.svg"></span>
-              </a>
+              <div id="video-surface"><video></video></div>
+              <div id="playback-controls">
+                <div id="controls-gradient" style="background-image: linear-gradient(transparent, black)"></div>
+                ${creditLinks.map((href, index) => `
+                  <a href="${href}">
+                    <div id="avatar-background-${index}" style="background-image: url('${avatarUrl}')"></div>
+                    <img id="avatar-${index}" src="${avatarUrl}">
+                    <span>Creator <img id="emoji-${index}" alt="🥽" src="https://abs.twimg.com/emoji/v2/svg/1f97d.svg"></span>
+                  </a>
+                `).join("")}
+              </div>
             </div>
           </div>
         </div></div>
@@ -176,12 +186,15 @@ test("video sizing preserves the original poster link's avatar and emoji", () =>
 
   for (const mode of ["default", "small", "large"]) {
     const declarations = mediaDeclarations(document, WideMedia.buildMediaSizeCss(mode));
-    for (const selector of ["video", "#poster"]) {
+    for (const selector of ["video", "#poster", "#thumbnail"]) {
       assert.match(declarations(selector), /height: 100% !important/, `${mode}: ${selector}`);
       assert.match(declarations(selector), /object-fit: contain !important/, `${mode}: ${selector}`);
     }
-    for (const selector of ["#avatar-background", "#avatar", "#emoji"]) {
-      assert.doesNotMatch(declarations(selector), /(?:width|height|object-fit|background-size):/, `${mode}: ${selector}`);
+    assert.match(declarations("#thumbnail-background"), /background-size: contain !important/, mode);
+    for (const selector of ["#video-surface", "#playback-controls", "#controls-gradient", ...creditLinks.flatMap((_, index) => [
+      `#avatar-background-${index}`, `#avatar-${index}`, `#emoji-${index}`,
+    ])]) {
+      assert.doesNotMatch(declarations(selector), /(?:width|height|position|object-fit|background-size):/, `${mode}: ${selector}`);
     }
   }
 });

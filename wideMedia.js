@@ -7,6 +7,13 @@
 
   const WIDE_MIN_WIDTH_REM = 36; // 576px breakpoint
   const WIDE_MIN_WIDTH_PX = 576;
+  const TWIMG_HOST = "pbs.twimg.com";
+  const TWIMG_MEDIA_PATHS = [
+    "/media/",
+    "/ext_tw_video_thumb/",
+    "/amplify_video_thumb/",
+    "/tweet_video_thumb/",
+  ];
 
   const TWEET = 'article[data-testid="tweet"]';
   const PHOTO_LINK = 'a[role="link"][href*="/photo/"]';
@@ -14,10 +21,12 @@
   const VIDEO_PLAYER = `${TWEET} ${PLAYER}`;
   const TWEET_PHOTO = `${TWEET} [data-testid="tweetPhoto"]`;
   const MEDIA = `:is([data-testid="tweetPhoto"], ${PLAYER}, [data-testid="card.layoutLarge.media"])`;
-  // X renders the original poster's avatar and emoji inside a video link in the player.
-  const OUTSIDE_VIDEO_CREDIT = `:where(:not(${PLAYER} a[href*="/status/"][href*="/video/"] *))`;
-  const MEDIA_IMAGE = `img${OUTSIDE_VIDEO_CREDIT}`;
-  const MEDIA_BACKGROUND = `div[style*="background-image"]${OUTSIDE_VIDEO_CREDIT}`;
+  // Inside a player, resize only media assets so attribution and controls keep their native size.
+  const mediaUrlPrefixes = TWIMG_MEDIA_PATHS.map(path => `https://${TWIMG_HOST}${path}`);
+  const mediaSources = mediaUrlPrefixes.map(url => `[src^="${url}"]`).join(", ");
+  const mediaBackgrounds = mediaUrlPrefixes.map(url => `[style*="${url}"]`).join(", ");
+  const MEDIA_IMAGE = `img:where(:not(${PLAYER} *), ${mediaSources})`;
+  const MEDIA_BACKGROUND = `div[style*="background-image"][style*="url("]:where(:not(${PLAYER} *), ${mediaBackgrounds})`;
   const MEDIA_CONTENT = `:is(${MEDIA_IMAGE}, video, [data-testid="previewInterstitial"], ${MEDIA_BACKGROUND})`;
   const RATIO_SPACER = 'div[style*="padding-bottom"]';
   const SMALL_CARD = '[data-testid^="card.layoutSmall"]';
@@ -222,10 +231,11 @@
   function buildMediaSizeCss(mode = "default") {
     if (mode === "small") {
       const smallHeight = "140px";
+      const videoFrame = `${VIDEO_PLAYER} > div${RATIO_FRAME}`;
       const mediaContainers = `
         ${R1},
         ${IR},
-        ${VIDEO_PLAYER} > div,
+        ${videoFrame},
         ${TWEET_PHOTO} > div > div
       `;
       const paddingBoxes = `
@@ -425,18 +435,11 @@
     `;
   }
 
-  const TWIMG_MEDIA_PATHS = Object.freeze([
-    "/media/",
-    "/ext_tw_video_thumb/",
-    "/amplify_video_thumb/",
-    "/tweet_video_thumb/",
-  ]);
-
   function upgradeImageUrl(urlString) {
     if (typeof urlString !== "string" || !urlString) return null;
     try {
       const url = new URL(urlString);
-      if (url.hostname !== "pbs.twimg.com") return null;
+      if (url.hostname !== TWIMG_HOST) return null;
       if (!TWIMG_MEDIA_PATHS.some(prefix => url.pathname.startsWith(prefix))) return null;
       const currentName = url.searchParams.get("name");
       if (currentName === "large" || currentName === "orig" || currentName === "4096x4096") return null;
