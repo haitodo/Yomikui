@@ -125,9 +125,11 @@ function nativeFrame(markup = `<article>
   const context = vm.createContext({ ...clock.globals(), window, document, URL, MessageChannel: function () { return channel; } });
   vm.runInContext(frameSource, context);
   const api = context.YomikuiMediaPipFrame;
-  api.install({ getColumnId: () => 'column', isVisible: () => true });
+  let visible = true;
+  api.install({ getColumnId: () => 'column', isVisible: () => visible });
   const state = { type: 'yomikui-media-pip-state', session: 'session' };
-  return { api, context, document, dom, window, sent, channel, state, video, button: dom.querySelector('button'), paused: () => paused };
+  return { api, context, document, dom, window, sent, channel, state, video, clock,
+    button: dom.querySelector('button'), paused: () => paused, hideColumn: () => { visible = false; } };
 }
 
 test('the frame pairs a manual preview click with its replacement player and skips autoplay', () => {
@@ -149,6 +151,63 @@ test('the frame pairs a manual preview click with its replacement player and ski
   window.emit('message', { source: window.parent, origin: xOrigin, data: { ...state, session: null } });
   assert.equal(api.isOpen(), false);
   assert.equal(document.listeners.get('play').length, 0);
+});
+
+function previewPlayback() {
+  const frame = nativeFrame();
+  const { document, dom, video, button } = frame;
+  const player = video.parentElement;
+  player.getBoundingClientRect = () => ({ left: 10, top: 20, width: 320, height: 180 });
+  document.elementFromPoint = () => video;
+  const resume = dom.createElement('button');
+  resume.setAttribute('aria-label', 'プレイ');
+  resume.click = () => {
+    video.paused = false;
+    document.emit('playing', { target: video, isTrusted: true });
+  };
+  function start() {
+    document.emit('click', { target: button, button: 0, isTrusted: true });
+    button.parentElement.remove();
+    video.paused = false;
+    document.emit('playing', { target: video, isTrusted: true });
+  }
+  function pause() {
+    video.pause();
+    document.emit('pause', { target: video, isTrusted: true });
+    player.appendChild(resume);
+  }
+  return { ...frame, start, pause };
+}
+
+test('the first unexpected pause after a preview click resumes the native player once', () => {
+  const { start, pause, video, clock } = previewPlayback();
+  start();
+  clock.frame(500);
+  pause();
+  assert.equal(video.paused, true);
+  clock.frame(16);
+  assert.equal(video.paused, false);
+
+  pause();
+  clock.frame(16);
+  assert.equal(video.paused, true);
+});
+
+test('the preview retry leaves intentional, late, offscreen and PiP pauses alone', () => {
+  for (const [name, interrupt] of [
+    ['manual', ({ document, video }) => document.emit('keydown', { target: video, isTrusted: true, key: ' ' })],
+    ['late', ({ clock }) => clock.frame(2000)],
+    ['offscreen', ({ document }) => { document.elementFromPoint = () => null; }],
+    ['hidden column', ({ hideColumn }) => hideColumn()],
+    ['PiP', ({ window, state }) => window.emit('message', { source: window.parent, origin: xOrigin, data: state })],
+  ]) {
+    const frame = previewPlayback();
+    frame.start();
+    interrupt(frame);
+    frame.pause();
+    frame.clock.frame(16);
+    assert.equal(frame.video.paused, true, name);
+  }
 });
 
 test('clicking a video card surface toggles playback and leaves controls and links usable', () => {
