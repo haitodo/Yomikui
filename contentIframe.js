@@ -1341,6 +1341,10 @@ var FH="yomikui-one-click-block-styles",Ni="yomikui-ocb-wrapper",yh="yomikui-ocb
     ::-webkit-scrollbar-thumb:hover { background: #6e7c8a; }
   `),t.push(`
     html { overflow-x: hidden !important; }
+    [data-testid="hoverCardParent"],
+    [data-testid="HoverCard"] {
+      display: none !important;
+    }
   `),t.push(globalThis.YomikuiWideMedia?.buildLayoutCss(e)??(e.hideBanner?`
       header[role="banner"] { display: none !important; }
       main { padding-left: 0 !important; }
