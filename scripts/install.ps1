@@ -21,21 +21,83 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-# 2. pnpm の確認
-if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-    Write-Host "[エラー] pnpm が見つかりません。" -ForegroundColor Red
+# 2. 動作する pnpm の探索 (Node.js 25+ の Corepack 廃止による古いシム残存にも対応)
+function Find-WorkingPnpm {
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    $addCandidate = {
+        param([string]$Path)
+        if (-not [string]::IsNullOrWhiteSpace($Path) -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            if ($seen.Add($Path)) {
+                $candidates.Add($Path)
+            }
+        }
+    }
+
+    foreach ($cmd in (Get-Command pnpm -All -ErrorAction SilentlyContinue | Sort-Object {
+        if ($_.Source -like "*.exe") { 0 } elseif ($_.Source -like "*.cmd") { 1 } elseif ($_.Source -like "*.ps1") { 2 } else { 3 }
+    })) {
+        & $addCandidate $cmd.Source
+    }
+
+    if ($env:PNPM_HOME) {
+        & $addCandidate (Join-Path $env:PNPM_HOME "pnpm.exe")
+        & $addCandidate (Join-Path $env:PNPM_HOME "bin\pnpm.exe")
+        & $addCandidate (Join-Path $env:PNPM_HOME "pnpm.cmd")
+    }
+    if ($env:LOCALAPPDATA) {
+        & $addCandidate (Join-Path $env:LOCALAPPDATA "pnpm\pnpm.exe")
+        & $addCandidate (Join-Path $env:LOCALAPPDATA "pnpm\bin\pnpm.exe")
+    }
+    if ($env:APPDATA) {
+        & $addCandidate (Join-Path $env:APPDATA "npm\pnpm.cmd")
+    }
+
+    $hadBroken = $false
+    foreach ($candidate in $candidates) {
+        $ext = [System.IO.Path]::GetExtension($candidate).ToLowerInvariant()
+        if ($ext -notin @(".exe", ".cmd", ".bat", ".ps1")) {
+            continue
+        }
+        try {
+            & $candidate --version *> $null
+            if ($LASTEXITCODE -eq 0) {
+                return [PSCustomObject]@{ Path = $candidate; HadBroken = $hadBroken }
+            }
+            $hadBroken = $true
+        } catch {
+            $hadBroken = $true
+        }
+    }
+
+    return [PSCustomObject]@{ Path = $null; HadBroken = $hadBroken }
+}
+
+$pnpmResult = Find-WorkingPnpm
+$pnpmBin = $pnpmResult.Path
+if (-not $pnpmBin) {
+    if ($pnpmResult.HadBroken) {
+        Write-Host "[エラー] pnpm の起動に失敗しました (古い Node.js の Corepack シムが残っている可能性があります)。" -ForegroundColor Red
+        Write-Host "Node.js 25 以降では Corepack が同梱されないため、スタンドアロン版 pnpm を導入し、" -ForegroundColor Yellow
+        Write-Host "古いシム (例: C:\Program Files\nodejs\pnpm*) を削除または PATH の順序を見直してください。" -ForegroundColor Yellow
+    } else {
+        Write-Host "[エラー] pnpm が見つかりません。" -ForegroundColor Red
+    }
     Write-Host "本プロジェクトでは pnpm が必須です (npm / yarn / bun は使用禁止)。" -ForegroundColor Yellow
-    Write-Host "PowerShell / コマンドプロンプトで以下を実行してインストールしてください:" -ForegroundColor Yellow
-    Write-Host "  corepack enable  または  npm i -g pnpm" -ForegroundColor Yellow
+    Write-Host "PowerShell で以下を実行してスタンドアロン版 pnpm をインストールしてください:" -ForegroundColor Yellow
+    Write-Host "  irm https://get.pnpm.io/install.ps1 | iex  (または winget install pnpm.pnpm)" -ForegroundColor Yellow
     Read-Host "Enterキーを押して終了してください..."
     exit 1
 }
+
+$env:PATH = "$(Split-Path -Parent $pnpmBin);$env:PATH"
 
 # 3. node_modules の確認
 $nodeModules = Join-Path $rootPath "node_modules"
 if (-not (Test-Path $nodeModules)) {
     Write-Host "[1/2] 依存パッケージをセットアップしています (pnpm install)..." -ForegroundColor Yellow
-    & pnpm install
+    & $pnpmBin install
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[エラー] pnpm install に失敗しました。" -ForegroundColor Red
         Read-Host "Enterキーを押して終了してください..."
@@ -45,7 +107,7 @@ if (-not (Test-Path $nodeModules)) {
 
 # 4. 最新版のビルド (dist フォルダ生成)
 Write-Host "[1/2] 拡張機能の最新版を展開フォルダー (dist) に配置しています..." -ForegroundColor Yellow
-& pnpm run build
+& $pnpmBin run build
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[エラー] ビルドに失敗しました。" -ForegroundColor Red
     Read-Host "Enterキーを押して終了してください..."
