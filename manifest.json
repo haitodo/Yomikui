@@ -42,6 +42,16 @@
   "content_scripts": [
     {
       "matches": [
+        "https://twitter.com/yomikui/status/0*",
+        "https://*.twitter.com/yomikui/status/0*",
+        "https://x.com/yomikui/status/0*",
+        "https://*.x.com/yomikui/status/0*"
+      ],
+      "js": ["deckBootstrap.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
         "https://twitter.com/yomikui*",
         "https://*.twitter.com/yomikui*",
         "https://x.com/yomikui*",

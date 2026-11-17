@@ -9,10 +9,12 @@
   }
   if (deckPath !== '/yomikui/status/0' && deckPath !== '/yomikui/status/0/') return;
 
-  const telemetrySwitches = [
+  const disabledSwitches = [
     'responsive_web_scribe_nested_quoted_tweet_impression_enabled',
     'responsive_web_scribe_conversation_reply_dwell_linger_enabled',
     'responsive_web_scribe_linger_fair_view_time_enabled',
+    // X mounts a lazy Grok component for this feature while rendering posts.
+    'responsive_web_grok_analyze_post_followups_enabled',
   ];
 
   const bootstrapKey = '__INITIAL_STATE__';
@@ -34,7 +36,7 @@
         const overrides = settings?.customOverrides;
         if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return;
 
-        for (const name of telemetrySwitches) {
+        for (const name of disabledSwitches) {
           const value = overrides[name] ?? settings.user?.config?.[name]?.value ?? settings.defaultConfig?.[name]?.value;
           // The legacy client consults these overrides ahead of server flags.
           if (typeof value === 'boolean') Reflect.set(overrides, name, false);

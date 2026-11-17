@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { parseHTML } from 'linkedom';
 import { Events } from './helpers.mjs';
 
 test('Dve sets initial isIntersecting to false and mounts only when visible or keepMounted', () => {
@@ -128,6 +129,37 @@ test('manifest.json restricts contentDeck content script matches to yomikui rout
     'https://x.com/yomikui*',
     'https://*.x.com/yomikui*'
   ]);
+});
+
+const deckBootstrap = readFileSync(new URL('../deckBootstrap.js', import.meta.url), 'utf8');
+const deckPagePolicy = 'meta[http-equiv="Content-Security-Policy"]';
+
+function startDeckBootstrap(document, pathname, isFrame = false) {
+  const window = { location: { pathname } };
+  window.top = isFrame ? {} : window;
+  vm.runInNewContext(deckBootstrap, { document, window, MutationObserver: document.defaultView.MutationObserver });
+}
+
+test('the early dashboard script adds the document policy before X scripts in the head', () => {
+  const { document } = parseHTML('<html><head><script src="/native.js"></script></head><body></body></html>');
+  for (const [path, isFrame] of [['/home', false], ['/yomikui/status/01', false], ['/yomikui/status/0/photo/1', false], ['/yomikui/status/0', true]]) {
+    startDeckBootstrap(document, path, isFrame);
+    assert.equal(document.querySelector(deckPagePolicy), null);
+  }
+  startDeckBootstrap(document, '/yomikui/status/0/');
+  assert.equal(document.head.firstElementChild, document.querySelector(deckPagePolicy));
+  assert.equal(document.head.firstElementChild.content, "script-src 'none'");
+});
+
+test('the manifest runs the dashboard policy in the isolated world at document start', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const entry = manifest.content_scripts.find(script => script.js?.includes('deckBootstrap.js'));
+  assert.equal(entry.run_at, 'document_start');
+  assert.equal(entry.world ?? 'ISOLATED', 'ISOLATED');
+  assert.equal(entry.all_frames ?? false, false);
+  for (const host of ['x.com', '*.x.com', 'twitter.com', '*.twitter.com']) {
+    assert.ok(entry.matches.includes(`https://${host}/yomikui/status/0*`));
+  }
 });
 
 test('tweetActions restricts characterData observation to retweet targets and prunes irrelevant response subtrees', () => {

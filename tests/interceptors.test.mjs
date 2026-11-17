@@ -97,15 +97,16 @@ test('Live Feed XHR skips both text reads and JSON serialization', () => {
 const quoteImpressions = 'responsive_web_scribe_nested_quoted_tweet_impression_enabled';
 const replyDwell = 'responsive_web_scribe_conversation_reply_dwell_linger_enabled';
 const scrollDwell = 'responsive_web_scribe_linger_fair_view_time_enabled';
+const grokFollowups = 'responsive_web_grok_analyze_post_followups_enabled';
 const detailPrefetch = 'responsive_web_tweet_details_prefetch_enabled';
 
-test('native deck columns disable only known timeline telemetry before X consumes startup state', () => {
+test('native deck columns disable timeline telemetry and Grok follow-ups before X consumes startup state', () => {
   const env = browserEnvironment();
   env.window.parent = env.window.top = { location: { pathname: '/yomikui/status/0/' } };
   evaluate(env.context, 'nativeTimeline.js');
 
   const featureSwitch = {
-    defaultConfig: { [quoteImpressions]: { value: true }, [detailPrefetch]: { value: true } },
+    defaultConfig: { [quoteImpressions]: { value: true }, [detailPrefetch]: { value: true }, [grokFollowups]: { value: true } },
     user: { config: { [replyDwell]: { value: true } } },
     customOverrides: { [scrollDwell]: true, [detailPrefetch]: true },
   };
@@ -113,7 +114,7 @@ test('native deck columns disable only known timeline telemetry before X consume
   env.window.__INITIAL_STATE__ = state;
   assert.equal(env.window.__INITIAL_STATE__, state);
   assert.deepEqual(featureSwitch.customOverrides, {
-    [quoteImpressions]: false, [replyDwell]: false, [scrollDwell]: false, [detailPrefetch]: true,
+    [quoteImpressions]: false, [replyDwell]: false, [scrollDwell]: false, [detailPrefetch]: true, [grokFollowups]: false,
   });
   assert.equal(featureSwitch.defaultConfig[quoteImpressions].value, true);
   assert.equal(featureSwitch.user.config[replyDwell].value, true);
