@@ -175,6 +175,26 @@ test('the refresh button indicates a full reload before submitting search or Exp
   assert.match(mixed.title, /話題を検索 1列を再読み込みします/);
 });
 
+test('the refresh button follows changes to the warning on visible Home columns', () => {
+  const ui = panel(setup(), {
+    columns: ['one', 'two', 'offscreen'].map(id => ({ id, type: 'home' })),
+    visible: ['one', 'two'], kinds: { one: 'recommended', two: 'recommended', offscreen: 'recommended' },
+    highTweetLoadIds: new Set(['offscreen']),
+  });
+  const refresh = () => ui.byClass('yf-refresh').props;
+  assert.equal(refresh().children[1], '更新');
+  assert.match(refresh().title, /おすすめ 2列の新着を読み込みます/);
+  ui.render({ highTweetLoadIds: new Set(['one', 'offscreen']) });
+  assert.equal(refresh().children[1], '再読込あり');
+  assert.match(refresh().title, /おすすめ 1列を再読み込みします/);
+  assert.match(refresh().title, /おすすめ 1列の新着を読み込みます/);
+  ui.render({ highTweetLoadIds: new Set(['one', 'two']) });
+  assert.equal(refresh().children[1], '再読み込み');
+  assert.match(refresh().title, /おすすめ 2列を再読み込みします/);
+  ui.render({ highTweetLoadIds: new Set() });
+  assert.equal(refresh().children[1], '更新');
+});
+
 test('results stay inside the refresh button with a live announcement and no layout row', () => {
   const env = setup();
   const initial = panel(env);

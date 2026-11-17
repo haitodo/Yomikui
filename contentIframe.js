@@ -1689,6 +1689,8 @@ function startNativeHomeRefresh() {
     getSettings: () => je,
     getScroller: _Q,
     isTabRestoring: () => ru !== null,
+    getTweetCount: () => frameMaintenance?.count,
+    reportActiveTab: () => TB(() => ln),
     getOrigin: () => Uh,
     getColumnId: () => ln,
   });

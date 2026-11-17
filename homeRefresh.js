@@ -18,6 +18,7 @@
   const FRAME_TIMEOUT = 12000;
   const REQUEST_TIMEOUT = 11000;
   const RELOAD_TIMEOUT = 20000;
+  const HIGH_TWEET_LOAD_COUNT = 100;
   const RELOAD_KEY = 'yomikui_page_refresh_v1:';
   const REASONS = {
     'not-home': '更新対象以外のページを表示中',
@@ -45,7 +46,8 @@
   const readingKind = getSettings => globalThis.YomikuiHomeScroll.readingKind(getSettings);
   const currentPath = () => window.location.pathname + (window.location.search || '');
   const homeKind = kind => kind === 'recommended' || kind === 'following';
-  const reloadable = kind => refreshable(kind);
+  const hasHighTweetLoad = count => Number.isFinite(count) && count >= HIGH_TWEET_LOAD_COUNT;
+  const shouldReload = (kind, highTweetLoad) => globalThis.YomikuiHomeScroll.isReloadRefreshKind(kind, highTweetLoad);
   const reloadKind = path => typeof path !== 'string' ? null :
     SEARCH_PATH_RE.test(path) ? 'search' :
     EXPLORE_PATH_RE.test(path) ? 'explore' : null;
@@ -350,6 +352,8 @@
         if (!window.location.hash?.includes('yomikui') && bootstrapHash.includes('yomikui')) {
           window.history.replaceState(window.history.state, '', currentPath() + bootstrapHash);
         }
+        // A recent tab click may still be waiting to report its selection.
+        if (homeKind(kind)) options.reportActiveTab?.();
         window.sessionStorage.setItem(reloadKey, JSON.stringify({
           id: job.id, kind, path: currentPath(), origin: options.getOrigin(), started: Date.now(),
           boundary: boundary.snapshot(kind),
@@ -430,8 +434,13 @@
       }
       const job = { id: data.requestId, abort: new AbortController() };
       active = job;
-      if (globalThis.YomikuiHomeScroll.isReloadRefreshKind(data.target)) reloadPage(job, data.target).catch(error => finish(job, failure(error)));
-      else refresher.refresh(job.abort.signal, data.target).catch(failure).then(result => finish(job, result));
+      // The column may have been reloaded separately since the batch was started.
+      const highTweetLoad = data.reload === true && hasHighTweetLoad(options.getTweetCount?.());
+      if (shouldReload(data.target, highTweetLoad)) {
+        reloadPage(job, data.target).catch(error => finish(job, failure(error)));
+      } else {
+        refresher.refresh(job.abort.signal, data.target).catch(failure).then(result => finish(job, result));
+      }
     };
     const cancel = () => {
       active?.abort.abort();
@@ -451,7 +460,7 @@
     } catch {}
     if (receipt && typeof receipt.id === 'string' && receipt.id.length > 0 && receipt.id.length <= 100 &&
         receipt.origin === options.getOrigin() && trustedOrigin(receipt.origin) &&
-        reloadable(receipt.kind) && reloadPathMatches(receipt.kind, receipt.path) &&
+        refreshable(receipt.kind) && reloadPathMatches(receipt.kind, receipt.path) &&
         Number.isFinite(receipt.started) && Date.now() >= receipt.started && Date.now() - receipt.started < RELOAD_TIMEOUT) {
       const job = { id: receipt.id, abort: new AbortController(), resuming: true };
       active = job;
@@ -540,13 +549,14 @@
         }, REQUEST_TIMEOUT);
         try { pending.frame.postMessage({
           type: REQUEST, requestId: pending.id, columnId: pending.columnId, target: pending.kind,
+          reload: pending.reload,
         }, pending.origin); } catch { pending.finish({ status: 'failed', reason: 'error' }); }
-      } else if (data.type === RELOADING && pending.sent && reloadable(pending.kind) && !pending.reloading) {
+      } else if (data.type === RELOADING && pending.sent && pending.reload && !pending.reloading) {
         pending.reloading = true;
         clearTimeout(pending.deadline);
         pending.deadline = setTimeout(() => this.cancelPending('timeout'), RELOAD_TIMEOUT + 1000);
       } else if (data.type === RESULT && pending.sent && ['updated', 'reloaded', 'requested', 'skipped', 'failed'].includes(data.status)) {
-        if (data.status === 'reloaded' && (!pending.reloading || !reloadable(pending.kind))) return;
+        if (data.status === 'reloaded' && !pending.reloading) return;
         if (['updated', 'reloaded', 'requested'].includes(data.status) && !this.pendingIsCurrent()) {
           pending.finish({ status: 'skipped', reason: 'target-changed' });
           return;
@@ -555,12 +565,13 @@
       }
     }
 
-    requestColumn(column, signal) {
+    requestColumn(column, signal, highTweetLoad) {
       const columnId = column.id;
       return new Promise(resolve => {
         const pending = {
           id: crypto.randomUUID(), columnId, frame: null, origin: null, sent: false,
-          kind: column.refreshKind, reloading: false, deadline: null, poll: null,
+          kind: column.refreshKind, reload: shouldReload(column.refreshKind, highTweetLoad),
+          reloading: false, deadline: null, poll: null,
         };
         let finished = false;
         pending.finish = result => {
@@ -603,7 +614,7 @@
       });
     }
 
-    async run({ target = 'all' } = {}) {
+    async run({ target = 'all', highTweetLoadIds } = {}) {
       if (this.disposed || this.active || Date.now() < this.cooldownUntil || document.hidden) return;
       if (Array.isArray(target)) target = [...new Set(target)];
       const state = this.getState();
@@ -624,7 +635,7 @@
             result = { status: 'skipped', reason: 'draft' };
           } else {
             current.markColumnActivity?.(column.id);
-            result = await this.requestColumn(column, job.abort.signal);
+            result = await this.requestColumn(column, job.abort.signal, highTweetLoadIds?.has(column.id));
           }
           results.push({ columnId: column.id, title: column.title, kind: column.refreshKind, ...result });
           this.publish({ results: [...results], done: results.length });
@@ -675,7 +686,7 @@
     ].filter(Boolean).join(' ／ ');
   }
 
-  function FloatingControl({ React, jsx, store, columns, frames, origins, onMountChange, hidden }) {
+  function FloatingControl({ React, jsx, store, columns, frames, origins, highTweetLoadIds, onMountChange, hidden }) {
     const [view, setView] = React.useState({ phase: 'idle', results: [], total: 0, done: 0 });
     const [reading, setReading] = React.useState({ busy: false, results: [], message: '' });
     const [kinds, setKinds] = React.useState({});
@@ -731,8 +742,12 @@
         result.status === 'requested' ? result.method === 'reload' ? '再読み込み操作済み・一覧表示未確認' : '更新操作済み・表示変化未確認' : REASONS[result.reason] || '応答未確認'
     }`).join('\n');
     return jsx.jsx(globalThis.YomikuiFloatingControls.Panel, {
-      React, jsx, columns, view, reading, hidden, kinds, workspaceId, onVisibleChange, onCancelWheel, canRefresh: columns.some(isNativeColumn), refreshText: summary(view), refreshDetails: details,
-      onRefresh: action => { if (store.getState().activeWorkspaceId === workspaceId && !reader.current?.active) { reader.current?.clearWheel(); controller.current?.run(action); } },
+      React, jsx, columns, view, reading, hidden, kinds, workspaceId, highTweetLoadIds, onVisibleChange, onCancelWheel, canRefresh: columns.some(isNativeColumn), refreshText: summary(view), refreshDetails: details,
+      onRefresh: action => {
+        if (store.getState().activeWorkspaceId !== workspaceId || reader.current?.active) return;
+        reader.current?.clearWheel();
+        controller.current?.run({ ...action, highTweetLoadIds });
+      },
       onCancelRefresh: () => controller.current?.cancel(),
       onNavigate: action => { if (store.getState().activeWorkspaceId === workspaceId && !controller.current?.active) reader.current?.move(action); },
       onWheel: action => store.getState().activeWorkspaceId === workspaceId && !controller.current?.active && reader.current?.wheel(action) === true,
@@ -740,6 +755,6 @@
   }
 
   globalThis.YomikuiHomeRefresh = Object.freeze({
-    NativeRefresher, BatchRefresher, FloatingControl, installFrame, summary,
+    NativeRefresher, BatchRefresher, FloatingControl, installFrame, hasHighTweetLoad, summary,
   });
 })();

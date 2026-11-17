@@ -674,7 +674,7 @@
     ] });
   }
 
-  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onCancelRefresh, onNavigate, onWheel, onCancelWheel, workspaceId = 'default', kinds = {}, onVisibleChange }) {
+  function Panel({ React, jsx, columns, view, reading, refreshText, refreshDetails, canRefresh, hidden, onRefresh, onCancelRefresh, onNavigate, onWheel, onCancelWheel, workspaceId = 'default', kinds = {}, highTweetLoadIds, onVisibleChange }) {
     const [prefs, setPrefs] = React.useState(preferences);
     const [selection, setSelection] = React.useState(() => ({ workspaceId, value: selectionPreferences(), ready: false }));
     const [visible, setVisible] = React.useState(() => new Set());
@@ -775,15 +775,17 @@
     const displayCounts = countsRef.current.counts;
     const selectedColumns = targetReady ? visibleColumns.filter(column => matchesTarget(column, target, kinds)) : [];
     const { REFRESH_KINDS, isReloadRefreshKind } = globalThis.YomikuiHomeScroll;
-    const refreshTargets = REFRESH_KINDS.map(kind => ({
-      kind, count: selectedColumns.filter(column => kinds[column.id] === kind).length,
-    })).filter(item => item.count);
-    const hasReload = refreshTargets.some(item => isReloadRefreshKind(item.kind));
-    const hasUpdate = refreshTargets.some(item => !isReloadRefreshKind(item.kind));
-    const refreshPlan = refreshTargets.map(({ kind, count }) => {
-      const columns = `${GROUPS[kind]} ${count}列`;
-      return isReloadRefreshKind(kind) ? `${columns}を再読み込みします。` : `${columns}の新着を読み込みます。`;
-    }).join('');
+    const refreshTargets = REFRESH_KINDS.map(kind => {
+      const groupColumns = selectedColumns.filter(column => kinds[column.id] === kind);
+      const reloadCount = groupColumns.filter(column => isReloadRefreshKind(kind, highTweetLoadIds?.has(column.id))).length;
+      return { kind, reloadCount, updateCount: groupColumns.length - reloadCount };
+    }).filter(item => item.reloadCount || item.updateCount);
+    const hasReload = refreshTargets.some(item => item.reloadCount > 0);
+    const hasUpdate = refreshTargets.some(item => item.updateCount > 0);
+    const refreshPlan = refreshTargets.map(({ kind, reloadCount, updateCount }) => [
+      reloadCount > 0 ? `${GROUPS[kind]} ${reloadCount}列を再読み込みします。` : '',
+      updateCount > 0 ? `${GROUPS[kind]} ${updateCount}列の新着を読み込みます。` : '',
+    ].filter(Boolean).join('')).join('');
     const selected = !targetReady ? '読み込み中' : target.map(kind => GROUPS[kind]).join('・') || '対象未選択';
     const selectionVisible = selectedColumns.length > 0;
     wheelRef.current = action => targetReady && selectionVisible && !busy && !positionRef.current?.drag && onWheel?.({ target, ...action }) === true;

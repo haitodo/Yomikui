@@ -420,12 +420,31 @@ test('a skipped or cancelled refresh preserves the previous landmark', async () 
   installed.dispose();
 });
 
-test('a pending Home reload from an earlier version restores its landmark', async () => {
-  const replacement = homeFrameSetup('following', { selected: 'recommended' });
-  replacement.storage.set(reloadKey, JSON.stringify({
-    id: 'reload1', kind: 'following', path: '/home', origin: 'https://x.com', started: 0,
-    boundary: { id: '101', kind: 'following', path: '/home' },
-  }));
+test('the Home reload keeps the selected tab and marks the post at the top before reloading', async () => {
+  const env = homeFrameSetup('following');
+  env.options.getTweetCount = () => 100;
+  let reportedTab = null;
+  env.options.reportActiveTab = () => {
+    reportedTab = env.document.querySelector('[role="tab"][aria-selected="true"]').id;
+  };
+  env.document.getElementById('tweets').innerHTML = tweet('999');
+  env.scroller.scrollTo = ({ top }) => {
+    env.scroller.scrollTop = top;
+    env.document.getElementById('tweets').innerHTML = tweet('101');
+  };
+  const reload = env.window.location.reload;
+  env.window.location.reload = () => { assert.equal(reportedTab, 'following'); reload(); };
+  const installed = env.api.installFrame(env.options);
+  assert.equal(env.reloads.length, 0);
+  env.send({ reload: true });
+  await settle(); await env.clock.advance(200);
+  assert.equal(env.reloads.length, 1);
+  assert.equal(env.messages.at(-1).data.type, P + 'reloading');
+  assert.deepEqual(JSON.parse(env.storage.get(reloadKey)).boundary, { id: '101', kind: 'following', path: '/home' });
+  env.window.emit('pagehide');
+
+  const replacement = homeFrameSetup('following', { selected: 'recommended', storage: env.storage });
+  replacement.clock.now = env.clock.now;
   const resumed = replacement.api.installFrame(replacement.options);
   await settle(); await replacement.clock.advance(80);
   assert.equal(replacement.document.querySelector('.yomikui-refresh-boundary'), null);
@@ -436,7 +455,7 @@ test('a pending Home reload from an earlier version restores its landmark', asyn
   assert.equal(replacement.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
   assert.equal(replacement.storage.has(reloadKey), false);
   assert.equal(replacement.reloads.length, 0);
-  resumed.dispose();
+  resumed.dispose(); installed.dispose();
   assert.equal(replacement.clock.timers.size, 0);
 });
 
@@ -1141,7 +1160,7 @@ function batchSetup({ columns, quiet, offscreen = [], currentKinds = {} } = {}) 
       if (data.type === P + 'probe') {
         env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'ready' } });
       } else if (data.type === P + 'request') {
-        const reload = ['explore', 'search'].includes(data.target);
+        const reload = data.reload === true;
         if (reload) env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'reloading' } });
         env.clock.setTimeout(() => env.window.emit('message', { source: frame, origin, data: { ...data, type: P + 'result', status: reload ? 'reloaded' : 'updated', method: reload ? 'reload' : 'tab' } }), 30);
       }
@@ -1236,8 +1255,9 @@ test('one batch dispatches each visible current page to its own refresh strategy
 for (const kind of ['explore', 'search', 'recommended', 'following']) {
   test(`${kind} reload tolerates its unloading context but waits for a trusted completion before advancing`, async () => {
     const env = batchSetup({ columns: [{ id: 'news', type: 'home' }, { id: 'home', type: 'home' }], currentKinds: { news: kind }, quiet: (id, type) => id === 'news' && type === P + 'request' });
-    const run = env.batch.run({ target: 'all' });
+    const run = env.batch.run({ highTweetLoadIds: new Set(['news']) });
     const request = env.messages.find(message => message.type === P + 'request');
+    assert.equal(request.reload, true);
     const emit = (type, status, changes = {}) => env.window.emit('message', {
       source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + type, status, method: 'reload' }, ...changes,
     });
@@ -1265,7 +1285,7 @@ for (const kind of ['explore', 'search', 'recommended', 'following']) {
   for (const change of ['offscreen', 'page', 'frame', 'workspace']) {
     test(`${kind} reload is cancelled on ${change} without replaying it`, async () => {
       const env = batchSetup({ columns: [{ id: 'news', type: 'home' }, { id: 'home', type: 'home' }], currentKinds: { news: kind }, quiet: (id, type) => id === 'news' && type === P + 'request' });
-      const run = env.batch.run();
+      const run = env.batch.run({ highTweetLoadIds: new Set(['news']) });
       const request = env.messages.find(message => message.type === P + 'request');
       env.window.emit('message', { source: env.frames.get('news'), origin: 'https://x.com', data: { ...request, type: P + 'reloading' } });
       env.report('news', null);
@@ -1355,7 +1375,7 @@ test('a readiness reply cannot refresh a column that has left the selected group
   }
 });
 
-test('the floating control enables search-origin columns and forwards the selected target to the actual refresher', async () => {
+test('the floating control forwards the current target and the columns with a warning to the refresher', async () => {
   const env = batchSetup({ columns: [
     { id: 'search1', type: 'search' }, { id: 'search2', type: 'search' },
   ], currentKinds: { search1: 'recommended', search2: 'recommended' } });
@@ -1371,14 +1391,18 @@ test('the floating control enables search-origin columns and forwards the select
   };
   const store = { getState: () => env.state, subscribe: () => () => {} };
   const element = (type, props) => ({ type, props });
+  const highTweetLoadIds = new Set(['search2']);
   const panel = env.api.FloatingControl({
     React, jsx: { jsx: element }, store, columns: env.state.columns, frames: { current: env.frames },
-    origins: { current: new Map() }, onMountChange() {}, hidden: false,
+    origins: { current: new Map() }, highTweetLoadIds, onMountChange() {}, hidden: false,
   });
   assert.equal(panel.props.canRefresh, true);
-  panel.props.onRefresh({ target: 'search2' });
+  assert.equal(panel.props.highTweetLoadIds, highTweetLoadIds);
+  panel.props.onRefresh({ target: ['recommended'] });
   await env.clock.advance(1000);
-  assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.columnId), ['search2']);
+  assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => [message.columnId, message.reload]), [
+    ['search1', false], ['search2', true],
+  ]);
   cleanups.reverse().forEach(cleanup => cleanup?.());
   env.batch.dispose();
 });
@@ -1395,6 +1419,8 @@ test('spoofed and stale result messages cannot advance the batch', async () => {
   assert.equal(env.messages.length, 1);
   env.window.emit('message', valid);
   assert.equal(env.messages[1].type, P + 'request');
+  env.window.emit('message', { ...valid, data: { ...valid.data, type: P + 'reloading' } });
+  assert.equal(env.batch.pending.reloading, false, 'a normal update cannot enter the reload wait');
   env.window.emit('message', { ...valid, data: { ...valid.data, type: P + 'result', status: 'invented' } });
   assert.equal(env.views.at(-1).done, 0);
   env.batch.cancel();
@@ -1517,7 +1543,10 @@ test('the shipped dashboard renders one floating control and keeps its target fr
   const controls = nodes.filter(node => node.type === env.api.FloatingControl);
   assert.equal(controls.length, 1);
   assert.equal(controls[0].props.store, store);
-  assert.equal(nodes.find(node => node.type === 'UA').props.keepMounted, true);
+  assert.ok(controls[0].props.highTweetLoadIds instanceof Set);
+  const column = nodes.find(node => node.type === 'UA');
+  assert.equal(column.props.keepMounted, true);
+  assert.equal(typeof column.props.onHighTweetLoadChange, 'function');
 });
 
 test('the shipped native initializer installs the refresher with the actual column accessors', () => {
@@ -1533,24 +1562,34 @@ test('the shipped native initializer installs the refresher with the actual colu
   assert.match(bundle, /HO\(\),startFrameMaintenance\(\),startNativeHomeRefresh\(\)/);
 });
 
-test('the shipped initializer updates a Home column at 200 posts and marks the previous first post', async () => {
-  const env = setup();
+test('the shipped initializer rechecks a Home reload request against the current count at 99 and 100 posts', async () => {
   const bundle = readFileSync(new URL('../contentIframe.js', import.meta.url), 'utf8');
   const start = bundle.indexOf('function startNativeHomeRefresh()');
   const end = bundle.indexOf('function EO(', start);
-  const maintenance = { count: 199 };
-  Object.assign(env.context, { je: env.settings, _Q: () => env.scroller, Uh: 'https://x.com', ln: 'column1', frameMaintenance: maintenance, ru: null });
-  vm.runInContext(bundle.slice(start, end) + 'startNativeHomeRefresh();', env.context);
-  env.document.getElementById('recommended').addEventListener('click', () => {
-    env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101');
-  });
-  maintenance.count = 200;
-  env.window.emit('message', { source: env.window.parent, origin: 'https://x.com', data: { type: P + 'request', columnId: 'column1', requestId: 'reload1', target: 'recommended' } });
-  await settle();
-  await env.clock.advance(280);
-  assert.equal(env.reloads.length, 0);
-  assert.equal(env.messages.at(-1).data.status, 'updated');
-  assert.equal(env.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
+  for (const count of [99, 100]) {
+    const env = homeFrameSetup();
+    const reportedTabs = [];
+    Object.assign(env.context, {
+      je: env.settings, _Q: () => env.scroller, Uh: 'https://x.com', ln: 'column1', ru: null,
+      frameMaintenance: { count }, TB: getId => reportedTabs.push(getId()),
+    });
+    vm.runInContext(bundle.slice(start, end) + 'startNativeHomeRefresh();', env.context);
+    const highTweetLoad = count === 100;
+    assert.equal(env.api.hasHighTweetLoad(count), highTweetLoad);
+    env.document.getElementById('recommended').addEventListener('click', () => {
+      env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101');
+    });
+    env.send({ reload: true });
+    await settle(); await env.clock.advance(280);
+    assert.equal(env.reloads.length, highTweetLoad ? 1 : 0);
+    if (highTweetLoad) {
+      assert.equal(env.messages.at(-1).data.type, P + 'reloading');
+      assert.deepEqual(reportedTabs, ['column1']);
+    } else {
+      assert.equal(env.messages.at(-1).data.status, 'updated');
+      assert.equal(env.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
+    }
+  }
 });
 
 test('the helper is loaded before each bundle and is safe to load twice in the top frame', () => {

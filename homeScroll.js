@@ -21,7 +21,8 @@
   const REFRESH_KINDS = ['recommended', 'following', 'search', 'explore'];
   const REFRESH_KINDS_SET = new Set(REFRESH_KINDS);
   const isRefreshableKind = kind => REFRESH_KINDS_SET.has(kind);
-  const isReloadRefreshKind = kind => kind === 'search' || kind === 'explore';
+  const isReloadRefreshKind = (kind, highTweetLoad = false) => kind === 'search' || kind === 'explore' ||
+    (highTweetLoad && (kind === 'recommended' || kind === 'following'));
   const selectedTimelineTab = () => [...primary()?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
     .find(tab => !tab.closest('article, [role="dialog"]'));
   function readingKind(getSettings) {
