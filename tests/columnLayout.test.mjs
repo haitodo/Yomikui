@@ -77,6 +77,23 @@ test('Home refresh position defaults to standard and survives saving, duplicatio
   assert.equal(loaded[2].homeRefreshPosition, 'top');
 });
 
+test('timeline image quality is persisted independently of the column display size', async () => {
+  const { columnSchema, store, clock, loadWorkspaces } = setup();
+  const { highQualityTimelineImages, ...legacy } = store.getState().columns[0];
+  assert.equal(highQualityTimelineImages, false);
+  assert.equal(columnSchema.parse({ ...legacy, mediaSizeMode: 'large' }).highQualityTimelineImages, false);
+
+  store.getState().updateColumn(legacy.id, { mediaSizeMode: 'small', highQualityTimelineImages: true });
+  store.getState().duplicateColumn(legacy.id);
+  await clock.advance(280);
+  const [original, duplicate, nextColumn] = (await loadWorkspaces()).workspaces[0].columns;
+  for (const column of [original, duplicate]) {
+    assert.equal(column.mediaSizeMode, 'small');
+    assert.equal(column.highQualityTimelineImages, true);
+  }
+  assert.equal(nextColumn.highQualityTimelineImages, false);
+});
+
 test('automatic widths use equal flex bases and preserve the minimum width', () => {
   const { layout } = setup();
   const first = clone(layout.getColumnStyle({ widthMode: 'auto', width: 24 }));

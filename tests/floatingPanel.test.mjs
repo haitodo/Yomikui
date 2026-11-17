@@ -158,6 +158,23 @@ test('reading, wheel scope and refresh use the same group selection and scroll m
   assert.ok(settings.props.children[0].props.children.some(child => child.props?.className === 'yf-color-select'));
 });
 
+test('the refresh button indicates a full reload before submitting search or Explore', () => {
+  const env = setup();
+  const options = {
+    columns: [{ id: 'one', type: 'home' }, { id: 'two', type: 'search' }, { id: 'three', type: 'explore' }],
+    visible: ['one', 'two', 'three'],
+    kinds: { one: 'recommended', two: 'search', three: 'explore' },
+    selectionMode: 'multiple',
+  };
+  const reload = panel(env, { ...options, target: ['search', 'explore'] }).byClass('yf-refresh').props;
+  assert.equal(reload.children[1], '再読み込み');
+  assert.match(reload.title, /検索結果 1列を再読み込みします/);
+  const mixed = panel(env, { ...options, target: ['recommended', 'explore'] }).byClass('yf-refresh').props;
+  assert.equal(mixed.children[1], '再読込あり');
+  assert.match(mixed.title, /おすすめ 1列の新着を読み込みます/);
+  assert.match(mixed.title, /話題を検索 1列を再読み込みします/);
+});
+
 test('results stay inside the refresh button with a live announcement and no layout row', () => {
   const env = setup();
   const initial = panel(env);

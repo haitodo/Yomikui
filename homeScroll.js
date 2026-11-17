@@ -21,6 +21,7 @@
   const REFRESH_KINDS = ['recommended', 'following', 'search', 'explore'];
   const REFRESH_KINDS_SET = new Set(REFRESH_KINDS);
   const isRefreshableKind = kind => REFRESH_KINDS_SET.has(kind);
+  const isReloadRefreshKind = kind => kind === 'search' || kind === 'explore';
   const selectedTimelineTab = () => [...primary()?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
     .find(tab => !tab.closest('article, [role="dialog"]'));
   function readingKind(getSettings) {
@@ -270,13 +271,16 @@
 
     begin(signal) {
       this.cancel();
-      const scroller = this.getScroller();
-      const anchors = articles().map(article => ({ article, id: tweetId(article), rect: article.getBoundingClientRect() }))
-        .filter(({ id, rect }) => id && rect.bottom > 0 && rect.top < (window.innerHeight ?? Infinity))
-        .map(({ id, rect }) => ({ id, top: rect.top }));
+      const mode = getMode(this.getSettings());
+      let anchors = [], top = 0;
+      if (mode === 'preserve') {
+        top = this.getScroller()?.scrollTop ?? window.scrollY ?? 0;
+        anchors = articles().map(article => ({ id: tweetId(article), rect: article.getBoundingClientRect() }))
+          .filter(({ id, rect }) => id && rect.bottom > 0 && rect.top < (window.innerHeight ?? Infinity))
+          .map(({ id, rect }) => ({ id, top: rect.top }));
+      }
       const job = {
-        mode: getMode(this.getSettings()), top: scroller?.scrollTop ?? window.scrollY ?? 0,
-        anchors, signal, changed: false, requested: false, applying: false, timers: new Set(),
+        mode, top, anchors, signal, changed: false, requested: false, applying: false, timers: new Set(),
       };
       this.job = job;
       job.cancel = () => this.cancel(job);
@@ -406,5 +410,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, navigate, scrollToTop, selectedTimelineTab, tweetId, isRecommendedTab: recommended });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, isReloadRefreshKind, navigate, scrollToTop, selectedTimelineTab, tweetId, isRecommendedTab: recommended });
 })();

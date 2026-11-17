@@ -274,7 +274,7 @@ test("upgradeMediaInRoot upgrades both img src and visual background-image style
   assert.equal(WideMedia.upgradeMediaInRoot(document), 0);
 });
 
-test("createController coordinates lifecycle, width threshold, and visibility changes", async () => {
+test("thumbnail upgrades are opt-in at any display size and stop while the column is hidden", async () => {
   const clock = new Clock();
   const html = `
     <html>
@@ -289,13 +289,13 @@ test("createController coordinates lifecycle, width threshold, and visibility ch
     </html>
   `;
   const dom = parseHTML(html);
+  let activeObservers = 0;
   const win = {
     ...clock.globals(),
     innerWidth: 800, // >= 576px wide column
     MutationObserver: class {
-      constructor(cb) { this.cb = cb; }
-      observe() { this.active = true; }
-      disconnect() { this.active = false; }
+      observe() { activeObservers++; }
+      disconnect() { activeObservers--; }
     },
     addEventListener(type, fn) { this[`on_${type}`] = fn; },
     removeEventListener(type) { delete this[`on_${type}`]; },
@@ -304,44 +304,41 @@ test("createController coordinates lifecycle, width threshold, and visibility ch
   const WideMedia = loadWideMedia({ window: win, document: dom.document });
   const controller = WideMedia.createController({ window: win, document: dom.document });
 
-  // 1. Initial wide state activates controller and upgrades images after batch delay
-  controller.update({ mediaSizeMode: "default" });
-  assert.equal(controller.isActive(), true);
-
-  await clock.advance(80);
   const img = dom.document.querySelector("img");
+  controller.update({ mediaSizeMode: "large" });
+  assert.equal(controller.isActive(), false);
+  assert.equal(activeObservers, 0);
+  assert.equal(clock.timers.size, 0);
+  assert.match(img.src, /name=small/);
+
+  win.innerWidth = 480;
+  controller.update({ mediaSizeMode: "small", highQualityTimelineImages: true });
+  assert.equal(controller.isActive(), true);
+  assert.equal(activeObservers, 1);
+  await clock.advance(80);
   assert.equal(img.src, "https://pbs.twimg.com/media/photo1?format=jpg&name=large");
 
-  // 2. Narrow column (< 576px) deactivates observation
-  win.innerWidth = 480;
-  controller.update({ mediaSizeMode: "default" });
-  assert.equal(controller.isActive(), false);
+  controller.update({ mediaSizeMode: "default", highQualityTimelineImages: true });
+  assert.equal(clock.timers.size, 0, "changing display size must not schedule a document scan");
 
-  // 3. Widening on resize triggers debounced upgrade
-  win.innerWidth = 900;
+  const visibility = win["on_yomikui-frame-column-visibility"];
+  visibility({ detail: { visible: false } });
+  assert.equal(controller.isActive(), false);
+  assert.equal(activeObservers, 0);
   img.src = "https://pbs.twimg.com/media/photo2?format=jpg&name=small";
-  const queryAll = dom.document.querySelectorAll.bind(dom.document);
-  let documentSearches = 0;
-  dom.document.querySelectorAll = selector => {
-    documentSearches++;
-    return queryAll(selector);
-  };
-  win.on_resize();
-  await clock.advance(150);
+  visibility({ detail: { visible: true } });
   assert.equal(controller.isActive(), true);
-  assert.equal(img.src, "https://pbs.twimg.com/media/photo2?format=jpg&name=large");
-  const searchesAfterResize = documentSearches;
   await clock.advance(80);
-  assert.equal(documentSearches, searchesAfterResize, "resizing must not queue a second document scan");
+  assert.equal(img.src, "https://pbs.twimg.com/media/photo2?format=jpg&name=large");
 
-  // 4. Column hidden pauses observer
-  win["on_yomikui-frame-column-visibility"]({ detail: { visible: false } });
+  controller.update({ mediaSizeMode: "large", highQualityTimelineImages: false });
   assert.equal(controller.isActive(), false);
-
+  assert.equal(activeObservers, 0);
+  assert.equal(clock.timers.size, 0);
   controller.dispose();
 });
 
-test("wide columns skip scroll position changes and still upgrade added and recycled images", async () => {
+test("high quality columns skip scroll position changes and still upgrade added and recycled images", async () => {
   const clock = new Clock();
   const { document } = parseHTML(`
     <html><body><main>
@@ -365,7 +362,7 @@ test("wide columns skip scroll position changes and still upgrade added and recy
   };
   const WideMedia = loadWideMedia({ window: win, document });
   const controller = WideMedia.createController({ window: win, document });
-  controller.update({ mediaSizeMode: "default" });
+  controller.update({ highQualityTimelineImages: true });
   await clock.advance(80);
 
   const timeline = document.querySelector("main");

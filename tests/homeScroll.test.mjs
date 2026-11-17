@@ -266,8 +266,10 @@ test('virtualized lists with no preceding rendered anchor scroll back one screen
   assert.equal(env.scroller.scrollTop, 520);
 });
 
-test('standard mode returns to the newest post after insertion and late X scroll corrections', async () => {
+test('standard mode returns to the newest post without measuring existing posts', async () => {
   const env = setup();
+  const unexpectedLayout = () => { throw new Error('standard mode does not need post bounds'); };
+  for (const article of env.document.querySelectorAll('article')) article.getBoundingClientRect = unexpectedLayout;
   env.tracker.request(env.tracker.begin());
   await prepend(env);
   assert.equal(env.scroller.scrollTop, 0);

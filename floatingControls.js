@@ -774,11 +774,16 @@
     if ((!busy && !reading.busy) || countsRef.current?.workspaceId !== workspaceId) countsRef.current = { workspaceId, counts: currentCounts };
     const displayCounts = countsRef.current.counts;
     const selectedColumns = targetReady ? visibleColumns.filter(column => matchesTarget(column, target, kinds)) : [];
-    const refreshCounts = globalThis.YomikuiHomeScroll.REFRESH_KINDS.map(kind => ({
+    const { REFRESH_KINDS, isReloadRefreshKind } = globalThis.YomikuiHomeScroll;
+    const refreshTargets = REFRESH_KINDS.map(kind => ({
       kind, count: selectedColumns.filter(column => kinds[column.id] === kind).length,
-    }));
-    const refreshCount = refreshCounts.reduce((total, item) => total + item.count, 0);
-    const refreshTargets = refreshCounts.filter(item => item.count).map(item => `${GROUPS[item.kind]} ${item.count}列`).join('・');
+    })).filter(item => item.count);
+    const hasReload = refreshTargets.some(item => isReloadRefreshKind(item.kind));
+    const hasUpdate = refreshTargets.some(item => !isReloadRefreshKind(item.kind));
+    const refreshPlan = refreshTargets.map(({ kind, count }) => {
+      const columns = `${GROUPS[kind]} ${count}列`;
+      return isReloadRefreshKind(kind) ? `${columns}を再読み込みします。` : `${columns}の新着を読み込みます。`;
+    }).join('');
     const selected = !targetReady ? '読み込み中' : target.map(kind => GROUPS[kind]).join('・') || '対象未選択';
     const selectionVisible = selectedColumns.length > 0;
     wheelRef.current = action => targetReady && selectionVisible && !busy && !positionRef.current?.drag && onWheel?.({ target, ...action }) === true;
@@ -798,7 +803,11 @@
     const noSelection = targetReady && !selectionVisible && !busy;
     const statusText = !targetReady ? '対象を読み込み中' : noSelection ? '画面内に閲覧対象の列がありません' : showRefresh ? refreshText : lastAction === 'reading' || reading.busy ? reading.message : '';
     const feedback = refreshFeedback(view);
-    const refreshLabel = busy ? onCancelRefresh ? '中止' : '更新中' : lastAction === 'refresh' && ['cooldown', 'cancelled'].includes(view.phase) ? feedback : '更新';
+    const actionLabel = hasReload ? (hasUpdate ? '再読込あり' : '再読み込み') : '更新';
+    const actionDescription = hasReload
+      ? (hasUpdate ? '選択中の列を更新（一部は再読み込み）' : '選択中の列を再読み込み')
+      : '選択中の列を更新';
+    const refreshLabel = busy ? onCancelRefresh ? '中止' : '更新中' : lastAction === 'refresh' && ['cooldown', 'cancelled'].includes(view.phase) ? feedback : actionLabel;
     const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
       ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
@@ -849,10 +858,11 @@
             canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
               jsx.jsx('button', {
                 type: 'button', className: 'yf-refresh', translate: 'no',
-                disabled: busy ? !onCancelRefresh : reading.busy || !targetReady || refreshCount === 0 || view.phase === 'cooldown' || view.phase === 'cancelled',
-                'aria-label': busy ? '更新を中止する' : '選択中の列を更新', 'aria-busy': busy,
-                title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshCount ? `選択範囲内の${refreshTargets}を先頭へ戻してから順番に更新します。おすすめ・フォロー中は新着読み込み、累計200件以上の警告がある列と検索結果・話題を検索（トレンド・ニュースなど）は現在のページを再読み込みします。検索語・タブ・絞り込み条件を維持します` : '選択範囲内に更新対象の列がありません'}`,
-                onClick: () => { if (busy) onCancelRefresh?.(); else { setLastAction('refresh'); onRefresh({ target }); } }, children: [icon('refresh'), refreshLabel],
+                disabled: busy ? !onCancelRefresh : reading.busy || !targetReady || !refreshTargets.length || view.phase === 'cooldown' || view.phase === 'cancelled',
+                'aria-label': busy ? '更新を中止する' : actionDescription, 'aria-busy': busy,
+                title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshPlan ? `先頭へ戻してから順番に処理します。${refreshPlan}` : '選択範囲内に更新対象の列がありません'}`,
+                onClick: () => { if (busy) onCancelRefresh?.(); else { setLastAction('refresh'); onRefresh({ target }); } },
+                children: [hasReload && refreshLabel === actionLabel ? null : icon('refresh'), refreshLabel],
               }),
             }),
           ] }),

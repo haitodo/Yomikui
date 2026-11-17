@@ -1,12 +1,11 @@
 "use strict";
 
 // Loaded before contentIframe.js in native and custom column frames.
-// Manages responsive wide media layout and high-resolution thumbnail upgrades.
+// Manages responsive media layout and opt-in high-resolution thumbnails.
 (() => {
   if (globalThis.YomikuiWideMedia) return;
 
   const WIDE_MIN_WIDTH_REM = 36; // 576px breakpoint
-  const WIDE_MIN_WIDTH_PX = 576;
   const TWIMG_HOST = "pbs.twimg.com";
   const TWIMG_MEDIA_PATHS = [
     "/media/",
@@ -493,19 +492,14 @@
   }
 
   function createController({ window: win, document: doc }) {
-    let settings = null;
+    let highQuality = false;
     let visible = true;
     let observing = false;
     let timer = null;
-    let resizeTimer = null;
     const pending = new Set();
 
     function isActive() {
-      if (!doc || doc.hidden || !visible) return false;
-      const mode = settings?.mediaSizeMode ?? "default";
-      if (mode === "small") return false;
-      const width = win.innerWidth || doc.documentElement?.clientWidth || 0;
-      return width >= WIDE_MIN_WIDTH_PX;
+      return highQuality && visible && !!doc && !doc.hidden;
     }
 
     function flush() {
@@ -522,11 +516,6 @@
         }
       }
       pending.clear();
-    }
-
-    function flushNow() {
-      if (timer != null) win.clearTimeout(timer);
-      flush();
     }
 
     function schedule() {
@@ -554,40 +543,26 @@
       ? new win.MutationObserver(onMutations)
       : null;
 
-    function sync() {
-      const active = isActive();
-      if (active) {
-        if (!observing && observer && doc.documentElement) {
-          observing = true;
-          observer.observe(doc.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ["src", "style"],
-          });
-        }
-        pending.add(doc);
-        schedule();
-      } else {
-        if (observing && observer) {
-          observer.disconnect();
-          observing = false;
-        }
-        if (timer != null) {
-          win.clearTimeout(timer);
-          timer = null;
-        }
-        pending.clear();
-      }
-      return active;
+    function pause() {
+      if (observing) observer?.disconnect();
+      observing = false;
+      if (timer != null) win.clearTimeout(timer);
+      timer = null;
+      pending.clear();
     }
 
-    function onResize() {
-      if (resizeTimer != null) win.clearTimeout(resizeTimer);
-      resizeTimer = win.setTimeout(() => {
-        resizeTimer = null;
-        if (sync()) flushNow();
-      }, 150);
+    function sync() {
+      if (!isActive()) { pause(); return; }
+      if (observing || !doc.documentElement) return;
+      observing = true;
+      observer?.observe(doc.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["src", "style"],
+      });
+      pending.add(doc);
+      schedule();
     }
 
     const listeners = [];
@@ -598,8 +573,7 @@
       }
     };
 
-    listen(doc, "visibilitychange", () => sync());
-    listen(win, "resize", onResize);
+    listen(doc, "visibilitychange", sync);
     listen(win, "yomikui-frame-column-visibility", e => {
       visible = e.detail?.visible !== false;
       sync();
@@ -607,21 +581,14 @@
 
     return {
       update(nextSettings) {
-        settings = nextSettings;
+        highQuality = nextSettings?.highQualityTimelineImages === true;
         sync();
       },
-      setVisible(nextVisible) {
-        visible = nextVisible !== false;
-        sync();
-      },
-      flushNow,
       dispose() {
-        if (observer) observer.disconnect();
-        if (timer != null) win.clearTimeout(timer);
-        if (resizeTimer != null) win.clearTimeout(resizeTimer);
+        highQuality = false;
+        pause();
         listeners.forEach(remove => remove());
         listeners.length = 0;
-        pending.clear();
       },
       isActive,
     };
@@ -642,7 +609,6 @@
 
   globalThis.YomikuiWideMedia = Object.freeze({
     WIDE_MIN_WIDTH_REM,
-    WIDE_MIN_WIDTH_PX,
     buildLayoutCss,
     buildMediaSizeCss,
     upgradeImageUrl,

@@ -363,8 +363,6 @@ const explore = (tab = 'news', { loading = false } = {}) => `<main data-testid="
 const reloadKey = 'yomikui_page_refresh_v1:column1';
 function homeFrameSetup(kind = 'recommended', options = {}) {
   const env = setup(home({ selected: kind, ...options }), options);
-  env.tweetCount = options.count ?? 200;
-  env.options.getTweetCount = () => env.tweetCount;
   env.send = (data, event = {}) => env.window.emit('message', {
     source: env.window.parent, origin: 'https://x.com', data: {
       type: P + 'request', columnId: 'column1', requestId: 'reload1', target: kind, ...data,
@@ -375,7 +373,7 @@ function homeFrameSetup(kind = 'recommended', options = {}) {
 
 test('floating refresh marks the pre-update first post after top preparation, including Following', async () => {
   for (const kind of ['recommended', 'following']) {
-    const env = homeFrameSetup(kind, { count: 199 });
+    const env = homeFrameSetup(kind);
     env.document.getElementById('tweets').innerHTML = tweet('999');
     env.scroller.scrollTo = ({ top }) => {
       env.scroller.scrollTop = top;
@@ -400,7 +398,7 @@ test('floating refresh marks the pre-update first post after top preparation, in
 });
 
 test('a skipped or cancelled refresh preserves the previous landmark', async () => {
-  const env = homeFrameSetup('following', { count: 199 });
+  const env = homeFrameSetup('following');
   env.document.getElementById('following').addEventListener('click', () => {
     env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101');
   });
@@ -422,15 +420,12 @@ test('a skipped or cancelled refresh preserves the previous landmark', async () 
   installed.dispose();
 });
 
-test('Home reload carries its landmark across document replacement and waits for the restored tab', async () => {
-  const env = homeFrameSetup('following');
-  const installed = env.api.installFrame(env.options);
-  env.send();
-  await settle(); await env.clock.advance(200);
-  assert.deepEqual(JSON.parse(env.storage.get(reloadKey)).boundary, { id: '101', kind: 'following', path: '/home' });
-  env.window.emit('pagehide');
-  const replacement = homeFrameSetup('following', { storage: env.storage, selected: 'recommended' });
-  replacement.clock.now = env.clock.now;
+test('a pending Home reload from an earlier version restores its landmark', async () => {
+  const replacement = homeFrameSetup('following', { selected: 'recommended' });
+  replacement.storage.set(reloadKey, JSON.stringify({
+    id: 'reload1', kind: 'following', path: '/home', origin: 'https://x.com', started: 0,
+    boundary: { id: '101', kind: 'following', path: '/home' },
+  }));
   const resumed = replacement.api.installFrame(replacement.options);
   await settle(); await replacement.clock.advance(80);
   assert.equal(replacement.document.querySelector('.yomikui-refresh-boundary'), null);
@@ -441,44 +436,34 @@ test('Home reload carries its landmark across document replacement and waits for
   assert.equal(replacement.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
   assert.equal(replacement.storage.has(reloadKey), false);
   assert.equal(replacement.reloads.length, 0);
-  resumed.dispose(); installed.dispose();
+  resumed.dispose();
   assert.equal(replacement.clock.timers.size, 0);
 });
 
 for (const kind of ['recommended', 'following']) {
-  test(`${kind} uses the reported cumulative count to switch from native update to one full reload at 200`, async () => {
-    for (const count of [199, 200, 260]) {
-      const env = homeFrameSetup(kind, { count, banner: '20件のポスト表示' });
-      let clicks = 0;
-      env.document.getElementById('new-posts').addEventListener('click', () => {
-        clicks++;
-        env.document.getElementById('tweets').innerHTML = tweet('202');
-      });
-      const installed = env.api.installFrame(env.options);
-      env.send({}, { source: {} });
-      env.send({}, { origin: 'https://untrusted.example' });
-      assert.equal(env.clock.timers.size, 0);
-      env.send(); env.send();
-      await settle();
-      await env.clock.advance(199);
-      assert.equal(env.reloads.length, 0);
-      assert.equal(clicks, 0);
-      await env.clock.advance(1);
-      if (count < 200) {
-        assert.equal(env.messages.at(-1).data.status, 'updated');
-        assert.equal(clicks, 1);
-        assert.equal(env.reloads.length, 0);
-        assert.equal(env.storage.size, 0);
-      } else {
-        assert.equal(env.messages.at(-1).data.type, P + 'reloading');
-        assert.equal(env.reloads.length, 1);
-        assert.equal(env.reloads[0].pathname, '/home');
-        assert.equal(JSON.parse(env.storage.get(reloadKey)).kind, kind);
-        assert.equal(clicks, 0, 'a full reload must not also load new posts');
-      }
-      installed.dispose();
-      assert.equal(env.clock.timers.size, 0);
-    }
+  test(`${kind} loads new posts once even when a legacy accessor reports a high count`, async () => {
+    const env = homeFrameSetup(kind, { banner: '20件のポスト表示' });
+    env.options.getTweetCount = () => 260;
+    let clicks = 0;
+    env.document.getElementById('new-posts').addEventListener('click', () => {
+      clicks++;
+      env.document.getElementById('tweets').innerHTML = tweet('202');
+    });
+    const installed = env.api.installFrame(env.options);
+    env.send({}, { source: {} });
+    env.send({}, { origin: 'https://untrusted.example' });
+    assert.equal(env.clock.timers.size, 0);
+    env.send(); env.send();
+    await settle();
+    await env.clock.advance(199);
+    assert.equal(clicks, 0);
+    await env.clock.advance(1);
+    assert.equal(env.messages.at(-1).data.status, 'updated');
+    assert.equal(clicks, 1);
+    assert.equal(env.reloads.length, 0);
+    assert.equal(env.storage.size, 0);
+    installed.dispose();
+    assert.equal(env.clock.timers.size, 0);
   });
 
   test(`${kind} full reload waits for the original tab and content without replaying the reload`, async () => {
@@ -510,14 +495,13 @@ for (const kind of ['recommended', 'following']) {
   });
 }
 
-test('heavy Home columns still refuse drafts, dialogs, hidden or changed targets, blocked scrolling, storage failure and cancellation', async () => {
+test('Home refresh refuses drafts, dialogs, hidden or changed targets, blocked scrolling and cancellation', async () => {
   for (const [reason, change] of [
     ['draft', env => env.document.body.insertAdjacentHTML('beforeend', '<textarea data-testid="tweetTextarea_0">A draft</textarea>')],
     ['dialog', env => env.document.body.insertAdjacentHTML('beforeend', '<div role="dialog"></div>')],
     ['hidden', env => env.send({ type: 'yomikui-column-visibility', visible: false })],
     ['target-changed', env => { env.document.getElementById('tabs').innerHTML = tabs('following'); }],
     ['scroll-top', env => { env.scroller.scrollTo = () => {}; }],
-    ['reload-unavailable', env => { env.window.sessionStorage.setItem = () => { throw new Error('Storage disabled'); }; }],
     ['cancelled', () => {}],
   ]) {
     const env = homeFrameSetup();
@@ -525,6 +509,7 @@ test('heavy Home columns still refuse drafts, dialogs, hidden or changed targets
     change(env);
     env.send();
     if (reason === 'cancelled') env.send({ type: P + 'cancel' });
+    await settle();
     await env.clock.advance(1200);
     assert.equal(env.messages.at(-1).data.reason, reason);
     assert.equal(env.reloads.length, 0);
@@ -1548,7 +1533,7 @@ test('the shipped native initializer installs the refresher with the actual colu
   assert.match(bundle, /HO\(\),startFrameMaintenance\(\),startNativeHomeRefresh\(\)/);
 });
 
-test('the shipped initializer reads the live maintenance count instead of the mounted tweet elements', async () => {
+test('the shipped initializer updates a Home column at 200 posts and marks the previous first post', async () => {
   const env = setup();
   const bundle = readFileSync(new URL('../contentIframe.js', import.meta.url), 'utf8');
   const start = bundle.indexOf('function startNativeHomeRefresh()');
@@ -1556,11 +1541,16 @@ test('the shipped initializer reads the live maintenance count instead of the mo
   const maintenance = { count: 199 };
   Object.assign(env.context, { je: env.settings, _Q: () => env.scroller, Uh: 'https://x.com', ln: 'column1', frameMaintenance: maintenance, ru: null });
   vm.runInContext(bundle.slice(start, end) + 'startNativeHomeRefresh();', env.context);
+  env.document.getElementById('recommended').addEventListener('click', () => {
+    env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101');
+  });
   maintenance.count = 200;
   env.window.emit('message', { source: env.window.parent, origin: 'https://x.com', data: { type: P + 'request', columnId: 'column1', requestId: 'reload1', target: 'recommended' } });
-  await env.clock.advance(200);
-  assert.equal(env.reloads.length, 1);
-  assert.equal(env.messages.at(-1).data.type, P + 'reloading');
+  await settle();
+  await env.clock.advance(280);
+  assert.equal(env.reloads.length, 0);
+  assert.equal(env.messages.at(-1).data.status, 'updated');
+  assert.equal(env.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
 });
 
 test('the helper is loaded before each bundle and is safe to load twice in the top frame', () => {

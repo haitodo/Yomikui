@@ -46,7 +46,6 @@
   const currentPath = () => window.location.pathname + (window.location.search || '');
   const homeKind = kind => kind === 'recommended' || kind === 'following';
   const reloadable = kind => refreshable(kind);
-  const reloadByDefault = kind => kind === 'search' || kind === 'explore';
   const reloadKind = path => typeof path !== 'string' ? null :
     SEARCH_PATH_RE.test(path) ? 'search' :
     EXPLORE_PATH_RE.test(path) ? 'explore' : null;
@@ -431,8 +430,7 @@
       }
       const job = { id: data.requestId, abort: new AbortController() };
       active = job;
-      const count = options.getTweetCount?.();
-      if (reloadByDefault(data.target) || (Number.isFinite(count) && count >= 200)) reloadPage(job, data.target).catch(error => finish(job, failure(error)));
+      if (globalThis.YomikuiHomeScroll.isReloadRefreshKind(data.target)) reloadPage(job, data.target).catch(error => finish(job, failure(error)));
       else refresher.refresh(job.abort.signal, data.target).catch(failure).then(result => finish(job, result));
     };
     const cancel = () => {

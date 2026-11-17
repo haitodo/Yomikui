@@ -125,7 +125,7 @@
     "message": "URLをコピーしました"
   },
   "column_high_tweet_load": {
-    "message": "ツイート件数が多いため負荷が高くなっています ($1$)。動作を軽快に保つには列を更新してください。",
+    "message": "この列で表示した投稿は累計$1$件です。動作が重い場合は、この列を再読み込みできます。",
     "placeholders": {
       "1": {
         "content": "$1",
@@ -137,7 +137,7 @@
     "message": "長時間の利用により動作が重くなる可能性があります。列の再読み込みを推奨します。"
   },
   "column_refresh": {
-    "message": "リフレッシュ"
+    "message": "列を再読み込み"
   },
   "column_scroll_to_reactivate": {
     "message": "スクロールして更新を再開"
@@ -358,6 +358,9 @@
   },
   "column_settings_media_size_small": {
     "message": "小"
+  },
+  "column_settings_high_quality_timeline_images": {
+    "message": "一覧の画像を高画質で表示"
   },
   "column_settings_remember_last_page": {
     "message": "最後に開いていたページを記憶"
