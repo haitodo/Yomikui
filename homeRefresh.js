@@ -20,6 +20,7 @@
   const RELOAD_TIMEOUT = 20000;
   const HIGH_TWEET_LOAD_COUNT = 100;
   const RELOAD_KEY = 'yomikui_page_refresh_v1:';
+  let frameWheel = null;
   const REASONS = {
     'not-home': '更新対象以外のページを表示中',
     following: '更新対象以外のタブを表示中',
@@ -389,6 +390,23 @@
       if (receipt.boundary?.kind === receipt.kind && receipt.boundary.path === receipt.path) boundary.set(receipt.boundary);
       return { status: 'reloaded', method: 'reload' };
     };
+    const validReading = data => globalThis.YomikuiHomeScroll.isReadingAction(data) &&
+      (data.group === undefined || globalThis.YomikuiHomeScroll.READING_GROUPS.includes(data.group));
+    const beforeReadingMove = () => refresher.positions.cancel();
+    const applyReading = ({ direction, mode, deltaY, deltaMode, group }) => {
+      if (active) return { status: 'skipped', reason: 'busy' };
+      if (!visible) return { status: 'skipped', reason: 'hidden' };
+      try {
+        return globalThis.YomikuiHomeScroll.navigate({ ...options, direction, mode, deltaY, deltaMode, group, beforeMove: beforeReadingMove });
+      } catch { return { status: 'failed', reason: 'error' }; }
+    };
+    const receiveWheel = (source, data) => {
+      const origin = window.location.origin;
+      if (source !== window.parent || origin !== options.getOrigin() || !trustedOrigin(origin) || data?.columnId !== options.getColumnId()) return false;
+      if (data.mode === 'wheel' && validReading(data)) applyReading(data);
+      // The command was handled here even if a guard blocked movement.
+      return true;
+    };
     const onMessage = event => {
       const data = event.data;
       if (event.source !== window.parent || event.origin !== options.getOrigin() || !trustedOrigin(event.origin) || !data) return;
@@ -407,15 +425,9 @@
           data.requestId.length < 1 || data.requestId.length > 100) return;
       if (data.type === NAVIGATE || data.type === SCROLL) {
         const scrolling = data.type === SCROLL;
-        if (scrolling !== (data.mode === 'wheel') || !globalThis.YomikuiHomeScroll.isReadingAction(data) ||
-            (data.group !== undefined && !globalThis.YomikuiHomeScroll.READING_GROUPS.includes(data.group))) return;
+        if (scrolling !== (data.mode === 'wheel') || !validReading(data)) return;
         if (navigated.has(data.requestId)) { if (!scrolling) send(NAVIGATED, data.requestId, navigated.get(data.requestId)); return; }
-        let result;
-        try {
-          result = active ? { status: 'skipped', reason: 'busy' } : !visible ? { status: 'skipped', reason: 'hidden' } :
-            data.group !== undefined && globalThis.YomikuiHomeScroll.readingKind(options.getSettings) !== data.group ? { status: 'skipped', reason: 'target-changed' } :
-            globalThis.YomikuiHomeScroll.navigate({ ...options, direction: data.direction, mode: data.mode, deltaY: data.deltaY, deltaMode: data.deltaMode, beforeMove: () => refresher.positions.cancel() });
-        } catch { result = { status: 'failed', reason: 'error' }; }
+        const result = applyReading(data);
         navigated.set(data.requestId, result);
         if (navigated.size > 32) navigated.delete(navigated.keys().next().value);
         if (!scrolling) send(NAVIGATED, data.requestId, result);
@@ -452,6 +464,7 @@
     window.addEventListener('message', onMessage);
     window.addEventListener('pagehide', onPageHide);
     document.addEventListener('visibilitychange', onVisibility);
+    frameWheel = receiveWheel;
     let receipt;
     try {
       const saved = window.sessionStorage.getItem(reloadKey);
@@ -467,6 +480,7 @@
       resumeReload(job, receipt).catch(failure).then(result => finish(job, result));
     }
     return { dispose() {
+      if (frameWheel === receiveWheel) frameWheel = null;
       cancel();
       context?.dispose();
       boundary.dispose();
@@ -756,5 +770,6 @@
 
   globalThis.YomikuiHomeRefresh = Object.freeze({
     NativeRefresher, BatchRefresher, FloatingControl, installFrame, hasHighTweetLoad, summary,
+    scrollFrame: (source, data) => frameWheel?.(source, data) === true,
   });
 })();

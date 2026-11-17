@@ -40,8 +40,12 @@
   const targetKey = target => Array.isArray(target) ? [...new Set(target)].sort().join(',') : target;
   const frameGroup = (target, kind) => Array.isArray(target) ? kind : targetGroup(target);
   const workspaceKey = id => typeof id === 'string' && id.length > 0 && id.length <= 100 ? id : 'default';
-  const matchesTarget = (column, target, kinds) => Array.isArray(target) ? target.some(kind => Object.hasOwn(GROUPS, kind) && kinds[column.id] === kind) : target === 'all' ||
-    (targetGroup(target) ? Object.hasOwn(GROUPS, targetGroup(target)) && kinds[column.id] === targetGroup(target) : column.id === target);
+  function matchesReadingTarget(column, target, kind) {
+    if (Array.isArray(target)) return Object.hasOwn(GROUPS, kind) && target.includes(kind);
+    const group = targetGroup(target);
+    return target === 'all' || (group ? Object.hasOwn(GROUPS, group) && kind === group : column.id === target);
+  }
+  const matchesTarget = (column, target, kinds) => matchesReadingTarget(column, target, kinds[column.id]);
 
   async function loadTarget(workspaceId) {
     try {
@@ -130,23 +134,35 @@
 
   // The rack's existing observer includes a 200px preload margin. Reading must
   // use the actual visible area instead, and must never mount an offscreen frame.
-  function visibleColumnIds() {
+  function visibleColumnIds(candidates) {
+    const ids = new Set();
     const rack = document.querySelector('.rd-rack');
-    if (!rack) return new Set();
+    if (!rack) return ids;
     const rect = rack.getBoundingClientRect();
     const left = Math.max(0, rect.left), right = Math.min(window.innerWidth, rect.right);
     const top = Math.max(0, rect.top), bottom = Math.min(window.innerHeight, rect.bottom);
-    if (right <= left || bottom <= top) return new Set();
-    const ids = new Set();
+    if (right <= left || bottom <= top) return ids;
     for (const element of rack.querySelectorAll('[data-column-id]')) {
+      const id = element.getAttribute('data-column-id');
+      if (!id || (candidates && !candidates.has(id))) continue;
       const bounds = element.getBoundingClientRect();
       if (Math.min(bounds.right, right) - Math.max(bounds.left, left) >= 1 &&
           Math.min(bounds.bottom, bottom) - Math.max(bounds.top, top) >= 1) {
-        const id = element.getAttribute('data-column-id');
-        if (id) ids.add(id);
+        ids.add(id);
       }
     }
     return ids;
+  }
+
+  function forwardWheel(frame, action) {
+    if (frame.origin === window.location.origin) {
+      // Both content scripts use the extension's isolated world. Calling the
+      // live frame there avoids waiting for a queued message task before paint.
+      try { if (frame.window.YomikuiHomeRefresh?.scrollFrame?.(window, action)) return; } catch {}
+    }
+    // Cross-origin frames and frames without a direct handler still use the
+    // original message with an exact target origin.
+    try { frame.window.postMessage({ type: PREFIX + 'scroll', requestId: crypto.randomUUID(), ...action }, frame.origin); } catch {}
   }
 
   class ReadingController {
@@ -186,14 +202,17 @@
       pending.finish({ status: data.status, reason: data.reason });
     }
 
+    columnKind(id, frame = this.getFrame(id)) {
+      const entry = this.contexts.get(id);
+      return entry && entry.window === frame?.window && entry.origin === frame.origin ? entry.kind : undefined;
+    }
+
     kinds() {
       const result = {};
       for (const column of this.getState().columns) {
         if (!readable(column)) continue;
-        const entry = this.contexts.get(column.id), frame = this.getFrame(column.id);
-        if (entry && entry.window === frame?.window && entry.origin === frame.origin) {
-          result[column.id] = entry.kind;
-        }
+        const kind = this.columnKind(column.id);
+        if (kind !== undefined) result[column.id] = kind;
       }
       return result;
     }
@@ -246,7 +265,8 @@
     wheel({ target = 'all', deltaY, deltaMode = 0 }) {
       if (this.disposed || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ mode: 'wheel', deltaY, deltaMode })) return false;
       const state = this.getState();
-      if (!this.selectedColumns(target, this.visible).length) return false;
+      if (!state.columns.some(column => this.visible.has(column.id) && readable(column) &&
+          matchesReadingTarget(column, target, this.columnKind(column.id)))) return false;
       if (this.active && !this.active.cancelled) { this.active.cancelledByWheel = true; this.cancel(); }
       const previous = this.wheelBuffer;
       if (previous && (previous.workspaceId !== state.activeWorkspaceId || targetKey(previous.target) !== targetKey(target))) this.clearWheel();
@@ -273,24 +293,31 @@
       if (deltaY === 0) return;
       const state = this.getState();
       if (this.disposed || document.hidden || state.activeWorkspaceId !== buffer.workspaceId) return;
-      const kinds = this.kinds();
-      for (const column of this.selectedColumns(buffer.target)) {
-        if (state.columnComposing?.[column.id]) continue;
+      const candidates = new Map();
+      for (const column of state.columns) {
+        if (!readable(column) || state.columnComposing?.[column.id]) continue;
         const frame = this.getFrame(column.id);
         if (!frame?.window || !trusted(frame.origin)) continue;
-        const group = frameGroup(buffer.target, kinds[column.id]);
-        const now = Date.now();
-        if (!this.wheelActivity.has(column.id) || now - this.wheelActivity.get(column.id) >= 500) {
-          this.wheelActivity.set(column.id, now);
-          state.markColumnActivity?.(column.id);
+        const kind = this.columnKind(column.id, frame);
+        if (matchesReadingTarget(column, buffer.target, kind)) {
+          candidates.set(column.id, { frame, group: frameGroup(buffer.target, kind) });
         }
-        // Continuous input is applied immediately in the frame. It has no
-        // response deadline, repeat timer, or queue behind a previous action.
-        try { frame.window.postMessage({
-          type: PREFIX + 'scroll', requestId: crypto.randomUUID(), columnId: column.id, mode: 'wheel',
+      }
+      if (!candidates.size) return;
+      // Recheck current bounds because the rack may have moved since the last input.
+      const visible = this.getVisibleIds(candidates);
+      const now = Date.now();
+      for (const [columnId, { frame, group }] of candidates) {
+        if (!visible.has(columnId)) continue;
+        if (!this.wheelActivity.has(columnId) || now - this.wheelActivity.get(columnId) >= 500) {
+          this.wheelActivity.set(columnId, now);
+          state.markColumnActivity?.(columnId);
+        }
+        forwardWheel(frame, {
+          columnId, mode: 'wheel',
           deltaY, deltaMode: buffer.deltaMode,
           ...(group ? { group } : {}),
-        }, frame.origin); } catch {}
+        });
       }
     }
 

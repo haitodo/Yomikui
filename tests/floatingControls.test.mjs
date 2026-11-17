@@ -34,7 +34,7 @@ function setup() {
   return { clock, document, dom, window, saved, writes, observers, context, api: context.YomikuiFloatingControls };
 }
 
-function readingSetup({ quiet = false } = {}) {
+function readingSetup({ quiet = false, origins = {} } = {}) {
   const env = setup();
   const columns = [
     { id: 'one', type: 'home', title: 'One' }, { id: 'two', type: 'home', title: 'Two' },
@@ -64,13 +64,13 @@ function readingSetup({ quiet = false } = {}) {
   const controller = new env.api.ReadingController({
     getState: () => state,
     getVisibleIds: () => visible,
-    getFrame: id => ({ window: frames.get(id), origin: 'https://x.com' }),
+    getFrame: id => ({ window: frames.get(id), origin: origins[id] ?? 'https://x.com' }),
     onChange: view => views.push(clone(view)),
     onContext: value => contextViews.push(clone(value)),
   });
   const report = (id, kind) => {
     kinds.set(id, kind);
-    env.window.emit('message', { source: frames.get(id), origin: 'https://x.com', data: { type: PREFIX + 'context', columnId: id, kind } });
+    env.window.emit('message', { source: frames.get(id), origin: origins[id] ?? 'https://x.com', data: { type: PREFIX + 'context', columnId: id, kind } });
   };
   return { ...env, state, visible, frames, messages, views, activity, controller, kinds, contextRequests, contextViews, report };
 }
@@ -96,6 +96,29 @@ test('wheel input starts before the next paint and coalesces only additional inp
   assert.equal(env.messages.length, 6);
   assert.equal(env.clock.frames.size, 0);
   assert.equal(env.clock.timers.size, 0);
+  env.controller.dispose();
+});
+
+test('one wheel gesture can scroll a same-origin column directly and a cross-origin column by message', () => {
+  const env = readingSetup({ origins: { two: 'https://twitter.com' } });
+  const direct = [];
+  env.frames.get('one').YomikuiHomeRefresh = { scrollFrame(source, action) {
+    assert.equal(source, env.window);
+    direct.push(clone(action));
+    return true;
+  } };
+  let crossOriginProbes = 0;
+  Object.defineProperty(env.frames.get('two'), 'YomikuiHomeRefresh', { get() { crossOriginProbes++; } });
+  const send = deltaY => env.controller.wheel({ target: ['recommended'], deltaY });
+  assert.equal(send(72), true);
+  assert.deepEqual(direct, [{ columnId: 'one', mode: 'wheel', deltaY: 72, deltaMode: 0, group: 'recommended' }]);
+  assert.deepEqual(env.messages.map(({ columnId, deltaY, origin }) => [columnId, deltaY, origin]), [['two', 72, 'https://twitter.com']]);
+  assert.equal(crossOriginProbes, 0);
+  send(24);
+  assert.equal(direct.length, 1);
+  env.clock.frame(16);
+  assert.equal(direct.at(-1).deltaY, 24);
+  assert.equal(env.messages.at(-1).deltaY, 24);
   env.controller.dispose();
 });
 
@@ -144,6 +167,36 @@ test('wheel batches recheck visibility and drafts and skip unmounted columns', (
   env.frames.delete('following');
   env.clock.frame(16);
   assert.equal(env.messages.length, 1);
+  env.controller.dispose();
+});
+
+test('wheel measures only its candidates and follows the current rack position when a batch flushes', () => {
+  const env = readingSetup();
+  const rack = env.document.createElement('div');
+  rack.className = 'rd-rack';
+  rack.getBoundingClientRect = () => ({ left: 0, right: 300, top: 0, bottom: 600 });
+  const measured = [];
+  let scrollLeft = 0;
+  for (const [index, column] of env.state.columns.entries()) {
+    const element = env.document.createElement('div');
+    element.dataset.columnId = column.id;
+    element.getBoundingClientRect = () => {
+      measured.push(column.id);
+      const left = index * 300 - scrollLeft;
+      return { left, right: left + 300, top: 0, bottom: 600 };
+    };
+    rack.appendChild(element);
+  }
+  env.document.body.appendChild(rack);
+  env.controller.getVisibleIds = env.api.visibleColumnIds;
+
+  env.controller.wheel({ target: ['recommended'], deltaY: 20 });
+  env.controller.wheel({ target: ['recommended'], deltaY: 40 });
+  scrollLeft = 300;
+  env.clock.frame(16);
+
+  assert.deepEqual(measured, ['one', 'two', 'one', 'two']);
+  assert.deepEqual(env.messages.map(({ columnId, deltaY }) => [columnId, deltaY]), [['one', 20], ['two', 40]]);
   env.controller.dispose();
 });
 

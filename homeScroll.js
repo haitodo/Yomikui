@@ -3,9 +3,8 @@
   if (globalThis.YomikuiHomeScroll) return;
 
   const getMode = settings => settings?.homeRefreshPosition === 'preserve' ? 'preserve' : 'top';
-  const recommended = tab => RECOMMENDED_LABELS.has(
-    (tab?.getAttribute('aria-label') || tab?.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase(),
-  );
+  const tabLabel = tab => (tab?.getAttribute('aria-label') || tab?.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const recommended = tab => RECOMMENDED_LABELS.has(tabLabel(tab));
   const RECOMMENDED_LABELS = new Set(['おすすめ', 'お勧め', 'foryou']);
   const FOLLOWING_LABELS = new Set(['following', 'フォロー中', 'フォロー']);
   const VALID_DELTA_MODES = new Set([0, 1, 2]);
@@ -23,21 +22,23 @@
   const isRefreshableKind = kind => REFRESH_KINDS_SET.has(kind);
   const isReloadRefreshKind = (kind, highTweetLoad = false) => kind === 'search' || kind === 'explore' ||
     (highTweetLoad && (kind === 'recommended' || kind === 'following'));
-  const selectedTimelineTab = () => [...primary()?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
+  const selectedTimelineTab = (column = primary()) => [...column?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
     .find(tab => !tab.closest('article, [role="dialog"]'));
-  function readingKind(getSettings) {
-    const settings = getSettings();
-    const path = window.location.pathname.replace(/\/$/, '');
-    if (!isReadableColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) || settings?.isTimelineColumn ||
-        /\/status\/\d+|^\/(?:compose|messages)(?:\/|$)|^\/i\/(?:chat|grok)(?:\/|$)/.test(path)) return null;
+  const isReadingTimeline = (settings, path) => isReadableColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) &&
+    !settings?.isTimelineColumn && !/\/status\/\d+|^\/(?:compose|messages)(?:\/|$)|^\/i\/(?:chat|grok)(?:\/|$)/.test(path);
+  function kindAtPath(path, column) {
     if (path === '/search') return 'search';
     if (/^\/explore(?:\/tabs\/[\w-]+)?$/.test(path)) return 'explore';
     if (path !== '/home') return 'other';
-    const tab = selectedTimelineTab();
+    const tab = selectedTimelineTab(column);
     if (!tab) return null;
-    if (recommended(tab)) return 'recommended';
-    const label = (tab.getAttribute('aria-label') || tab.textContent || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+    const label = tabLabel(tab);
+    if (RECOMMENDED_LABELS.has(label)) return 'recommended';
     return FOLLOWING_LABELS.has(label) ? 'following' : 'other';
+  }
+  function readingKind(getSettings) {
+    const path = window.location.pathname.replace(/\/$/, '');
+    return isReadingTimeline(getSettings(), path) ? kindAtPath(path) : null;
   }
 
   class ReadingContext {
@@ -104,7 +105,7 @@
       this.listeners.forEach(remove => remove());
     }
   }
-  const articles = () => [...primary()?.querySelectorAll('article[data-testid="tweet"]') ?? []];
+  const articles = (column = primary()) => [...column?.querySelectorAll('article[data-testid="tweet"]') ?? []];
   const tweetId = article => (article.querySelector('time')?.closest('a[href*="/status/"]') ??
     article.querySelector('a[href*="/status/"]'))?.getAttribute('href')?.match(STATUS_ID_RE)?.[1];
   const signature = () => articles().slice(0, 4).map(tweetId).filter(Boolean).join(',');
@@ -154,15 +155,16 @@
 
   // One explicit reading action, using only the existing rendered timeline.
   // Keep a screenful of a long post readable before advancing to the next one.
-  function navigate({ getSettings, getScroller, direction, mode, deltaY, deltaMode = 0, beforeMove }) {
+  function navigate({ getSettings, getScroller, direction, mode, deltaY, deltaMode = 0, group, beforeMove }) {
     if (!isReadingAction({ direction, mode, deltaY, deltaMode })) {
       return { status: 'skipped', reason: 'unavailable' };
     }
-    const settings = getSettings();
-    if (!isReadableColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) ||
-        settings?.isTimelineColumn || /\/status\/\d+|^\/(?:compose|messages)(?:\/|$)|^\/i\/(?:chat|grok)(?:\/|$)/.test(window.location.pathname)) {
-      return { status: 'skipped', reason: 'not-timeline' };
-    }
+    const path = window.location.pathname.replace(/\/$/, '');
+    const timeline = isReadingTimeline(getSettings(), path);
+    const column = timeline ? primary() : null;
+    const kind = timeline ? kindAtPath(path, column) : null;
+    if (group !== undefined && kind !== group) return { status: 'skipped', reason: 'target-changed' };
+    if (!timeline) return { status: 'skipped', reason: 'not-timeline' };
     if (document.hidden) return { status: 'skipped', reason: 'hidden' };
     if (document.querySelector('[role="dialog"]')) return { status: 'skipped', reason: 'dialog' };
     for (const editor of document.querySelectorAll(
@@ -180,10 +182,10 @@
       scroller === document.documentElement || scroller === document.body;
     const wheelScroller = rootScroller ? window : scroller;
     if (mode === 'wheel' && wheelScroller.scrollBy) {
-      const itemSelector = readingKind(getSettings) === 'explore'
+      const itemSelector = kind === 'explore'
         ? '[data-testid="cellInnerDiv"] a[href], [data-testid="trend"], article[data-testid="tweet"]'
         : 'article[data-testid="tweet"]';
-      if (!primary()?.querySelector(itemSelector)) return { status: 'skipped', reason: 'unavailable' };
+      if (!column?.querySelector(itemSelector)) return { status: 'skipped', reason: 'unavailable' };
       let unit = 1;
       if (deltaMode === 1) unit = parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16;
       if (deltaMode === 2) {
@@ -200,11 +202,11 @@
     }
     const rect = rootScroller ? null : scroller.getBoundingClientRect();
     const height = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
-    let posts = articles();
-    if (readingKind(getSettings) === 'explore') {
-      const cells = [...primary()?.querySelectorAll('[data-testid="cellInnerDiv"]') ?? []]
+    let posts = articles(column);
+    if (kind === 'explore') {
+      const cells = [...column?.querySelectorAll('[data-testid="cellInnerDiv"]') ?? []]
         .filter(cell => cell.querySelector('a[href], [data-testid="trend"], article[data-testid="tweet"]'));
-      posts = cells.length ? cells : [...primary()?.querySelectorAll('[data-testid="trend"]') ?? []];
+      posts = cells.length ? cells : [...column?.querySelectorAll('[data-testid="trend"]') ?? []];
     }
     if (!posts.length || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
     const top = scroller?.scrollTop ?? window.scrollY ?? 0;

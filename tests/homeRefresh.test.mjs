@@ -1001,6 +1001,41 @@ test('continuous wheel messages validate the sender, amount and current group an
   env.installed.dispose();
 });
 
+test('direct wheel input requires the current parent and group, and obeys the frame guards', () => {
+  const env = readingFrameSetup();
+  const parent = env.window.parent;
+  const action = { columnId: 'column1', group: 'recommended', mode: 'wheel', deltaY: 120, deltaMode: 0 };
+  const wheel = (patch = {}) => env.api.scrollFrame(parent, { ...action, ...patch });
+  assert.equal(env.api.scrollFrame({}, action), false);
+  assert.equal(wheel({ columnId: 'another' }), false);
+  env.window.location.origin = 'https://twitter.com';
+  assert.equal(wheel(), false);
+  env.window.location.origin = 'https://x.com';
+  wheel({ deltaMode: 3 });
+  wheel({ mode: 'top' });
+  assert.equal(env.scroller.scrollTop, 800);
+  assert.equal(wheel(), true);
+  assert.equal(env.scroller.scrollTop, 920);
+  env.document.getElementById('recommended').setAttribute('aria-selected', 'false');
+  env.document.getElementById('following').setAttribute('aria-selected', 'true');
+  assert.equal(wheel(), true, 'a rejected move is still handled and must not be sent again');
+  const draft = env.document.createElement('textarea');
+  draft.dataset.testid = 'tweetTextarea_0';
+  draft.value = '編集中';
+  env.document.body.append(draft);
+  wheel({ group: 'following' });
+  assert.equal(env.scroller.scrollTop, 920);
+  draft.remove();
+  wheel({ group: 'following' });
+  assert.equal(env.scroller.scrollTop, 1040);
+  env.send({ type: 'yomikui-column-visibility', visible: false });
+  wheel({ group: 'following' });
+  assert.equal(env.scroller.scrollTop, 1040);
+  assert.equal(env.messages.length, 0);
+  env.installed.dispose();
+  assert.equal(wheel(), false);
+});
+
 test('offscreen native frames reject reading commands', () => {
   const env = readingFrameSetup();
   env.send({ type: 'yomikui-column-visibility', visible: false });
