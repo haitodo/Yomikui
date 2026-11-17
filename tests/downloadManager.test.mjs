@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { parseHTML } from 'linkedom';
-import { browserEnvironment, deferred, downloadEnvironment, evaluate, media, settle } from './helpers.mjs';
+import { browserEnvironment, deferred, downloadEnvironment, evaluate, Events, media, settle } from './helpers.mjs';
 
 const deck = readFileSync(new URL('../contentDeck.js', import.meta.url), 'utf8');
 
@@ -398,6 +398,7 @@ test('native download clicks use timeline or DOM dates and keep quoted media on 
   const requested = [];
   api.downloads.download = async options => { requested.push(options.filename); return requested.length; };
   evaluate(context, 'tweetActions.js');
+  evaluate(context, 'mediaViewerDownload.js');
   context.crypto = { randomUUID: () => 'batch' };
   context.window.parent.postMessage = ({ media, batchId }) => manager.start(media, batchId);
 
@@ -447,4 +448,132 @@ test('native download clicks use timeline or DOM dates and keep quoted media on 
     'Yomikui-images/2025-11-06/author_123_1.jpg',
     'Yomikui-images/2024-01-08/author_123_2.jpg',
   ]);
+});
+
+const viewerPost = '/miyakawa_miyabi/status/2121528516672180724';
+const viewerButton = '.yomikui-media-viewer-download';
+
+function mediaViewerTest({ pathname, topLevel }) {
+  const env = downloadEnvironment();
+  const { context, window, api, manager } = env;
+  const { document, Event } = parseHTML('<html><head></head><body></body></html>');
+  window.navigation = new Events();
+  if (topLevel) window.top = window;
+  const downloads = [];
+  api.downloads.download = async options => { downloads.push(options); return downloads.length; };
+  Object.assign(context, {
+    document,
+    location: { pathname },
+    chrome: {
+      i18n: { getMessage: () => 'メディアを保存' },
+      runtime: { sendMessage: async message => {
+        assert.equal(message.type, 'yomikui-download-media');
+        await manager.start(message.media, message.batchId);
+        return { success: true };
+      } },
+    },
+    crypto: { randomUUID: () => 'viewer-batch' },
+  });
+  for (const file of ['tweetActions.js', 'mediaPipFrame.js', 'mediaViewerDownload.js']) evaluate(context, file);
+
+  function click(button) {
+    const event = new Event('click', { bubbles: true });
+    Object.defineProperty(event, 'isTrusted', { value: true });
+    button.dispatchEvent(event);
+  }
+
+  function navigate(path) {
+    context.location.pathname = path;
+    window.navigation.emit('currententrychange');
+  }
+
+  return { ...env, document, downloads, click, navigate };
+}
+
+test('a direct X photo URL saves the open image at original size and follows the selected slide', async () => {
+  const env = mediaViewerTest({ pathname: viewerPost + '/photo/1', topLevel: true });
+  const { document, downloads } = env;
+  const observer = env.observers[0];
+  assert.equal(observer.target, document);
+  const date = new Date(2026, 10, 14, 12).toISOString();
+  document.body.innerHTML = `
+    <article><img src="https://pbs.twimg.com/media/background.jpg"></article>
+    <div id="layers"><div role="dialog"><div role="group"><div role="dialog" id="viewer">
+      <div data-testid="swipe-to-dismiss" id="first">
+        <img src="https://pbs.twimg.com/media/first?format=jpg&amp;name=large">
+      </div>
+      <article><a href="${viewerPost}"><time datetime="${date}"></time></a>
+        <img src="https://pbs.twimg.com/media/thumbnail.jpg">
+      </article>
+    </div></div></div></div>`;
+  observer.emit([]);
+  assert.equal(observer.target, document.getElementById('layers'));
+  const button = document.querySelector('#viewer > ' + viewerButton);
+  assert.equal(button.getAttribute('aria-label'), 'メディアを保存');
+  assert.equal(button.type, 'button');
+  env.click(button);
+  await settle();
+
+  env.navigate(viewerPost + '/photo/2');
+  assert.equal(button.disabled, true);
+  env.click(button);
+  const second = document.createElement('div');
+  second.setAttribute('data-testid', 'swipe-to-dismiss');
+  second.innerHTML = '<img src="https://pbs.twimg.com/media/second.png?name=small">';
+  button.parentElement.append(second);
+  observer.emit([]);
+  assert.equal(button.disabled, true);
+  env.click(button);
+  document.getElementById('first').remove();
+  observer.emit([]);
+  assert.equal(button.disabled, false);
+  assert.equal(document.querySelectorAll(viewerButton).length, 1);
+  env.click(button);
+  await settle();
+  assert.deepEqual(downloads.map(({ url, filename }) => ({ url, filename })), [
+    {
+      url: 'https://pbs.twimg.com/media/first?format=jpg&name=orig',
+      filename: 'Yomikui-images/2026-11-14/miyakawa_miyabi_2121528516672180724_1.jpg',
+    },
+    {
+      url: 'https://pbs.twimg.com/media/second?name=orig&format=png',
+      filename: 'Yomikui-images/2026-11-14/miyakawa_miyabi_2121528516672180724_2.png',
+    },
+  ]);
+
+  env.navigate(viewerPost);
+  assert.equal(observer.connected, false);
+  assert.equal(document.querySelector(viewerButton), null);
+  env.navigate(viewerPost + '/photo/2');
+  assert.equal(document.querySelector(viewerButton), button);
+});
+
+test('the native media viewer in a column uses the cached video and follows column visibility', async () => {
+  const env = mediaViewerTest({ pathname: viewerPost + '/video/2', topLevel: false });
+  const { document, context, window, manager, downloads } = env;
+  document.body.innerHTML = '<div id="layers"><div role="dialog"><div data-testid="swipe-to-dismiss"><video></video></div></div></div>';
+  const video = document.querySelector('video');
+  video.src = 'blob:https://x.com/player';
+  video.poster = 'https://pbs.twimg.com/amplify_video_thumb/123/img/poster.jpg';
+  const mp4 = 'https://video.twimg.com/amplify_video/123/vid/movie.mp4';
+  const date = new Date(2026, 10, 14, 12).getTime();
+  const cached = { videos: [{ url: mp4, index: 0 }], tweetCreatedAt: date };
+  let visible = true;
+  context.YomikuiMediaViewerDownload.install({
+    isVisible: () => visible,
+    getCachedMedia: () => cached,
+    download: media => manager.start(media, 'video'),
+  });
+  assert.equal(document.querySelector(viewerButton), null);
+  context.YomikuiMediaPipFrame.rememberVideo(video.poster, mp4, 'video');
+  window.emit('yomikui-media-response');
+  env.click(document.querySelector(viewerButton));
+  await settle();
+  assert.equal(downloads[0].url, mp4);
+  assert.equal(downloads[0].filename, 'Yomikui-videos/2026-11-14/miyakawa_miyabi_2121528516672180724_v1.mp4');
+
+  visible = false;
+  window.emit('yomikui-frame-column-visibility');
+  assert.equal(document.querySelector(viewerButton), null);
+  assert.equal(env.observers[0].connected, false);
 });

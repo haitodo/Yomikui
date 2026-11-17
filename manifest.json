@@ -78,6 +78,7 @@
         "homeRefresh.js",
         "wideMedia.js",
         "mediaPipFrame.js",
+        "mediaViewerDownload.js",
         "searchFilters.js",
         "contentIframe.js"
       ],

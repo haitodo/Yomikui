@@ -195,5 +195,9 @@
     });
   }
 
-  globalThis.YomikuiMediaPipFrame = { install, rememberVideo, isOpen: () => !!session };
+  function getVideoUrl(video) {
+    return mediaByPoster.get(posterKey(video.poster))?.src || mp4(video.currentSrc || video.src);
+  }
+
+  globalThis.YomikuiMediaPipFrame = { install, rememberVideo, getVideoUrl, isOpen: () => !!session };
 })();

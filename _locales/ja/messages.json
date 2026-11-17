@@ -37,6 +37,9 @@
   "app_close_media": {
     "message": "閉じる"
   },
+  "app_download_media": {
+    "message": "メディアを保存"
+  },
   "app_loading_media": {
     "message": "画像を読み込み中…"
   },
