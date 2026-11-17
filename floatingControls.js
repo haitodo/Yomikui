@@ -874,15 +874,16 @@
             }, kind);
           }) }),
           jsx.jsxs('div', { className: 'yf-actions', role: 'group', 'aria-label': `${selected}への操作`, children: [
-            jsx.jsxs('div', { className: 'yf-steps', children: [jsx.jsxs('button', {
-              type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
-              'aria-label': '先頭へ', title: `一覧の先頭へ戻る${lastAction === 'reading' && details ? '\n' + details : ''}`, onClick: () => navigate({ target, mode: 'top' }), children: [icon('top'), '先頭'],
-            }),
-            ...[-1, 1].map(direction => jsx.jsxs('button', {
-              type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
-              title: `${prefs.mode === 'page' ? '画面の約8割' : '投稿ごと'}に${direction === 1 ? '下' : '上'}へ移動${lastAction === 'reading' && details ? '\n' + details : ''}`,
-              onClick: () => navigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
-            }, direction)),
+            jsx.jsxs('div', { className: 'yf-steps', children: [
+              ...[-1, 1].map(direction => jsx.jsxs('button', {
+                type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
+                title: `${prefs.mode === 'page' ? '画面の約8割' : '投稿ごと'}に${direction === 1 ? '下' : '上'}へ移動${lastAction === 'reading' && details ? '\n' + details : ''}`,
+                onClick: () => navigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
+              }, direction)),
+              jsx.jsxs('button', {
+                type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
+                'aria-label': '先頭へ', title: `一覧の先頭へ戻る${lastAction === 'reading' && details ? '\n' + details : ''}`, onClick: () => navigate({ target, mode: 'top' }), children: [icon('top'), '先頭'],
+              }),
             ] }),
             canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
               jsx.jsx('button', {

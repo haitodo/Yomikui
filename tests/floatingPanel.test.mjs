@@ -117,6 +117,8 @@ test('the panel keeps targets next to actions and only settings beside its drag 
   const body = ui.byClass('yf-body').props.children;
   assert.equal(body[1].props.className, 'yf-targets');
   assert.equal(body[2].props.className, 'yf-actions');
+  assert.deepEqual(clone(ui.byClass('yf-steps').props.children.map(node => node.props.className)), ['yf-up', 'yf-down', 'yf-top']);
+  assert.deepEqual(clone(ui.byClass('yf-actions').props.children.map(node => node.props.className)), ['yf-steps', 'yf-refresh-area']);
   assert.deepEqual(clone(ui.byClass('yf-header').props.children.map(node => node.props.className)), ['yf-handle', 'yf-settings-toggle', 'yf-minimize']);
   assert.equal(ui.byClass('yf-fields').props.hidden, true);
   ui.byClass('yf-settings-toggle').props.onClick(); ui.render();
