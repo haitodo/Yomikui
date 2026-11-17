@@ -320,15 +320,88 @@ test("createController coordinates lifecycle, width threshold, and visibility ch
   // 3. Widening on resize triggers debounced upgrade
   win.innerWidth = 900;
   img.src = "https://pbs.twimg.com/media/photo2?format=jpg&name=small";
+  const queryAll = dom.document.querySelectorAll.bind(dom.document);
+  let documentSearches = 0;
+  dom.document.querySelectorAll = selector => {
+    documentSearches++;
+    return queryAll(selector);
+  };
   win.on_resize();
   await clock.advance(150);
   assert.equal(controller.isActive(), true);
   assert.equal(img.src, "https://pbs.twimg.com/media/photo2?format=jpg&name=large");
+  const searchesAfterResize = documentSearches;
+  await clock.advance(80);
+  assert.equal(documentSearches, searchesAfterResize, "resizing must not queue a second document scan");
 
   // 4. Column hidden pauses observer
   win["on_yomikui-frame-column-visibility"]({ detail: { visible: false } });
   assert.equal(controller.isActive(), false);
 
+  controller.dispose();
+});
+
+test("wide columns skip scroll position changes and still upgrade added and recycled images", async () => {
+  const clock = new Clock();
+  const { document } = parseHTML(`
+    <html><body><main>
+      <article data-testid="tweet">
+        <div data-testid="tweetPhoto">
+          <img src="https://pbs.twimg.com/media/first?name=small">
+          <div id="background"></div>
+        </div>
+      </article>
+    </main></body></html>
+  `);
+  let onMutations;
+  const win = {
+    ...clock.globals(),
+    innerWidth: 800,
+    MutationObserver: class {
+      constructor(callback) { onMutations = callback; }
+      observe() {}
+      disconnect() {}
+    },
+  };
+  const WideMedia = loadWideMedia({ window: win, document });
+  const controller = WideMedia.createController({ window: win, document });
+  controller.update({ mediaSizeMode: "default" });
+  await clock.advance(80);
+
+  const timeline = document.querySelector("main");
+  const row = timeline.querySelector("article");
+  const image = row.querySelector("img");
+  const background = document.getElementById("background");
+  let existingSubtreeSearches = 0;
+  for (const element of [timeline, row]) {
+    const queryAll = element.querySelectorAll.bind(element);
+    element.querySelectorAll = selector => {
+      existingSubtreeSearches++;
+      return queryAll(selector);
+    };
+  }
+
+  row.style.transform = "translateY(200px)";
+  onMutations([{ type: "attributes", target: row, attributeName: "style", addedNodes: [] }]);
+  await clock.advance(80);
+  assert.equal(existingSubtreeSearches, 0);
+
+  const added = document.createElement("article");
+  added.innerHTML = '<div data-testid="tweetPhoto"><img src="https://pbs.twimg.com/media/added?name=small"></div>';
+  timeline.append(added);
+  image.src = "https://pbs.twimg.com/media/recycled?name=small";
+  background.setAttribute("style", 'background-image: url("https://pbs.twimg.com/media/bg?name=small")');
+  onMutations([
+    { type: "childList", target: timeline, addedNodes: [added] },
+    { type: "attributes", target: image, attributeName: "src", addedNodes: [] },
+    { type: "attributes", target: background, attributeName: "style", addedNodes: [] },
+  ]);
+  await clock.advance(80);
+
+  assert.equal(added.querySelector("img").src, "https://pbs.twimg.com/media/added?name=large");
+  assert.equal(image.src, "https://pbs.twimg.com/media/recycled?name=large");
+  assert.match(background.style.backgroundImage, /name=large/);
+  assert.equal(existingSubtreeSearches, 0, "appending new posts must not rescan existing posts");
   controller.dispose();
 });
 

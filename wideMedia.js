@@ -14,6 +14,8 @@
     "/amplify_video_thumb/",
     "/tweet_video_thumb/",
   ];
+  const THUMBNAIL_IMAGE = '[data-testid="tweetPhoto"] img, .rd-lf-media-tile img, #yomikui-timeline-root .rd-tweet-card img';
+  const THUMBNAIL_BACKGROUND = '[data-testid="tweetPhoto"] div[style*="background-image"]';
 
   const TWEET = 'article[data-testid="tweet"]';
   const PHOTO_LINK = 'a[role="link"][href*="/photo/"]';
@@ -453,12 +455,12 @@
   function upgradeMediaInRoot(root) {
     if (!root) return 0;
     let upgradedCount = 0;
+    const searchDescendants = root.nodeType !== 1 || root.childElementCount > 0;
 
     // 1. Image elements (Tweet photos, Live Feed tiles, Saved Timeline cards)
-    const imgSelector = '[data-testid="tweetPhoto"] img, .rd-lf-media-tile img, #yomikui-timeline-root .rd-tweet-card img';
     const images = [];
-    if (root.nodeType === 1 && root.matches(imgSelector)) images.push(root);
-    if (root.querySelectorAll) images.push(...root.querySelectorAll(imgSelector));
+    if (root.nodeType === 1 && root.matches(THUMBNAIL_IMAGE)) images.push(root);
+    if (searchDescendants && root.querySelectorAll) images.push(...root.querySelectorAll(THUMBNAIL_IMAGE));
 
     for (const img of images) {
       const currentSrc = img.getAttribute("src") || img.src;
@@ -471,10 +473,9 @@
     }
 
     // 2. Visual background-image elements used by X for tweet photos
-    const bgSelector = '[data-testid="tweetPhoto"] div[style*="background-image"]';
     const bgDivs = [];
-    if (root.nodeType === 1 && root.matches(bgSelector)) bgDivs.push(root);
-    if (root.querySelectorAll) bgDivs.push(...root.querySelectorAll(bgSelector));
+    if (root.nodeType === 1 && root.matches(THUMBNAIL_BACKGROUND)) bgDivs.push(root);
+    if (searchDescendants && root.querySelectorAll) bgDivs.push(...root.querySelectorAll(THUMBNAIL_BACKGROUND));
 
     for (const div of bgDivs) {
       const bgStyle = div.style.backgroundImage || "";
@@ -513,12 +514,19 @@
         pending.clear();
         return;
       }
-      for (const node of pending) {
-        if (node && (node === doc || node.isConnected)) {
-          upgradeMediaInRoot(node);
+      if (pending.has(doc)) {
+        upgradeMediaInRoot(doc);
+      } else {
+        for (const node of pending) {
+          if (node.isConnected) upgradeMediaInRoot(node);
         }
       }
       pending.clear();
+    }
+
+    function flushNow() {
+      if (timer != null) win.clearTimeout(timer);
+      flush();
     }
 
     function schedule() {
@@ -529,12 +537,14 @@
     function onMutations(records) {
       if (!isActive()) return;
       for (const record of records) {
-        const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-        if (target) pending.add(target);
-        if (record.addedNodes) {
-          for (const node of record.addedNodes) {
-            if (node.nodeType === 1) pending.add(node);
-          }
+        if (record.type === "attributes") {
+          // A layout style change can move an entire row without changing its media.
+          const selector = record.attributeName === "src" ? THUMBNAIL_IMAGE : THUMBNAIL_BACKGROUND;
+          if (record.target.matches(selector)) pending.add(record.target);
+          continue;
+        }
+        for (const node of record.addedNodes) {
+          if (node.nodeType === 1) pending.add(node);
         }
       }
       if (pending.size) schedule();
@@ -576,7 +586,7 @@
       if (resizeTimer != null) win.clearTimeout(resizeTimer);
       resizeTimer = win.setTimeout(() => {
         resizeTimer = null;
-        if (sync()) upgradeMediaInRoot(doc);
+        if (sync()) flushNow();
       }, 150);
     }
 
@@ -604,13 +614,7 @@
         visible = nextVisible !== false;
         sync();
       },
-      flushNow() {
-        if (timer != null) {
-          win.clearTimeout(timer);
-          timer = null;
-        }
-        flush();
-      },
+      flushNow,
       dispose() {
         if (observer) observer.disconnect();
         if (timer != null) win.clearTimeout(timer);
