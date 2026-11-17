@@ -79,7 +79,7 @@
         "wideMedia.js",
         "mediaPipFrame.js",
         "mediaViewerDownload.js",
-        "searchFilters.js",
+        "searchFrame.js",
         "contentIframe.js"
       ],
       "all_frames": true,

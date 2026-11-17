@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { Clock, Events } from './helpers.mjs';
 
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+const bridgeSource = readFileSync(new URL('../searchFrame.js', import.meta.url), 'utf8');
 const source = readFileSync(new URL('../searchFilters.js', import.meta.url), 'utf8');
 const deckSource = readFileSync(new URL('../contentDeck.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
@@ -40,9 +41,9 @@ function setup(options = {}) {
     chrome,
     ...(win ? { window: win } : {}),
     ...(doc ? { document: doc } : {}),
-    ...(options.tweetRouting ? { YomikuiTweetRouting: options.tweetRouting } : {}),
     ...(options.columnNavigation ? { YomikuiColumnNavigation: options.columnNavigation } : {}),
   });
+  vm.runInContext(bridgeSource, context);
   vm.runInContext(source, context);
   return { api: context.YomikuiSearchFilters, saved, clock, context };
 }
@@ -607,27 +608,29 @@ test('FilterPanel save form supports relative period toggle defaulting ON for cu
   assert.equal(pastRelCb.props.checked, false);
 });
 
-test('installFrameSearchBridge reports path changes and handles search navigation messages', () => {
+test('the standalone search bridge tracks navigation from non-search pages and accepts trusted search updates', () => {
   const win = new Events();
   const doc = new Events();
   doc.readyState = 'complete';
   const posted = [];
   const navigated = [];
 
-  win.location = { pathname: '/search', search: '?q=cats', hash: '#yomikui-cid1', href: 'https://x.com/search?q=cats#yomikui-cid1' };
+  win.location = { pathname: '/home', search: '', hash: '#yomikui-cid1', href: 'https://x.com/home#yomikui-cid1' };
   win.parent = { postMessage(msg, target) { posted.push({ msg, target }); } };
   win.navigation = new Events();
 
-  const { api } = setup({
+  const context = vm.createContext({
+    ...new Clock().globals(), URL,
     window: win,
     document: doc,
-    tweetRouting: { openInPlace(path) { navigated.push(path); } },
+    YomikuiTweetRouting: { openInPlace(path) { navigated.push(path); } },
   });
+  vm.runInContext(bridgeSource, context);
 
-  const cleanup = api.installFrameSearchBridge(doc, win);
   assert.equal(posted.length, 1);
-  assert.deepEqual(clone(posted[0].msg), { type: 'yomikui-search-location', path: '/search?q=cats' });
+  assert.deepEqual(clone(posted[0].msg), { type: 'yomikui-search-location', path: '/home' });
 
+  win.location.pathname = '/search';
   win.location.search = '?q=cats+filter%3Aimages';
   win.navigation.emit('currententrychange');
   assert.equal(posted.length, 2);
@@ -648,8 +651,6 @@ test('installFrameSearchBridge reports path changes and handles search navigatio
     data: { type: 'yomikui-search-navigate', path: '/search?q=cats+lang%3Aja&f=live' },
   });
   assert.deepEqual(navigated, ['/search?q=cats+lang%3Aja&f=live']);
-
-  cleanup();
 });
 
 test('manifest, locales, and contentDeck wire searchFilters cleanly', () => {
@@ -657,8 +658,11 @@ test('manifest, locales, and contentDeck wire searchFilters cleanly', () => {
   const frameEntry = manifest.content_scripts.find(entry => entry.js?.includes('contentIframe.js'));
   assert.ok(deckEntry.js.indexOf('searchFilters.js') >= 0);
   assert.ok(deckEntry.js.indexOf('searchFilters.js') < deckEntry.js.indexOf('contentDeck.js'));
-  assert.ok(frameEntry.js.indexOf('searchFilters.js') >= 0);
-  assert.ok(frameEntry.js.indexOf('searchFilters.js') < frameEntry.js.indexOf('contentIframe.js'));
+  assert.equal(frameEntry.js.includes('searchFilters.js'), false);
+  assert.equal(frameEntry.run_at, 'document_start');
+  assert.equal(frameEntry.all_frames, true);
+  assert.ok(frameEntry.js.indexOf('searchFrame.js') >= 0);
+  assert.ok(frameEntry.js.indexOf('searchFrame.js') < frameEntry.js.indexOf('contentIframe.js'));
 
   assert.ok(jaMessages.search_filter_button?.message);
   assert.ok(jaMessages.search_filter_presets?.message);

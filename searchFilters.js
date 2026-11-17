@@ -1,10 +1,11 @@
 "use strict";
 
-// Shared by the dashboard and native X frames.
+// Loaded by the dashboard. The column bridge is in searchFrame.js.
 // Provides quick search-operator filter chips and reusable filter presets for /search columns.
 (() => {
   if (globalThis.YomikuiSearchFilters) return;
 
+  const { isTrustedOrigin, isSearchTab, parseSearchUrl } = globalThis.YomikuiSearchFrame;
   const PRESETS_STORAGE_KEY = "yomikui_search_filter_presets_v1";
   const LOCAL_BACKUP_KEY = "yk_search_presets_backup_v1";
   const SYNC_META_KEY = "yk_sp_sync_meta_v1";
@@ -14,7 +15,6 @@
   const COL_STATE_STORAGE_KEY = "yk_col_preset_state_v1";
   const STYLE_MARKER = "/* yomikui-search-filters-v2 */";
   const VALID_PERIOD_MODES = new Set(["none", "relative", "cursor", "fixed"]);
-  const ALLOWED_HOSTS = new Set(["x.com", "www.x.com", "twitter.com", "www.twitter.com"]);
   const RECENCY_DAYS = Object.freeze([1, 7, 30]);
   const FAVES_PRESETS = Object.freeze([10, 50, 100, 500, 1000]);
   const RETWEETS_PRESETS = Object.freeze([10, 50, 100, 500]);
@@ -45,7 +45,6 @@
     { value: "month", labelKey: "search_filter_unit_month", fallback: "月", currentKey: "search_filter_current_month", currentFallback: "今月" },
     { value: "year", labelKey: "search_filter_unit_year", fallback: "年", currentKey: "search_filter_current_year", currentFallback: "今年" },
   ]);
-  const VALID_TABS = new Set(["top", "live", "media", "user", "list"]);
   const VALID_PERIOD_UNITS = new Set(["day", "week", "month", "year"]);
 
   const DEFAULT_PRESETS = Object.freeze([
@@ -91,15 +90,6 @@
       }
     } catch {}
     return fallback;
-  }
-
-  function isTrustedOrigin(origin) {
-    if (typeof origin !== "string" || !origin.startsWith("https://")) return false;
-    try {
-      return ALLOWED_HOSTS.has(new URL(origin).hostname.toLowerCase());
-    } catch {
-      return false;
-    }
   }
 
   function parseYmd(value) {
@@ -506,29 +496,12 @@
     return parts.join(" ");
   }
 
-  function parseSearchUrl(rawUrl) {
-    if (typeof rawUrl !== "string" || !rawUrl.trim()) return null;
-    try {
-      const url = new URL(rawUrl, "https://x.com");
-      if (url.protocol !== "https:" || !ALLOWED_HOSTS.has(url.hostname.toLowerCase())) return null;
-      const pathname = (url.pathname.replace(/\/+$/, "") || "/").toLowerCase();
-      if (pathname !== "/search") return null;
-      const q = url.searchParams.get("q") ?? "";
-      if (q === "yomikui-timeline") return null;
-      const rawTab = (url.searchParams.get("f") || "top").toLowerCase();
-      const tab = VALID_TABS.has(rawTab) ? rawTab : "top";
-      return { q, tab };
-    } catch {
-      return null;
-    }
-  }
-
   function buildSearchPath(baseText, filters, tab = "top", now = Date.now()) {
     const query = buildSearchQuery(baseText, filters, now);
     const params = new URLSearchParams();
     if (query) params.set("q", query);
     const normalizedTab = typeof tab === "string" ? tab.toLowerCase() : "top";
-    if (normalizedTab && normalizedTab !== "top" && VALID_TABS.has(normalizedTab)) {
+    if (normalizedTab !== "top" && isSearchTab(normalizedTab)) {
       params.set("f", normalizedTab);
     }
     const qs = params.toString();
@@ -591,7 +564,7 @@
     const name = typeof raw.name === "string" ? raw.name.trim() : "";
     if (!name) return null;
     const rawTab = typeof raw.tab === "string" ? raw.tab.toLowerCase() : null;
-    const tab = rawTab && VALID_TABS.has(rawTab) ? rawTab : null;
+    const tab = isSearchTab(rawTab) ? rawTab : null;
     const includeQuery = raw.includeQuery === true;
     const query = includeQuery && typeof raw.query === "string" ? raw.query.trim() : "";
     const filters = normalizeFilters(raw.filters);
@@ -1121,86 +1094,6 @@
   }
 
   // --- Frame bridge (runs inside X iframes) ---
-
-  function getFramePath() {
-    return `${window.location.pathname || "/"}${window.location.search || ""}`;
-  }
-
-  function installFrameSearchBridge(frameDoc = (typeof document !== "undefined" ? document : null), frameWin = (typeof window !== "undefined" ? window : null)) {
-    if (!frameDoc || !frameWin || frameDoc.__yomikuiSearchFilterBridgeInstalled) return () => {};
-    frameDoc.__yomikuiSearchFilterBridgeInstalled = true;
-
-    let lastReportedPath = null;
-    let clickTimer = null;
-
-    const reportPath = (force = false) => {
-      try {
-        const path = getFramePath();
-        if (!force && path === lastReportedPath) return;
-        lastReportedPath = path;
-        frameWin.parent?.postMessage?.({ type: "yomikui-search-location", path }, "*");
-      } catch {}
-    };
-
-    const scheduleClickCheck = () => {
-      if (clickTimer) clearTimeout(clickTimer);
-      clickTimer = setTimeout(() => {
-        clickTimer = null;
-        reportPath(false);
-      }, 80);
-    };
-
-    const onMessage = (event) => {
-      if (event.source !== frameWin.parent || !isTrustedOrigin(event.origin)) return;
-      const data = event.data;
-      if (!data || typeof data !== "object") return;
-      if (data.type === "yomikui-search-location-request") {
-        reportPath(true);
-        return;
-      }
-      if (data.type === "yomikui-search-navigate") {
-        const parsed = parseSearchUrl(data.path);
-        if (!parsed) return;
-        const nextUrl = new URL(data.path, "https://x.com");
-        const nextPath = `${nextUrl.pathname}${nextUrl.search}`;
-        if (!nextPath.startsWith("/search")) return;
-        if (typeof globalThis.YomikuiTweetRouting?.openInPlace === "function") {
-          globalThis.YomikuiTweetRouting.openInPlace(nextPath);
-        } else {
-          try {
-            const fullUrl = new URL(nextPath + (frameWin.location?.hash || ""), frameWin.location?.href || "https://x.com").href;
-            frameWin.location.href = fullUrl;
-          } catch {}
-        }
-        lastReportedPath = nextPath;
-      }
-    };
-
-    const onNavEvent = () => reportPath(false);
-
-    reportPath(true);
-    if (frameDoc.readyState === "loading") {
-      frameDoc.addEventListener?.("DOMContentLoaded", () => reportPath(true), { once: true });
-    }
-    frameWin.addEventListener?.("load", () => reportPath(true), { once: true });
-    frameWin.addEventListener?.("message", onMessage);
-    frameWin.addEventListener?.("popstate", onNavEvent);
-    frameWin.addEventListener?.("hashchange", onNavEvent);
-    frameWin.navigation?.addEventListener?.("currententrychange", onNavEvent);
-    frameWin.navigation?.addEventListener?.("navigatesuccess", onNavEvent);
-    frameDoc.addEventListener?.("click", scheduleClickCheck, true);
-
-    return () => {
-      if (clickTimer) clearTimeout(clickTimer);
-      frameWin.removeEventListener?.("message", onMessage);
-      frameWin.removeEventListener?.("popstate", onNavEvent);
-      frameWin.removeEventListener?.("hashchange", onNavEvent);
-      frameWin.navigation?.removeEventListener?.("currententrychange", onNavEvent);
-      frameWin.navigation?.removeEventListener?.("navigatesuccess", onNavEvent);
-      frameDoc.removeEventListener?.("click", scheduleClickCheck, true);
-      delete frameDoc.__yomikuiSearchFilterBridgeInstalled;
-    };
-  }
 
   // --- Dashboard hook & UI components ---
 
@@ -2054,7 +1947,7 @@
         pinned: Boolean(editorDraft.pinned),
         includeQuery: Boolean(editorDraft.includeQuery && editorDraft.query.trim()),
         query: editorDraft.includeQuery ? editorDraft.query.trim() : "",
-        tab: editorDraft.tab && VALID_TABS.has(editorDraft.tab) ? editorDraft.tab : null,
+        tab: isSearchTab(editorDraft.tab) ? editorDraft.tab : null,
         filters: nextFilters,
         periodMode: mode,
         cursorUnit: unit,
@@ -3330,13 +3223,6 @@
     });
   }
 
-  if (typeof window !== "undefined" && typeof document !== "undefined") {
-    const isTopDeck = window.parent === window || (window.location?.pathname?.startsWith?.("/yomikui") ?? false);
-    if (!isTopDeck) {
-      installFrameSearchBridge(document, window);
-    }
-  }
-
   globalThis.YomikuiSearchFilters = Object.freeze({
     PRESETS_STORAGE_KEY,
     LOCAL_BACKUP_KEY,
@@ -3397,7 +3283,6 @@
     deletePreset,
     applyPresetToUrl,
     subscribePresets,
-    installFrameSearchBridge,
     useColumnSearch,
     PresetButton,
     FilterButton,

@@ -304,22 +304,20 @@
       this.flush();
       if (this.observer) return;
       this.observer = new MutationObserver(records => {
-        for (const record of records) {
-          if (record.type === 'characterData') {
-            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-            if (!target?.closest?.('[data-testid="retweet"], [data-testid="unretweet"]')) continue;
-            const tweet = target.closest(TWEET);
-            if (tweet) this.pending.add(tweet);
-            continue;
-          }
-          const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-          const tweet = target?.closest?.(TWEET);
-          if (tweet) this.pending.add(tweet);
-          else for (const node of record.addedNodes ?? []) if (node.nodeType === 1) this.scan(node);
-        }
+        this.collectMutations(records);
         this.scheduleFlush();
       });
       this.observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['href'] });
+    }
+
+    collectMutations(records) {
+      for (const record of records) {
+        const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+        if (record.type === 'characterData' && !target?.closest?.('[data-testid="retweet"], [data-testid="unretweet"]')) continue;
+        const tweet = target?.closest?.(TWEET);
+        if (tweet) this.pending.add(tweet);
+        else for (const node of record.addedNodes ?? []) if (node.nodeType === 1) this.scan(node);
+      }
     }
 
     scheduleFlush() {
@@ -343,12 +341,16 @@
     }
 
     flush() {
+      // A synchronous refresh can start before the observer delivers X's changes.
+      if (this.observer) this.collectMutations(this.observer.takeRecords());
       if (this.rescanPending) {
         this.rescanPending = false;
         this.scan(document);
       }
       for (const tweet of this.pending) if (tweet.isConnected && !tweet.matches('.rd-lf-tweet')) this.process(tweet);
       this.pending.clear();
+      // Only our synchronous decoration writes were queued since the drain.
+      this.observer?.takeRecords();
     }
 
     process(tweet) {

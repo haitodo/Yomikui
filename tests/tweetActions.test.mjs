@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { parseHTML } from 'linkedom';
-import { Clock, Events } from './helpers.mjs';
+import { Clock, Events, settle } from './helpers.mjs';
 
 const source = readFileSync(new URL('../tweetActions.js', import.meta.url), 'utf8');
 const deckSource = readFileSync(new URL('../contentDeck.js', import.meta.url), 'utf8');
@@ -16,9 +16,9 @@ const defaultSettings = { showQuoteList: true, showRetweetList: true, hideViews:
 const element = (type, props, key) => ({ type, props, key });
 const jsx = { jsx: element, jsxs: element, Fragment: 'Fragment' };
 
-function setup(html = '') {
+function setup(html = '', { useDomObserver = false } = {}) {
   const clock = new Clock();
-  const { document, Event } = parseHTML(`<html><head></head><body>${html}</body></html>`);
+  const { document, Event, MutationObserver: DomObserver } = parseHTML(`<html><head></head><body>${html}</body></html>`);
   document.hidden = false;
   const window = new Events();
   window.location = { hash: '#yomikui-cidcolumn' };
@@ -27,9 +27,10 @@ function setup(html = '') {
     constructor(callback) { this.callback = callback; observers.push(this); }
     observe() { this.connected = true; }
     disconnect() { this.connected = false; }
+    takeRecords() { return []; }
     emit(records) { if (this.connected) this.callback(records); }
   }
-  const context = vm.createContext({ ...clock.globals(), URL, window, document, MutationObserver });
+  const context = vm.createContext({ ...clock.globals(), URL, window, document, MutationObserver: useDomObserver ? DomObserver : MutationObserver });
   vm.runInContext(source, context);
   return { clock, document, window, observers, Event, context, actions: context.YomikuiTweetActions };
 }
@@ -274,6 +275,26 @@ test('mutations handle new tweets, recycled IDs and action-row replacement witho
   await clock.advance(80);
   assert.match(document.querySelector('#actions-404 [data-yomikui-tweet-action="retweets"] a').href, /404\/retweets/);
   assert.equal(document.querySelectorAll('[data-yomikui-tweet-action]').length, 4);
+});
+
+test('list controls process new rows once and still repair X changes pending in the observer', async () => {
+  const { actions, document, clock } = setup('', { useDomObserver: true });
+  const controller = new actions.NativeActionsController();
+  const processed = [];
+  const process = controller.process.bind(controller);
+  controller.process = tweet => { processed.push(tweet.id); process(tweet); };
+  controller.update(allEnabled);
+
+  document.body.insertAdjacentHTML('beforeend', nativeTweet('101') + nativeTweet('202'));
+  await settle();
+  await clock.advance(240);
+  assert.deepEqual(processed, ['tweet-101', 'tweet-202']);
+
+  document.querySelector('#views-101 a').setAttribute('href', '/other/status/303/analytics');
+  controller.flush();
+  assert.match(document.querySelector('#actions-101 [data-yomikui-tweet-action="quotes"] a').href, /other\/status\/303\/quotes/);
+  await clock.advance(240);
+  assert.deepEqual(processed, ['tweet-101', 'tweet-202', 'tweet-101']);
 });
 
 test('native observation stops in hidden columns and resumes with current tweet IDs', async () => {
