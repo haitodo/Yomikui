@@ -23,7 +23,7 @@ function setup() {
 }
 
 function panel(env, options = {}) {
-  const { mode = 'post', hideEmpty = true, target = ['recommended'], selectionMode = 'single',
+  const { hideEmpty = true, target = ['recommended'], selectionMode = 'single',
     phase = 'idle', reading = false, ready = true, workspaceId = 'workspace', selectedWorkspaceId = workspaceId,
     kinds = { one: 'recommended' }, lastAction = 'selection', settingsOpen = false, results = [],
     color = 'bluegray', transparency = 0, columns = [{ id: 'one', type: 'home', title: 'Home' }], visible = ['one'],
@@ -34,7 +34,7 @@ function panel(env, options = {}) {
     : minimized === true
       ? { [workspaceId]: true }
       : {};
-  const states = [env.api.preferences({ mode, hideEmpty, color, transparency, minimized: initialMinimized }),
+  const states = [env.api.preferences({ hideEmpty, color, transparency, minimized: initialMinimized }),
     { workspaceId: selectedWorkspaceId, value: env.api.selectionPreferences({ selectionMode, single: target[0], multiple: target, multipleReady: true }), ready },
     new Set(visible), lastAction, settingsOpen, loaded];
   let index, nodes, effects = [];
@@ -108,7 +108,7 @@ test('single and multiple modes remember independent choices and switching targe
   assert.deepEqual(clone((await env.api.loadTarget('workspace')).multiple), []);
 });
 
-test('the panel keeps targets next to actions and only settings beside its drag handle', () => {
+test('the panel places only top and refresh under the targets and exposes the remaining settings', () => {
   const ui = panel(setup());
   assert.ok(ui.target('recommended'));
   assert.equal(ui.target('recommended').props.hidden, false);
@@ -117,12 +117,12 @@ test('the panel keeps targets next to actions and only settings beside its drag 
   const body = ui.byClass('yf-body').props.children;
   assert.equal(body[1].props.className, 'yf-targets');
   assert.equal(body[2].props.className, 'yf-actions');
-  assert.deepEqual(clone(ui.byClass('yf-steps').props.children.map(node => node.props.className)), ['yf-up', 'yf-down', 'yf-top']);
-  assert.deepEqual(clone(ui.byClass('yf-actions').props.children.map(node => node.props.className)), ['yf-steps', 'yf-refresh-area']);
+  assert.deepEqual(clone(ui.byClass('yf-actions').props.children.map(node => node.props.className)), ['yf-top', 'yf-refresh']);
   assert.deepEqual(clone(ui.byClass('yf-header').props.children.map(node => node.props.className)), ['yf-handle', 'yf-settings-toggle', 'yf-minimize']);
   assert.equal(ui.byClass('yf-fields').props.hidden, true);
   ui.byClass('yf-settings-toggle').props.onClick(); ui.render();
   assert.equal(ui.byClass('yf-fields').props.hidden, false);
+  assert.deepEqual(ui.nodes().filter(node => node.type === 'select').map(node => node.props['aria-label']), ['背景色']);
 });
 
 test('zero-column groups can be hidden without clearing selection; restoring another workspace disables actions', async () => {
@@ -130,7 +130,7 @@ test('zero-column groups can be hidden without clearing selection; restoring ano
   const ui = panel(env, { selectionMode: 'multiple', target: ['search'] });
   assert.equal(ui.target('search').props.hidden, true);
   assert.equal(ui.target('search').props['aria-pressed'], true);
-  assert.equal(ui.byClass('yf-down').props.disabled, true);
+  assert.equal(ui.byClass('yf-top').props.disabled, true);
   const checkbox = ui.find(node => node.type === 'input' && node.props.type === 'checkbox');
   checkbox.props.onChange({ currentTarget: { checked: false } }); ui.render();
   assert.equal(ui.target('search').props.hidden, false);
@@ -145,19 +145,15 @@ test('zero-column groups can be hidden without clearing selection; restoring ano
   }
 });
 
-test('reading, wheel scope and refresh use the same group selection and scroll mode stays in settings', () => {
+test('top and refresh use the same group selection', () => {
   const env = setup(), moves = [], refreshes = [];
-  const ui = panel(env, { target: ['recommended', 'search'], selectionMode: 'multiple', mode: 'page',
+  const ui = panel(env, { target: ['recommended', 'search'], selectionMode: 'multiple',
     onNavigate: action => moves.push(clone(action)), onRefresh: action => refreshes.push(clone(action)) });
   ui.byClass('yf-top').props.onClick();
-  ui.byClass('yf-down').props.onClick();
   ui.byClass('yf-refresh').props.onClick();
-  assert.deepEqual(moves, [{ target: ['recommended', 'search'], mode: 'top' }, { target: ['recommended', 'search'], direction: 1, mode: 'page' }]);
+  assert.deepEqual(moves, [{ target: ['recommended', 'search'], mode: 'top' }]);
   assert.deepEqual(refreshes, [{ target: ['recommended', 'search'] }]);
   assert.match(ui.byClass('yf-refresh').props.title, /先頭へ戻して/);
-  const settings = ui.byClass('yf-fields');
-  assert.equal(settings.props.hidden, true);
-  assert.ok(settings.props.children[0].props.children.some(child => child.props?.className === 'yf-color-select'));
 });
 
 test('the refresh button indicates a full reload before submitting search or Explore', () => {
@@ -208,12 +204,12 @@ test('results stay inside the refresh button with a live announcement and no lay
     assert.equal(ui.byClass('yf-refresh').props.children[1], label);
     assert.equal(ui.find(node => node.props?.role === 'status').props.className, 'yf-sr-only');
     assert.match(ui.byClass('yf-refresh').props.title, /列ごとの結果/);
-    assert.equal(ui.byClass('yf-down').props.disabled, false);
+    assert.equal(ui.byClass('yf-top').props.disabled, false);
     assert.equal(ui.byClass('yf-refresh').props.disabled, true);
   }
   let cancelled = 0;
   const running = panel(env, { phase: 'running', onCancelRefresh: () => cancelled++ });
-  assert.equal(running.byClass('yf-down').props.disabled, true);
+  assert.equal(running.byClass('yf-top').props.disabled, true);
   assert.equal(running.target('recommended').props.disabled, true);
   assert.equal(running.byClass('yf-refresh').props.disabled, false);
   running.byClass('yf-refresh').props.onClick();
@@ -229,19 +225,19 @@ test('a temporary unknown page during a reload does not move or hide its target 
   view.phase = 'running'; kinds.one = null; ui.render();
   assert.equal(ui.target('recommended').props.hidden, false);
   assert.equal(ui.target('recommended').props.children.at(-1).props.children, '1列');
-  assert.equal(ui.byClass('yf-down').props.disabled, true, 'stable display counts never authorize an operation');
+  assert.equal(ui.byClass('yf-top').props.disabled, true, 'stable display counts never authorize an operation');
   view.phase = 'idle'; ui.render();
   assert.equal(ui.target('recommended').props.hidden, true);
 });
 
-test('color, transparency and movement mode survive preference changes', async () => {
+test('color and transparency survive preference changes', async () => {
   const env = setup();
-  const ui = panel(env, { mode: 'page', color: 'sage', transparency: 35 });
+  const ui = panel(env, { color: 'sage', transparency: 35 });
   ui.find(node => node.type === 'select' && node.props['aria-label'] === '背景色').props.onChange({ currentTarget: { value: 'gray' } });
   ui.find(node => node.type === 'input' && node.props.type === 'range').props.onChange({ currentTarget: { value: '60' } });
   await settle();
   const prefs = await env.api.loadPreferences();
-  assert.deepEqual([prefs.color, prefs.transparency, prefs.mode], ['gray', 60, 'page']);
+  assert.deepEqual([prefs.color, prefs.transparency], ['gray', 60]);
 });
 
 function sidebar(env, parts = {}) {

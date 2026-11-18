@@ -8,14 +8,12 @@
   const RECOMMENDED_LABELS = new Set(['おすすめ', 'お勧め', 'foryou']);
   const FOLLOWING_LABELS = new Set(['following', 'フォロー中', 'フォロー']);
   const VALID_DELTA_MODES = new Set([0, 1, 2]);
-  const READING_NAV_MODES = new Set(['post', 'page']);
   const STATUS_ID_RE = /\/status\/(\d+)/;
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
   const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'likes', 'customUrl']);
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
-  const isReadingAction = ({ direction, mode, deltaY, deltaMode = 0 }) => mode === 'top' ||
-    (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && VALID_DELTA_MODES.has(deltaMode)) ||
-    ((direction === 1 || direction === -1) && READING_NAV_MODES.has(mode));
+  const isReadingAction = ({ mode, deltaY, deltaMode = 0 }) => mode === 'top' ||
+    (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && VALID_DELTA_MODES.has(deltaMode));
   const READING_GROUPS = ['recommended', 'following', 'search', 'explore'];
   const REFRESH_KINDS = ['recommended', 'following', 'search', 'explore'];
   const REFRESH_KINDS_SET = new Set(REFRESH_KINDS);
@@ -153,10 +151,8 @@
     else window.scrollTo(options);
   }
 
-  // One explicit reading action, using only the existing rendered timeline.
-  // Keep a screenful of a long post readable before advancing to the next one.
-  function navigate({ getSettings, getScroller, direction, mode, deltaY, deltaMode = 0, group, beforeMove }) {
-    if (!isReadingAction({ direction, mode, deltaY, deltaMode })) {
+  function navigate({ getSettings, getScroller, mode, deltaY, deltaMode = 0, group, beforeMove }) {
+    if (!isReadingAction({ mode, deltaY, deltaMode })) {
       return { status: 'skipped', reason: 'unavailable' };
     }
     const path = window.location.pathname.replace(/\/$/, '');
@@ -210,60 +206,23 @@
     }
     if (!posts.length || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
     const top = scroller?.scrollTop ?? window.scrollY ?? 0;
-    const viewportTop = rootScroller ? 0 : Math.max(0, rect.top);
-    const stride = height * .8;
+    if (mode === 'top') {
+      beforeMove?.();
+      scrollToTop(scroller);
+      return { status: Math.abs(top) < 1 ? 'edge' : 'moved' };
+    }
+    if (!posts.some(post => post.getBoundingClientRect().height > 0)) return { status: 'skipped', reason: 'unavailable' };
+    const lineHeight = deltaMode === 1 ? parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16 : 1;
     const extent = scroller?.scrollHeight ?? document.documentElement.scrollHeight;
     const limit = Math.max(0, extent - (rootScroller ? window.innerHeight : scroller.clientHeight));
-    let next = mode === 'top' ? 0 : top + direction * stride;
-    if (mode === 'wheel') {
-      const lineHeight = deltaMode === 1 ? parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16 : 1;
-      next = top + deltaY * (deltaMode === 2 ? height : lineHeight);
-    }
-    if (mode === 'post') {
-      let hasRendered = false;
-      let anchor = undefined;
-      if (direction > 0) {
-        for (let i = 0; i < posts.length; i++) {
-          const postRect = posts[i].getBoundingClientRect();
-          if (postRect.height <= 0) continue;
-          hasRendered = true;
-          const pos = top + postRect.top - viewportTop;
-          if (pos > top + 4) {
-            anchor = pos;
-            break;
-          }
-        }
-        if (anchor !== undefined) next = Math.min(next, anchor);
-      } else {
-        for (let i = posts.length - 1; i >= 0; i--) {
-          const postRect = posts[i].getBoundingClientRect();
-          if (postRect.height <= 0) continue;
-          hasRendered = true;
-          const pos = top + postRect.top - viewportTop;
-          if (pos < top - 4) {
-            anchor = pos;
-            break;
-          }
-        }
-        next = anchor === undefined ? Math.max(0, next) : Math.max(next, anchor);
-      }
-      if (!hasRendered) return { status: 'skipped', reason: 'unavailable' };
-    } else if (mode !== 'top' && !posts.some(article => article.getBoundingClientRect().height > 0)) {
-      return { status: 'skipped', reason: 'unavailable' };
-    }
-    next = Math.max(0, Math.min(limit, next));
+    const next = Math.max(0, Math.min(limit, top + deltaY * (deltaMode === 2 ? height : lineHeight)));
     if (!Number.isFinite(next)) return { status: 'skipped', reason: 'unavailable' };
     beforeMove?.();
-    const atEdge = mode === 'wheel' ? next === top : Math.abs(next - top) < 1;
-    // Direct input also cancels a smooth step that has not painted yet.
-    if (atEdge && mode !== 'top' && mode !== 'wheel') return { status: 'edge' };
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const options = { top: next, behavior: mode === 'top' || mode === 'wheel' || reduced ? 'instant' : 'smooth' };
-    if (mode === 'top') scrollToTop(scroller);
-    else if (scroller?.scrollTo) scroller.scrollTo(options);
+    const options = { top: next, behavior: 'instant' };
+    if (scroller?.scrollTo) scroller.scrollTo(options);
     else if (scroller && !rootScroller) scroller.scrollTop = next;
     else window.scrollTo(options);
-    return { status: atEdge ? 'edge' : 'moved' };
+    return { status: next === top ? 'edge' : 'moved' };
   }
 
   class Tracker {
@@ -296,7 +255,7 @@
       return job;
     }
 
-    request(job = this.job) {
+    request(job = this.job, timeout = 6000) {
       if (this.job !== job || !job || job.requested) return;
       job.requested = true;
       job.signature = signature();
@@ -316,7 +275,7 @@
         job.resize = new ResizeObserver(() => { if (job.changed) this.schedule(job); });
         job.resize.observe(primary());
       }
-      this.later(job, () => this.finish(job), 6000);
+      this.later(job, () => this.finish(job), timeout);
     }
 
     later(job, callback, ms) {

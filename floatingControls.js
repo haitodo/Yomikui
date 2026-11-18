@@ -81,7 +81,6 @@
     return {
       x: Number.isFinite(value?.x) ? clamp(value.x) : 1,
       y: Number.isFinite(value?.y) ? clamp(value.y) : 1,
-      mode: value?.mode === 'page' ? 'page' : 'post',
       hideEmpty: value?.hideEmpty !== false,
       color: Object.hasOwn(COLORS, value?.color) ? value.color : 'bluegray',
       transparency: Number.isFinite(value?.transparency) ? Math.max(0, Math.min(80, Math.round(value.transparency / 5) * 5)) : 0,
@@ -246,7 +245,7 @@
       this.publishContexts();
     }
 
-    request(column, frame, direction, mode, group) {
+    request(column, frame, group) {
       return new Promise(resolve => {
         const id = crypto.randomUUID();
         const pending = { columnId: column.id, frame: frame.window, origin: frame.origin };
@@ -257,7 +256,7 @@
         };
         this.pending.set(id, pending);
         pending.timer = setTimeout(() => pending.finish({ status: 'failed', reason: 'timeout' }), NAVIGATION_TIMEOUT_MS);
-        try { frame.window.postMessage({ type: PREFIX + 'navigate', requestId: id, columnId: column.id, direction, mode, ...(group ? { group } : {}) }, frame.origin); }
+        try { frame.window.postMessage({ type: PREFIX + 'navigate', requestId: id, columnId: column.id, mode: 'top', ...(group ? { group } : {}) }, frame.origin); }
         catch { pending.finish({ status: 'failed', reason: 'error' }); }
       });
     }
@@ -326,8 +325,8 @@
       this.wheelBuffer = null;
     }
 
-    async move({ target = 'all', direction, mode }) {
-      if (this.disposed || this.active || document.hidden || !globalThis.YomikuiHomeScroll.isReadingAction({ direction, mode })) return;
+    async move({ target = 'all', mode }) {
+      if (this.disposed || this.active || document.hidden || mode !== 'top') return;
       this.clearWheel();
       const state = this.getState();
       const kinds = this.kinds();
@@ -348,9 +347,9 @@
           if (state.columnComposing?.[column.id]) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'draft' };
           if (!frame?.window || !trusted(frame.origin)) return { columnId: column.id, title: column.title, status: 'skipped', reason: 'unavailable' };
           state.markColumnActivity?.(column.id);
-          return this.request(column, frame, direction, mode, frameGroup(target, kinds[column.id]));
+          return this.request(column, frame, frameGroup(target, kinds[column.id]));
         }));
-        // Bound rapid clicks without queuing steps or running a repeat timer.
+        // Bound rapid clicks without queuing new commands.
         const remaining = READING_ACTION_INTERVAL_MS - (Date.now() - started);
         if (remaining > 0 && !job.cancelled) await new Promise(resolve => {
           job.release = resolve;
@@ -623,13 +622,16 @@
     .yomikui-floating-panel .yf-transparency input::-webkit-slider-runnable-track{height:3px;border-radius:3px;background:color-mix(in oklab,var(--yf-muted-foreground) 35%,transparent)}
     .yomikui-floating-panel .yf-transparency input::-webkit-slider-thumb{appearance:none;width:12px;height:12px;margin-top:-4.5px;border-radius:50%;background:var(--yf-muted-foreground)}
     .yomikui-floating-panel .yf-transparency-value{width:3.5ch;text-align:right;font-variant-numeric:tabular-nums}
-    .yomikui-floating-panel .yf-actions{display:flex;align-items:stretch;gap:4px;margin-top:4px}
-    .yomikui-floating-panel .yf-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));flex:1;min-width:0;gap:2px;padding:2px;border-radius:8px;background:var(--yf-control-background)}
-    .yomikui-floating-panel .yf-refresh-area{display:flex;align-items:stretch}
-    .yomikui-floating-panel .yf-refresh{width:76px;min-height:32px;background:var(--yf-control-background)}
+    .yomikui-floating-panel .yf-actions{display:flex;gap:6px;margin-top:6px}
+    .yomikui-floating-panel .yf-actions button{min-height:36px}
+    .yomikui-floating-panel .yf-top{flex:0 0 68px;background:var(--yf-control-background)}
+    .yomikui-floating-panel .yf-refresh{flex:1;background:var(--primary);color:var(--primary-foreground);font-weight:600}
+    .yomikui-floating-panel .yf-refresh:not(:disabled):hover{background:color-mix(in oklab,var(--primary) 86%,black);color:var(--primary-foreground)}
+    .yomikui-floating-panel .yf-refresh:not(:disabled):active{background:color-mix(in oklab,var(--primary) 76%,black)}
+    .yomikui-floating-panel .yf-refresh:focus-visible{outline-color:var(--primary-foreground)}
     .yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:yomikui-floating-spin 1s linear infinite}
     @keyframes yomikui-floating-spin{to{transform:rotate(360deg)}}
-    @media(pointer:coarse){.yomikui-floating-panel button,.yomikui-floating-panel .yf-target,.yomikui-floating-panel .yf-selection-mode button,.yomikui-floating-panel .yf-hide-empty{min-height:44px}.yomikui-floating-panel .yf-settings-toggle,.yomikui-floating-panel .yf-minimize{width:44px;min-height:44px}.yomikui-floating-panel .yf-refresh{min-height:44px}.yomikui-floating-panel select{height:44px;font-size:16px}.yomikui-floating-panel .yf-transparency input{height:28px}}
+    @media(pointer:coarse){.yomikui-floating-panel button,.yomikui-floating-panel .yf-target,.yomikui-floating-panel .yf-selection-mode button,.yomikui-floating-panel .yf-hide-empty,.yomikui-floating-panel .yf-actions button{min-height:44px}.yomikui-floating-panel .yf-settings-toggle,.yomikui-floating-panel .yf-minimize{width:44px;min-height:44px}.yomikui-floating-panel select{height:44px;font-size:16px}.yomikui-floating-panel .yf-transparency input{height:28px}}
     @media(prefers-reduced-motion:reduce){.yomikui-floating-panel button,.yomikui-floating-panel select{transition:none}.yomikui-floating-panel .yf-refresh[aria-busy="true"] svg{animation:none}}
   `.replaceAll('.yomikui-floating-panel', '#yomikui-root .yomikui-floating-panel') + `
     #yomikui-root .yf-dock-btn{position:relative;color:var(--muted-foreground)}
@@ -658,7 +660,7 @@
   }
 
   const ICONS = Object.freeze({
-    top: 'M5 3h14M12 21V7m-6 6 6-6 6 6', up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
+    top: 'M5 3h14M12 21V7m-6 6 6-6 6 6', down: 'm6 9 6 6 6-6',
     grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
     refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 17.9 17',
     settings: 'M10 2h4l1 3 2 1 3-1 2 4-2 2v2l2 2-2 4-3-1-2 1-1 3h-4l-1-3-2-1-3 1-2-4 2-2v-2L2 9l2-4 3 1 2-1z M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8',
@@ -837,7 +839,6 @@
       ? (hasUpdate ? '選択中の列を更新（一部は再読み込み）' : '選択中の列を再読み込み')
       : '選択中の列を更新';
     const refreshLabel = busy ? onCancelRefresh ? '中止' : '更新中' : lastAction === 'refresh' && ['cooldown', 'cancelled'].includes(view.phase) ? feedback : actionLabel;
-    const navigate = action => { setLastAction('reading'); onNavigate(action); };
     return jsx.jsxs('section', {
       ref: panelRef, className: 'yomikui-floating-panel', 'data-yomikui-home-refresh': '', 'aria-label': '閲覧・更新パネル', title: 'パネル上のホイール操作で選択中の列をスクロール',
       translate: 'no', lang: 'ja',
@@ -874,31 +875,22 @@
             }, kind);
           }) }),
           jsx.jsxs('div', { className: 'yf-actions', role: 'group', 'aria-label': `${selected}への操作`, children: [
-            jsx.jsxs('div', { className: 'yf-steps', children: [
-              ...[-1, 1].map(direction => jsx.jsxs('button', {
-                type: 'button', className: direction === 1 ? 'yf-down' : 'yf-up', disabled: busy || reading.busy || !selectionVisible,
-                title: `${prefs.mode === 'page' ? '画面の約8割' : '投稿ごと'}に${direction === 1 ? '下' : '上'}へ移動${lastAction === 'reading' && details ? '\n' + details : ''}`,
-                onClick: () => navigate({ target, direction, mode: prefs.mode }), children: [icon(direction === 1 ? 'down' : 'up'), direction === 1 ? '下へ' : '上へ'],
-              }, direction)),
-              jsx.jsxs('button', {
-                type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
-                'aria-label': '先頭へ', title: `一覧の先頭へ戻る${lastAction === 'reading' && details ? '\n' + details : ''}`, onClick: () => navigate({ target, mode: 'top' }), children: [icon('top'), '先頭'],
-              }),
-            ] }),
-            canRefresh && jsx.jsx('div', { className: 'yf-refresh-area', children:
-              jsx.jsx('button', {
-                type: 'button', className: 'yf-refresh', translate: 'no',
-                disabled: busy ? !onCancelRefresh : reading.busy || !targetReady || !refreshTargets.length || view.phase === 'cooldown' || view.phase === 'cancelled',
-                'aria-label': busy ? '更新を中止する' : actionDescription, 'aria-busy': busy,
-                title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshPlan ? `先頭へ戻してから順番に処理します。${refreshPlan}` : '選択範囲内に更新対象の列がありません'}`,
-                onClick: () => { if (busy) onCancelRefresh?.(); else { setLastAction('refresh'); onRefresh({ target }); } },
-                children: [hasReload && refreshLabel === actionLabel ? null : icon('refresh'), refreshLabel],
-              }),
+            jsx.jsxs('button', {
+              type: 'button', className: 'yf-top', disabled: busy || reading.busy || !selectionVisible,
+              'aria-label': '先頭へ', title: `一覧の先頭へ戻る${lastAction === 'reading' && details ? '\n' + details : ''}`,
+              onClick: () => { setLastAction('reading'); onNavigate({ target, mode: 'top' }); }, children: [icon('top'), '先頭'],
+            }),
+            canRefresh && jsx.jsxs('button', {
+              type: 'button', className: 'yf-refresh', translate: 'no',
+              disabled: busy ? !onCancelRefresh : reading.busy || !targetReady || !refreshTargets.length || view.phase === 'cooldown' || view.phase === 'cancelled',
+              'aria-label': busy ? '更新を中止する' : actionDescription, 'aria-busy': busy,
+              title: busy ? `${refreshText}。クリックで中止` : `${view.phase === 'cooldown' || view.phase === 'cancelled' ? '次の更新まで少しお待ちください。' : ''}${lastAction === 'refresh' && refreshDetails ? refreshDetails + '\n' : ''}${refreshPlan ? `先頭へ戻してから順番に処理します。${refreshPlan}` : '選択範囲内に更新対象の列がありません'}`,
+              onClick: () => { if (busy) onCancelRefresh?.(); else { setLastAction('refresh'); onRefresh({ target }); } },
+              children: [icon('refresh'), refreshLabel],
             }),
           ] }),
           jsx.jsx('div', { id: 'yomikui-home-refresh-status', className: 'yf-sr-only', role: 'status', 'aria-live': 'polite', children: statusText }),
           jsx.jsxs('div', { id: 'yomikui-reading-settings', className: 'yf-fields', hidden: !settingsOpen, children: [
-            jsx.jsxs('label', { className: 'yf-setting', children: [jsx.jsx('span', { children: '移動方式' }), jsx.jsxs('span', { className: 'yf-color-select', children: [jsx.jsxs('select', { 'aria-label': '移動方式', value: prefs.mode, disabled: busy || reading.busy, onChange: event => updatePrefs({ mode: event.currentTarget.value }), children: [jsx.jsx('option', { value: 'post', children: '投稿ごと' }), jsx.jsx('option', { value: 'page', children: '画面ごと' })] }), icon('down')] })] }),
             jsx.jsxs('label', { className: 'yf-setting', htmlFor: 'yomikui-panel-color', children: [
               jsx.jsx('span', { children: '背景色' }), jsx.jsxs('span', { className: 'yf-color-select', children: [
                 jsx.jsx('select', { id: 'yomikui-panel-color', 'aria-label': '背景色', value: prefs.color, onChange: event => updatePrefs({ color: event.currentTarget.value }), children: Object.entries(COLORS).map(([value, title]) => jsx.jsx('option', { value, children: title }, value)) }), icon('down'),

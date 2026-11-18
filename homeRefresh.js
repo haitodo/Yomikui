@@ -18,8 +18,23 @@
   const FRAME_TIMEOUT = 12000;
   const REQUEST_TIMEOUT = 11000;
   const RELOAD_TIMEOUT = 20000;
+  const TAB_READY_TIMEOUT = 4000;
+  const SCROLL_TOP_TIMEOUT = 1200;
+  const NEW_POSTS_WAIT = 600;
+  const UPDATE_TIMEOUT = 5000;
+  const HOME_REQUEST_TIMEOUT = TAB_READY_TIMEOUT + 2 * (SCROLL_TOP_TIMEOUT + NEW_POSTS_WAIT + UPDATE_TIMEOUT) + 1000;
   const HIGH_TWEET_LOAD_COUNT = 100;
   const RELOAD_KEY = 'yomikui_page_refresh_v1:';
+  const TIMELINE_MUTATIONS = {
+    childList: true, subtree: true, attributes: true, attributeFilter: ['aria-selected', 'href'],
+  };
+  const BANNER_MUTATIONS = {
+    ...TIMELINE_MUTATIONS,
+    characterData: true,
+    attributeFilter: [
+      ...TIMELINE_MUTATIONS.attributeFilter, 'aria-label', 'aria-disabled', 'disabled', 'aria-hidden', 'hidden', 'class', 'style',
+    ],
+  };
   let frameWheel = null;
   const REASONS = {
     'not-home': '更新対象以外のページを表示中',
@@ -75,7 +90,7 @@
 
   // Observe only for the duration of a user-requested operation. A quiet page
   // needs no polling, and a busy timeline is scanned at most once per 80 ms.
-  function observeUntil(read, timeout, signal) {
+  function observeUntil(read, timeout, signal, mutations = TIMELINE_MUTATIONS) {
     return new Promise((resolve, reject) => {
       checkAbort(signal);
       let scanTimer = null;
@@ -90,6 +105,7 @@
         error ? reject(error) : resolve(value);
       };
       const scan = () => {
+        clearTimeout(scanTimer);
         scanTimer = null;
         try {
           const value = read();
@@ -100,12 +116,13 @@
       const observer = new MutationObserver(() => {
         if (scanTimer === null && !finished) scanTimer = setTimeout(scan, 80);
       });
-      const deadline = setTimeout(() => finish(null), timeout);
+      const deadline = setTimeout(() => {
+        // Catch changes made inside the final debounce interval.
+        scan();
+        finish(null);
+      }, timeout);
       signal?.addEventListener('abort', cancel, { once: true });
-      observer.observe(document.documentElement, {
-        childList: true, subtree: true, attributes: true,
-        attributeFilter: ['aria-selected', 'href'],
-      });
+      observer.observe(document.documentElement, mutations);
       scan();
     });
   }
@@ -164,6 +181,11 @@
       .find(globalThis.YomikuiHomeScroll.isNewPostsButton);
   }
 
+  function isAtTop(scroller) {
+    const top = scroller?.scrollTop ?? window.scrollY ?? 0;
+    return Number.isFinite(top) && Math.abs(top) <= 1;
+  }
+
   function tweetSignature() {
     return [...primaryColumn()?.querySelectorAll('article[data-testid="tweet"]') ?? []]
       .slice(0, 4).map(tweet => {
@@ -204,8 +226,7 @@
         const atTop = () => {
           const current = this.getScroller();
           if (current !== scroller) { paints = 0; scroller = current; }
-          const top = current?.scrollTop ?? window.scrollY ?? 0;
-          return Number.isFinite(top) && Math.abs(top) <= 1;
+          return isAtTop(scroller);
         };
         const finish = (reason, error) => {
           if (finished) return;
@@ -234,11 +255,31 @@
             else if (atTop() && paints >= 2) finish(null);
           } catch (error) { finish(null, error); }
         }, 200);
-        const deadline = setTimeout(() => finish('scroll-top'), 1200);
+        const deadline = setTimeout(() => finish('scroll-top'), SCROLL_TOP_TIMEOUT);
         signal?.addEventListener('abort', cancel, { once: true });
         if (signal?.aborted) cancel();
         else frame = schedule(sample);
       });
+    }
+
+    async prepareForNewPosts(signal, target, guard) {
+      const reason = guard() || await this.prepare(signal, target);
+      if (reason) return reason;
+      const result = await observeUntil(() => {
+        const reason = guard();
+        if (reason) return { reason };
+        if (!isAtTop(this.getScroller())) return { reason: 'scroll-top' };
+        return newPostsButton();
+      }, NEW_POSTS_WAIT, signal, BANNER_MUTATIONS);
+      return result?.reason ?? null;
+    }
+
+    click(target, signal) {
+      checkAbort(signal);
+      this.lastAction = Date.now();
+      this.positions.invoking = true;
+      try { globalThis.YomikuiHomeScroll.clickWithHeaderLayout(target); }
+      finally { this.positions.invoking = false; }
     }
 
     async refresh(signal, target = readingKind(this.getSettings) ?? 'recommended') {
@@ -248,49 +289,59 @@
       if (!homeKind(target)) return { status: 'skipped', reason: 'unavailable' };
       if (Date.now() - this.lastAction < COOLDOWN) return { status: 'skipped', reason: 'cooldown' };
 
-      const tab = await observeUntil(() => {
-        reason = this.unavailableReason(target);
+      const path = currentPath();
+      const guard = () => currentPath() === path ? this.unavailableReason(target) : 'target-changed';
+      const ready = await observeUntil(() => {
+        const reason = guard();
         return reason ? { reason } : globalThis.YomikuiHomeScroll.selectedTimelineTab();
-      }, 4000, signal);
-      if (tab?.reason) return { status: 'skipped', reason: tab.reason };
-      if (!tab) return { status: 'skipped', reason: 'unavailable' };
+      }, TAB_READY_TIMEOUT, signal);
+      if (!ready || ready.reason) return { status: 'skipped', reason: ready?.reason ?? 'unavailable' };
 
-      // CSS-hidden tab bars remain in the native DOM and can receive click().
-      // Refresh only the selected Home tab, without switching or retrying.
       // The position preference belongs to recommendations, not Following.
       const position = target === 'recommended' ? this.positions.begin(signal) : null;
-      let updated = false, requested = false;
+      let updated = false, method;
       try {
-        reason = await this.prepare(signal, target);
+        reason = await this.prepareForNewPosts(signal, target, guard);
+        if (reason === 'scroll-top') reason = await this.prepareForNewPosts(signal, target, guard);
+        checkAbort(signal);
+        reason ||= guard();
         if (reason) return { status: 'skipped', reason };
+        if (!isAtTop(this.getScroller())) return { status: 'skipped', reason: 'scroll-top' };
         const selected = globalThis.YomikuiHomeScroll.selectedTimelineTab();
-        if (!selected || selected !== tab || !selected.isConnected || selected.getAttribute('aria-disabled') === 'true') {
+        const banner = newPostsButton();
+        if (!selected?.isConnected || (!banner && selected.getAttribute('aria-disabled') === 'true')) {
           return { status: 'skipped', reason: 'unavailable' };
         }
-        const banner = newPostsButton();
         const before = tweetSignature();
-        const method = banner ? 'new-posts' : 'tab';
-        this.lastAction = Date.now();
-        requested = true;
-        this.positions.request(position);
+        method = banner ? 'new-posts' : 'tab';
+        this.positions.request(position, banner ? undefined : 2 * UPDATE_TIMEOUT + 1000);
         this.boundary?.set(this.boundary.snapshot(target));
-        this.positions.invoking = true;
-        try { globalThis.YomikuiHomeScroll.clickWithHeaderLayout(banner ?? selected); }
-        finally { this.positions.invoking = false; }
-        const changed = await observeUntil(() => {
-          reason = this.unavailableReason(target);
+        this.click(banner ?? selected, signal);
+        const checkResult = () => {
+          const reason = guard();
           if (reason) return { reason };
+          const lateBanner = method === 'tab' ? newPostsButton() : null;
+          if (lateBanner && readingKind(this.getSettings) === target) {
+            method = 'new-posts';
+            this.click(lateBanner, signal);
+            return { bannerClicked: true };
+          }
           const signature = tweetSignature();
           return signature && signature !== before ? { changed: true } : null;
-        }, 5000, signal);
-        if (changed?.reason) return { status: 'requested', method, reason: changed.reason };
+        };
+        let result = await observeUntil(checkResult, UPDATE_TIMEOUT, signal, banner ? TIMELINE_MUTATIONS : BANNER_MUTATIONS);
+        if (result?.bannerClicked) result = await observeUntil(checkResult, UPDATE_TIMEOUT, signal);
+        if (result?.reason) {
+          reason = result.reason;
+          return { status: 'requested', method, reason };
+        }
         // A click may return the same posts. Never equate no DOM change with
         // "no new posts", and never claim a successful fetch based on click alone.
-        updated = !!changed;
-        return { status: changed ? 'updated' : 'requested', method };
+        updated = !!result?.changed;
+        return { status: updated ? 'updated' : 'requested', method };
       } finally {
         if (position) {
-          if (signal?.aborted || !requested) this.positions.cancel(position);
+          if (signal?.aborted || !method || reason) this.positions.cancel(position);
           else if (!updated) this.positions.finish(position);
         }
       }
@@ -393,11 +444,11 @@
     const validReading = data => globalThis.YomikuiHomeScroll.isReadingAction(data) &&
       (data.group === undefined || globalThis.YomikuiHomeScroll.READING_GROUPS.includes(data.group));
     const beforeReadingMove = () => refresher.positions.cancel();
-    const applyReading = ({ direction, mode, deltaY, deltaMode, group }) => {
+    const applyReading = ({ mode, deltaY, deltaMode, group }) => {
       if (active) return { status: 'skipped', reason: 'busy' };
       if (!visible) return { status: 'skipped', reason: 'hidden' };
       try {
-        return globalThis.YomikuiHomeScroll.navigate({ ...options, direction, mode, deltaY, deltaMode, group, beforeMove: beforeReadingMove });
+        return globalThis.YomikuiHomeScroll.navigate({ ...options, mode, deltaY, deltaMode, group, beforeMove: beforeReadingMove });
       } catch { return { status: 'failed', reason: 'error' }; }
     };
     const receiveWheel = (source, data) => {
@@ -560,7 +611,7 @@
         clearTimeout(pending.deadline);
         pending.deadline = setTimeout(() => {
           this.cancelPending('timeout');
-        }, REQUEST_TIMEOUT);
+        }, homeKind(pending.kind) ? HOME_REQUEST_TIMEOUT : REQUEST_TIMEOUT);
         try { pending.frame.postMessage({
           type: REQUEST, requestId: pending.id, columnId: pending.columnId, target: pending.kind,
           reload: pending.reload,

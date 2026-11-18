@@ -83,12 +83,12 @@ async function beginNative(env, refresher = new env.api.NativeRefresher(env.opti
 }
 
 test('refresh uses the manual instant top operation and waits for paint and settling before clicking once', async () => {
-  const env = setup(), moves = [];
+  const env = setup(home({ banner: 'Show new posts' })), moves = [];
   env.scroller.scrollTo = options => { moves.push(clone(options)); env.scroller.scrollTop = options.top; };
   env.window.requestAnimationFrame = env.clock.requestAnimationFrame;
   env.window.cancelAnimationFrame = env.clock.cancelAnimationFrame;
   let clicks = 0;
-  env.document.getElementById('recommended').addEventListener('click', () => { clicks++; env.document.getElementById('tweets').innerHTML = tweet('202'); });
+  env.document.getElementById('new-posts').addEventListener('click', () => { clicks++; env.document.getElementById('tweets').innerHTML = tweet('202'); });
   const { pending } = await beginNative(env);
   assert.deepEqual(moves, [{ top: 0, behavior: 'instant' }]);
   await env.clock.advance(200);
@@ -103,28 +103,32 @@ test('refresh uses the manual instant top operation and waits for paint and sett
   assert.equal(env.clock.timers.size, 0);
 });
 
-test('an ignored or rebounding top scroll times out without clicking, retrying or leaking timers', async () => {
+test('an ignored or rebounding top scroll retries once and times out without clicking', async () => {
   for (const rebounds of [false, true]) {
     const env = setup();
     let moves = 0, clicks = 0;
-    env.scroller.scrollTo = () => { moves++; if (rebounds) env.scroller.scrollTop = 0; };
+    env.scroller.scrollTo = () => {
+      moves++;
+      if (!rebounds) return;
+      env.scroller.scrollTop = 0;
+      env.clock.setTimeout(() => { env.scroller.scrollTop = 300; }, 100);
+    };
     env.document.addEventListener('click', () => clicks++);
     const { pending } = await beginNative(env);
-    if (rebounds) env.clock.setTimeout(() => { env.scroller.scrollTop = 300; }, 100);
-    await env.clock.advance(1200);
+    await env.clock.advance(2400);
     assert.deepEqual(clone(await pending), { status: 'skipped', reason: 'scroll-top' });
     assert.equal(clicks, 0);
-    assert.equal(moves, 1);
+    assert.equal(moves, 2);
     assert.equal(env.clock.timers.size, 0);
     assert.equal(env.clock.frames.size, 0);
   }
 });
 
 test('a late top arrival needs two stable painted frames and a changed route cancels preparation', async () => {
-  const env = setup();
+  const env = setup(home({ banner: 'Show new posts' }));
   env.scroller.scrollTo = () => {};
   let clicks = 0;
-  env.document.getElementById('recommended').addEventListener('click', () => { clicks++; env.document.getElementById('tweets').innerHTML = tweet('202'); });
+  env.document.getElementById('new-posts').addEventListener('click', () => { clicks++; env.document.getElementById('tweets').innerHTML = tweet('202'); });
   const { pending } = await beginNative(env);
   env.clock.setTimeout(() => { env.scroller.scrollTop = 0; }, 180);
   await env.clock.advance(200);
@@ -162,7 +166,7 @@ test('a CSS-hidden selected recommendation tab refreshes once without exposing t
     env.document.getElementById('tweets').innerHTML = tweet('202');
   });
   const { pending, refresher } = await beginNative(env);
-  await env.clock.advance(200);
+  await env.clock.advance(800);
   assert.deepEqual(clone(await pending), { status: 'updated', method: 'tab' });
   assert.equal(clicks, 1);
   assert.equal(env.scroller.scrollTop, 0);
@@ -185,7 +189,7 @@ for (const columnType of ['search', 'customUrl', 'following', 'explore', 'notifi
     });
     assert.equal(env.context.YomikuiHomeScroll.readingKind(() => env.settings), 'recommended');
     const { pending } = await beginNative(env);
-    await env.clock.advance(200);
+    await env.clock.advance(800);
     assert.equal((await pending).status, 'updated');
     assert.equal(clicks, 1);
   });
@@ -228,6 +232,49 @@ for (const banner of ['35件のポスト表示', '35件のポストを表示', '
   });
 }
 
+test('a banner that becomes enabled after reaching the top takes priority over the selected tab', async () => {
+  const env = setup(home({ extra: '<button id="new-posts" aria-disabled="true">35件のポストを表示</button>' }));
+  const clicks = [], banner = env.document.getElementById('new-posts');
+  env.document.addEventListener('click', event => { if (event.target.id === 'recommended') clicks.push('tab'); });
+  banner.addEventListener('click', () => {
+    clicks.push('banner');
+    env.document.getElementById('tweets').innerHTML = tweet('202');
+  });
+  const { pending } = await beginNative(env);
+  await env.clock.advance(250);
+  env.document.getElementById('tabs').innerHTML = tabs();
+  env.document.getElementById('recommended').setAttribute('aria-disabled', 'true');
+  await settle(); await env.clock.advance(100);
+  assert.deepEqual(clicks, []);
+  banner.removeAttribute('aria-disabled');
+  await settle(); await env.clock.advance(80);
+  assert.deepEqual(clone(await pending), { status: 'updated', method: 'new-posts' });
+  assert.deepEqual(clicks, ['banner']);
+});
+
+test('the top is restored once if the scroller moves while waiting for new posts', async () => {
+  const env = setup(home({ extra: '<button id="new-posts" hidden>Show new posts</button>' }));
+  const banner = env.document.getElementById('new-posts'), clicks = [];
+  let moves = 0;
+  env.scroller.scrollTo = ({ top }) => {
+    env.scroller.scrollTop = top;
+    if (++moves === 2) banner.removeAttribute('hidden');
+  };
+  env.document.getElementById('recommended').addEventListener('click', () => clicks.push('tab'));
+  banner.addEventListener('click', () => {
+    clicks.push('banner');
+    env.document.getElementById('tweets').innerHTML = tweet('202');
+  });
+  const { pending } = await beginNative(env);
+  await env.clock.advance(350);
+  env.scroller.scrollTop = 300;
+  await env.clock.advance(650);
+  assert.deepEqual(clone(await pending), { status: 'updated', method: 'new-posts' });
+  assert.deepEqual(clicks, ['banner']);
+  assert.equal(moves, 2);
+  assert.equal(env.scroller.scrollTop, 0);
+});
+
 test('tweet text and unrelated buttons cannot impersonate a new-posts banner', async () => {
   const env = setup(home({ extra: '<button id="other">Show probable spam</button><article data-testid="tweet"><button id="fake">Show 35 posts</button></article>' }));
   let wrongClicks = 0;
@@ -236,7 +283,7 @@ test('tweet text and unrelated buttons cannot impersonate a new-posts banner', a
     env.document.getElementById('tweets').innerHTML = tweet('202');
   });
   const { pending } = await beginNative(env);
-  await env.clock.advance(200);
+  await env.clock.advance(800);
   assert.equal((await pending).method, 'tab');
   assert.equal(wrongClicks, 0);
 });
@@ -246,7 +293,7 @@ test('unchanged posts are reported as unconfirmed and never trigger a second cli
   let clicks = 0;
   env.document.getElementById('recommended').addEventListener('click', () => clicks++);
   const { pending } = await beginNative(env);
-  await env.clock.advance(5200);
+  await env.clock.advance(5800);
   assert.deepEqual(clone(await pending), { status: 'requested', method: 'tab' });
   assert.equal(clicks, 1);
   assert.equal(env.clock.timers.size, 0);
@@ -313,7 +360,7 @@ test('tabs that render after frame startup are awaited and all observation is bo
     env.document.getElementById('tweets').innerHTML = tweet('202');
   });
   await settle();
-  await env.clock.advance(280);
+  await env.clock.advance(880);
   assert.equal((await pending).status, 'updated');
   await env.clock.advance(1400);
   assert.equal(env.clock.timers.size, 0);
@@ -347,7 +394,7 @@ for (const banner of [null, '35件のポストを表示']) {
       env.document.getElementById('tweets').innerHTML = tweet('202');
     });
     const { pending } = await beginNative(env);
-    await env.clock.advance(200);
+    await env.clock.advance(banner ? 200 : 800);
     assert.deepEqual(clone(await pending), { status: 'updated', method: banner ? 'new-posts' : 'tab' });
     assert.deepEqual(clicks, [banner ? 'new-posts' : 'following']);
     assert.equal(env.scroller.scrollTop, 0, 'recommendation-only position preservation is not applied to Following');
@@ -385,7 +432,7 @@ test('floating refresh marks the pre-update first post after top preparation, in
     const installed = env.api.installFrame(env.options);
     assert.equal(env.document.querySelector('.yomikui-refresh-boundary'), null);
     env.send();
-    await settle(); await env.clock.advance(280);
+    await settle(); await env.clock.advance(880);
     assert.equal(env.messages.at(-1).data.status, 'updated');
     assert.equal(env.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
     assert.equal(env.document.querySelectorAll('.yomikui-refresh-boundary').length, 1);
@@ -397,6 +444,55 @@ test('floating refresh marks the pre-update first post after top preparation, in
   }
 });
 
+test('a late banner after the tab click is loaded once with time to confirm the new posts', async () => {
+  const env = homeFrameSetup('recommended', { extra: '<div role="button" id="new-posts" hidden>Show new posts</div>' });
+  const clicks = [], banner = env.document.getElementById('new-posts');
+  env.settings.homeRefreshPosition = 'preserve';
+  env.document.getElementById('recommended').addEventListener('click', () => clicks.push('tab'));
+  banner.addEventListener('click', () => {
+    clicks.push('banner');
+    env.clock.setTimeout(() => { env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101'); }, 1100);
+  });
+  const installed = env.api.installFrame(env.options);
+  env.send();
+  await settle(); await env.clock.advance(5750);
+  assert.deepEqual(clicks, ['tab']);
+  banner.removeAttribute('hidden');
+  await settle(); await env.clock.advance(1100);
+  assert.deepEqual(clicks, ['tab', 'banner']);
+  assert.equal(env.scroller.scrollTop, 0, 'position tracking waits for the delayed banner to update the feed');
+  assert.equal(env.messages.length, 0);
+  await env.clock.advance(200);
+  assert.equal(env.messages.at(-1).data.status, 'updated');
+  assert.equal(env.messages.at(-1).data.method, 'new-posts');
+  assert.equal(env.scroller.scrollTop, 800);
+  assert.equal(env.document.querySelector('[data-yomikui-refresh-boundary]')?.getAttribute('data-yomikui-refresh-boundary'), '101');
+  assert.deepEqual(clicks, ['tab', 'banner']);
+  installed.dispose();
+  assert.equal(env.clock.timers.size, 0);
+  assert.ok(env.observers.every(observer => !observer.connected));
+});
+
+test('cancellation or navigation stops a late banner from being clicked', async () => {
+  for (const reason of ['cancelled', 'target-changed']) {
+    const env = homeFrameSetup('following', { extra: '<button id="new-posts" hidden>Show new posts</button>' });
+    const clicks = [], banner = env.document.getElementById('new-posts');
+    env.document.getElementById('following').addEventListener('click', () => clicks.push('tab'));
+    banner.addEventListener('click', () => clicks.push('banner'));
+    const installed = env.api.installFrame(env.options);
+    env.send();
+    await settle(); await env.clock.advance(800);
+    if (reason === 'cancelled') env.send({ type: P + 'cancel' });
+    else env.window.location.search = '?different=1';
+    banner.removeAttribute('hidden');
+    await settle(); await env.clock.advance(80);
+    assert.deepEqual(clicks, ['tab']);
+    assert.equal(env.messages.at(-1).data.reason, reason);
+    installed.dispose();
+    assert.equal(env.clock.timers.size, 0);
+  }
+});
+
 test('a skipped or cancelled refresh preserves the previous landmark', async () => {
   const env = homeFrameSetup('following');
   env.document.getElementById('following').addEventListener('click', () => {
@@ -404,7 +500,7 @@ test('a skipped or cancelled refresh preserves the previous landmark', async () 
   });
   const installed = env.api.installFrame(env.options);
   env.send();
-  await settle(); await env.clock.advance(280);
+  await settle(); await env.clock.advance(880);
   const marker = env.document.querySelector('.yomikui-refresh-boundary');
   env.send({ requestId: 'cooldown' });
   await settle();
@@ -529,7 +625,7 @@ test('Home refresh refuses drafts, dialogs, hidden or changed targets, blocked s
     env.send();
     if (reason === 'cancelled') env.send({ type: P + 'cancel' });
     await settle();
-    await env.clock.advance(1200);
+    await env.clock.advance(2400);
     assert.equal(env.messages.at(-1).data.reason, reason);
     assert.equal(env.reloads.length, 0);
     assert.equal(env.storage.size, 0);
@@ -902,7 +998,7 @@ test('the frame protocol validates sender, origin, column and target, and dedupl
   send();
   send();
   await settle();
-  await env.clock.advance(200);
+  await env.clock.advance(800);
   assert.equal(env.messages.at(-1).data.status, 'updated');
   send();
   assert.equal(clicks, 1);
@@ -930,21 +1026,13 @@ function readingFrameSetup() {
   return { ...env, installed };
 }
 
-test('native reading validates commands and deduplicates repeated steps', () => {
+test('native frames ignore retired and unrecognized reading modes', () => {
   const env = readingFrameSetup();
-  const data = { type: P + 'navigate', direction: 1, mode: 'post' };
-  env.send(data, { source: {} });
-  env.send(data, { origin: 'https://evil.example' });
-  env.send({ ...data, columnId: 'another' });
-  env.send({ ...data, direction: 10 });
-  env.send({ ...data, mode: 'automatic' });
+  for (const [mode, direction] of [['post', 1], ['page', -1], ['automatic', 1]]) {
+    env.send({ type: P + 'navigate', mode, direction });
+  }
   assert.equal(env.scroller.scrollTop, 800);
   assert.equal(env.messages.length, 0);
-  env.send(data);
-  assert.equal(env.scroller.scrollTop, 1000);
-  assert.equal(env.messages.at(-1).data.status, 'moved');
-  env.send(data);
-  assert.equal(env.scroller.scrollTop, 1000);
   env.installed.dispose();
   assert.equal(env.clock.timers.size, 0);
 });
@@ -956,6 +1044,7 @@ test('a trusted top command returns once without refreshing or replaying a dupli
   env.document.addEventListener('click', () => clicks++);
   env.send(data, { source: {} });
   env.send(data, { origin: 'https://evil.example' });
+  env.send({ ...data, columnId: 'another' });
   assert.equal(env.scroller.scrollTop, 800);
   assert.equal(env.messages.length, 0);
   env.send(data);
@@ -1039,8 +1128,8 @@ test('direct wheel input requires the current parent and group, and obeys the fr
 test('offscreen native frames reject reading commands', () => {
   const env = readingFrameSetup();
   env.send({ type: 'yomikui-column-visibility', visible: false });
-  env.send({ type: P + 'navigate', direction: 1, mode: 'post' });
-  assert.equal(env.messages.at(-1).data.reason, 'hidden');
+  env.send({ type: P + 'scroll', mode: 'wheel', deltaY: 120 });
+  assert.equal(env.messages.length, 0);
   assert.equal(env.scroller.scrollTop, 800);
   env.send({ type: P + 'navigate', mode: 'top', requestId: 'top' });
   assert.equal(env.messages.at(-1).data.reason, 'hidden');
@@ -1155,14 +1244,14 @@ test('reading cannot interrupt a native refresh but cancels its remaining scroll
     env.document.querySelector('article a').setAttribute('href', '/author/status/202');
   });
   env.send({ type: P + 'request', target: 'recommended', requestId: 'refresh1' });
-  env.send({ type: P + 'navigate', direction: 1, mode: 'post', requestId: 'too-early' });
+  env.send({ type: P + 'navigate', mode: 'top', requestId: 'too-early' });
   assert.equal(env.messages.at(-1).data.reason, 'busy');
   env.send({ type: P + 'scroll', mode: 'wheel', deltaY: 120, deltaMode: 0, requestId: 'wheel-too-early' });
   assert.equal(env.scroller.scrollTop, 800, 'wheel input cannot interrupt refresh preparation');
   await settle();
-  await env.clock.advance(200);
+  await env.clock.advance(800);
   assert.equal(env.messages.at(-1).data.status, 'updated');
-  env.send({ type: P + 'navigate', direction: 1, mode: 'page' });
+  env.send({ type: P + 'scroll', mode: 'wheel', deltaY: 480 });
   assert.equal(env.scroller.scrollTop, 480);
   await env.clock.advance(6500);
   assert.equal(env.scroller.scrollTop, 480, 'the refresh tracker must not snap a reading action back to the top');
@@ -1495,7 +1584,7 @@ test('a frame that never becomes ready times out without blocking remaining colu
 test('a request timeout sends cancellation and continues without repeating the update', async () => {
   const env = batchSetup({ quiet: (id, type) => id === 'home1' && type === P + 'request' });
   const run = env.batch.run();
-  await env.clock.advance(12000);
+  await env.clock.advance(20000);
   await run;
   assert.equal(env.views.at(-1).results[0].reason, 'timeout');
   assert.equal(env.views.at(-1).results[0].status, 'failed');
@@ -1615,7 +1704,7 @@ test('the shipped initializer rechecks a Home reload request against the current
       env.document.getElementById('tweets').innerHTML = tweet('202') + tweet('101');
     });
     env.send({ reload: true });
-    await settle(); await env.clock.advance(280);
+    await settle(); await env.clock.advance(highTweetLoad ? 280 : 880);
     assert.equal(env.reloads.length, highTweetLoad ? 1 : 0);
     if (highTweetLoad) {
       assert.equal(env.messages.at(-1).data.type, P + 'reloading');

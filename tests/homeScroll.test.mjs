@@ -46,8 +46,8 @@ function readingSetup() {
     getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
     scrollTo({ top }) { this.scrollTop = top; },
   });
-  env.navigate = (direction = 1, mode = 'post', beforeMove) => env.api.navigate({
-    getSettings: () => env.settings, getScroller: () => env.scroller, direction, mode, beforeMove,
+  env.toTop = beforeMove => env.api.navigate({
+    getSettings: () => env.settings, getScroller: () => env.scroller, mode: 'top', beforeMove,
   });
   env.wheel = (deltaY, deltaMode = 0, beforeMove) => env.api.navigate({
     getSettings: () => env.settings, getScroller: () => env.scroller, mode: 'wheel', deltaY, deltaMode, beforeMove,
@@ -55,31 +55,15 @@ function readingSetup() {
   return env;
 }
 
-test('reading steps align a post and go back to a partially read post before its predecessor', () => {
-  const env = readingSetup();
-  assert.equal(env.navigate().status, 'moved');
-  assert.equal(env.scroller.scrollTop, 300);
-  env.scroller.scrollTop = 350;
-  env.navigate(-1);
-  assert.equal(env.scroller.scrollTop, 300);
-  env.navigate(-1);
-  assert.equal(env.scroller.scrollTop, 100);
-});
-
 test('Explore classifies its current route and scrolls news or trend cards without requiring tweets', () => {
   const env = readingSetup();
   env.window.location.pathname = '/explore/tabs/news';
   env.document.getElementById('posts').innerHTML = '<div data-testid="cellInnerDiv" data-y="100"><a href="/i/trending/1">News</a></div><div data-testid="cellInnerDiv" data-y="300"><a href="/search?q=topic">Trend</a></div>';
   assert.equal(env.api.readingKind(() => env.settings), 'explore');
   assert.equal(env.api.isRefreshableKind('explore'), true);
-  assert.equal(env.navigate().status, 'moved');
-  assert.equal(env.scroller.scrollTop, 300);
-  env.wheel(80);
-  assert.equal(env.scroller.scrollTop, 380);
-  env.navigate(-1, 'page');
-  assert.equal(env.scroller.scrollTop, 0);
-  env.scroller.scrollTop = 400;
-  env.navigate(undefined, 'top');
+  assert.equal(env.wheel(80).status, 'moved');
+  assert.equal(env.scroller.scrollTop, 180);
+  assert.equal(env.toTop().status, 'moved');
   assert.equal(env.scroller.scrollTop, 0);
   for (const path of ['/explore', '/explore/tabs/trending', '/explore/tabs/for-you', '/explore/tabs/for_you']) {
     env.window.location.pathname = path;
@@ -87,32 +71,6 @@ test('Explore classifies its current route and scrolls news or trend cards witho
   }
   env.window.location.pathname = '/explore/other/page';
   assert.equal(env.api.readingKind(() => env.settings), 'other');
-});
-
-test('reading a tall post uses overlapping screenfuls in both directions', () => {
-  const env = readingSetup();
-  env.document.querySelector('[data-y="300"]').setAttribute('data-y', '1400');
-  env.navigate();
-  assert.equal(env.scroller.scrollTop, 580);
-  env.navigate();
-  assert.equal(env.scroller.scrollTop, 1060);
-  env.navigate(-1);
-  assert.equal(env.scroller.scrollTop, 580);
-  assert.ok(env.scroller.scrollTop > 100);
-});
-
-test('page reading uses the visible scroller height, accounts for offsets, and clamps at edges', () => {
-  const env = readingSetup();
-  env.scroller.getBoundingClientRect = () => ({ top: 50, bottom: 650 });
-  env.navigate(1, 'page');
-  assert.equal(env.scroller.scrollTop, 540, '550 visible pixels advance by 80%');
-  env.scroller.scrollTop = 1390;
-  env.navigate(1, 'page');
-  assert.equal(env.scroller.scrollTop, 1400);
-  assert.equal(env.navigate(1, 'page').status, 'edge');
-  env.scroller.scrollTop = 10;
-  env.navigate(-1, 'page');
-  assert.equal(env.scroller.scrollTop, 0);
 });
 
 test('wheel input keeps fractional pixel amounts, applies immediately, and clamps at the ends', () => {
@@ -167,7 +125,7 @@ test('native wheel scrolling needs no post or viewport bounds, extent reads, or 
   assert.equal(env.scroller.scrollTop, 0, 'the native scroller clamps to both ends');
   assert.deepEqual(moves.map(move => move.top), [.25, 120, -45.5, 10000, 20, -10000]);
   assert.ok(moves.every(move => move.behavior === 'instant'));
-  assert.equal(cancelled, 6, 'direct input cancels smooth steps and refresh correction even at an edge');
+  assert.equal(cancelled, 6, 'direct input cancels refresh correction even at an edge');
 });
 
 test('relative wheel scrolling converts line and page units and supports the root viewport', () => {
@@ -190,16 +148,14 @@ test('relative wheel scrolling converts line and page units and supports the roo
 
 test('returning to the top after reading jumps directly without clicking X controls', () => {
   const env = readingSetup();
-  env.navigate();
-  env.navigate();
+  env.wheel(120);
+  env.wheel(120);
   assert.ok(env.scroller.scrollTop > 300);
   const moves = [];
   env.scroller.scrollTo = options => { moves.push({ ...options }); env.scroller.scrollTop = options.top; };
   let clicks = 0, cancelled = 0;
   env.document.addEventListener('click', () => clicks++);
-  const toTop = () => env.api.navigate({
-    getSettings: () => env.settings, getScroller: () => env.scroller, mode: 'top', beforeMove: () => cancelled++,
-  });
+  const toTop = () => env.toTop(() => cancelled++);
   assert.equal(toTop().status, 'moved');
   assert.equal(env.scroller.scrollTop, 0);
   assert.deepEqual(moves, [{ top: 0, behavior: 'instant' }]);
@@ -209,22 +165,6 @@ test('returning to the top after reading jumps directly without clicking X contr
   assert.equal(clicks, 0);
 });
 
-test('returning to the top cancels a smooth step before its first frame is painted', () => {
-  const env = readingSetup();
-  env.scroller.scrollTop = 0;
-  let pending = null;
-  env.scroller.scrollTo = ({ top, behavior }) => {
-    if (behavior === 'smooth') pending = () => { env.scroller.scrollTop = top; };
-    else { pending = null; env.scroller.scrollTop = top; }
-  };
-  assert.equal(env.navigate().status, 'moved');
-  assert.equal(env.scroller.scrollTop, 0);
-  assert.equal(typeof pending, 'function');
-  assert.equal(env.navigate(-1, 'top').status, 'edge');
-  assert.equal(pending, null);
-  assert.equal(env.scroller.scrollTop, 0);
-});
-
 test('reading remains available on Following and does not click any X controls', () => {
   const env = readingSetup();
   env.settings.columnType = 'following';
@@ -232,7 +172,7 @@ test('reading remains available on Following and does not click any X controls',
   let clicks = 0;
   env.document.addEventListener('click', () => clicks++);
   let cancelled = 0;
-  assert.equal(env.navigate(1, 'post', () => cancelled++).status, 'moved');
+  assert.equal(env.toTop(() => cancelled++).status, 'moved');
   assert.equal(cancelled, 1);
   assert.equal(clicks, 0);
 });
@@ -248,22 +188,13 @@ test('reading skips unavailable, modal, composing and non-native pages without m
     env => { env.window.location.pathname = '/someone/status/123'; },
     env => { env.document.querySelector('[data-testid="primaryColumn"]').innerHTML = ''; },
   ];
-  for (const mode of ['post', 'top', 'wheel']) for (const change of variants) {
+  for (const mode of ['top', 'wheel']) for (const change of variants) {
     const env = readingSetup();
     env.scroller.scrollBy = () => assert.fail('a guarded wheel command must not reach the browser scroller');
     change(env);
-    assert.equal((mode === 'wheel' ? env.wheel(120) : env.navigate(1, mode)).status, 'skipped');
+    assert.equal((mode === 'wheel' ? env.wheel(120) : env.toTop()).status, 'skipped');
     assert.equal(env.scroller.scrollTop, 100);
   }
-});
-
-test('virtualized lists with no preceding rendered anchor scroll back one screenful', () => {
-  const env = readingSetup();
-  env.scroller.scrollTop = 1000;
-  env.document.querySelector('[data-y="100"]').setAttribute('data-y', '1300');
-  env.document.querySelector('[data-y="300"]').setAttribute('data-y', '1500');
-  env.navigate(-1);
-  assert.equal(env.scroller.scrollTop, 520);
 });
 
 test('standard mode returns to the newest post without measuring existing posts', async () => {

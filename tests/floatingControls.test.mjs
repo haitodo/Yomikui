@@ -219,13 +219,13 @@ test('queued wheel input is cancelled on workspace changes, hiding, pagehide and
   }
 });
 
-test('wheel input takes over a pending step, and a later button action cancels queued wheel input', async () => {
+test('wheel input takes over a pending top command, and a later top command cancels queued wheel input', async () => {
   const env = readingSetup();
-  const step = env.controller.move({ target: 'one', direction: 1, mode: 'post' });
+  const firstTop = env.controller.move({ target: 'one', mode: 'top' });
   env.controller.wheel({ target: 'one', deltaY: 20 });
   env.controller.wheel({ target: 'one', deltaY: 20 });
   env.clock.frame(16);
-  await step;
+  await firstTop;
   assert.deepEqual(env.messages.map(message => message.type), [PREFIX + 'navigate', PREFIX + 'scroll', PREFIX + 'scroll']);
   assert.deepEqual(env.messages.slice(1).map(message => message.deltaY), [20, 20]);
   assert.equal(env.views.at(-1).busy, false);
@@ -243,7 +243,7 @@ test('wheel input takes over a pending step, and a later button action cancels q
 test('panel wheel forwarding preserves native settings, zoom, horizontal gestures and panel overflow', () => {
   const env = setup();
   const panel = env.document.createElement('section');
-  panel.innerHTML = '<button>下へ</button><select><option>おすすめ</option></select><input type="range">';
+  panel.innerHTML = '<button>先頭</button><select><option>おすすめ</option></select><input type="range">';
   env.document.body.appendChild(panel);
   const actions = [];
   const dispose = env.api.installWheel(panel, action => { actions.push(clone(action)); return true; });
@@ -269,14 +269,14 @@ test('reading groups address the current content instead of the saved column typ
   const env = readingSetup();
   env.report('two', 'search');
   env.report('following', 'recommended');
-  const down = env.controller.move({ target: 'group:recommended', direction: 1, mode: 'post' });
+  const recommended = env.controller.move({ target: 'group:recommended', mode: 'top' });
   assert.deepEqual(env.messages.map(message => message.columnId), ['one', 'following']);
   assert.ok(env.messages.every(message => message.group === 'recommended'));
-  await env.clock.advance(300); await down;
+  await env.clock.advance(300); await recommended;
   env.report('one', 'following');
-  const up = env.controller.move({ target: 'group:following', direction: -1, mode: 'page' });
+  const following = env.controller.move({ target: 'group:following', mode: 'top' });
   assert.deepEqual(env.messages.slice(2).map(message => message.columnId), ['one']);
-  await env.clock.advance(300); await up;
+  await env.clock.advance(300); await following;
   const top = env.controller.move({ target: 'group:search', mode: 'top' });
   assert.deepEqual(env.messages.slice(3).map(message => message.columnId), ['two']);
   assert.equal(env.messages[3].mode, 'top');
@@ -318,9 +318,9 @@ test('context reports validate the actual frame and unknown or replaced frames c
 
 test('one reading action addresses only visible native columns and includes Following', async () => {
   const env = readingSetup();
-  const run = env.controller.move({ direction: 1, mode: 'post' });
+  const run = env.controller.move({ mode: 'top' });
   assert.deepEqual(env.messages.map(message => message.columnId), ['one', 'two', 'following']);
-  await env.controller.move({ direction: -1, mode: 'page' });
+  await env.controller.move({ mode: 'top' });
   assert.equal(env.messages.length, 3, 'a rapid second action is not queued');
   await env.clock.advance(300);
   await run;
@@ -348,14 +348,14 @@ test('returning to the top uses the current all-visible or individual target', a
 test('a chosen column that leaves the screen never falls back to moving other columns', async () => {
   const env = readingSetup();
   env.visible.delete('one');
-  await env.controller.move({ target: 'one', direction: 1, mode: 'page' });
+  await env.controller.move({ target: 'one', mode: 'top' });
   assert.equal(env.messages.length, 0);
   assert.match(env.views.at(-1).message, /画面内/);
-  const run = env.controller.move({ target: 'two', direction: -1, mode: 'page' });
+  const run = env.controller.move({ target: 'two', mode: 'top' });
   await env.clock.advance(300);
   await run;
   assert.deepEqual(env.messages.map(message => message.columnId), ['two']);
-  assert.equal(env.messages[0].direction, -1);
+  assert.equal(env.messages[0].mode, 'top');
   env.controller.dispose();
 });
 
@@ -363,7 +363,7 @@ test('reading skips composing or unmounted columns without trying to mount or re
   const env = readingSetup();
   env.state.columnComposing.one = true;
   env.frames.delete('two');
-  const run = env.controller.move({ direction: 1, mode: 'post' });
+  const run = env.controller.move({ mode: 'top' });
   await env.clock.advance(300);
   await run;
   assert.deepEqual(env.messages.map(message => message.columnId), ['following']);
@@ -373,7 +373,7 @@ test('reading skips composing or unmounted columns without trying to mount or re
 
 test('spoofed navigation results are ignored and a missing frame response has a bounded timeout', async () => {
   const env = readingSetup({ quiet: true });
-  const run = env.controller.move({ target: 'one', direction: 1, mode: 'post' });
+  const run = env.controller.move({ target: 'one', mode: 'top' });
   const response = { source: env.frames.get('one'), origin: 'https://x.com', data: { ...env.messages[0], type: PREFIX + 'navigated', status: 'moved' } };
   for (const event of [
     { ...response, source: {} }, { ...response, origin: 'https://evil.example' },
@@ -393,7 +393,7 @@ test('spoofed navigation results are ignored and a missing frame response has a 
 for (const cause of ['workspace', 'hidden', 'pagehide', 'dispose']) {
   test(`reading cancellation on ${cause} releases all deadlines`, async () => {
     const env = readingSetup({ quiet: true });
-    const run = env.controller.move({ direction: 1, mode: 'post' });
+    const run = env.controller.move({ mode: 'top' });
     if (cause === 'workspace') { env.state.activeWorkspaceId = 'new'; env.controller.syncState(); }
     if (cause === 'hidden') { env.document.hidden = true; env.document.dispatchEvent(new env.dom.Event('visibilitychange')); }
     if (cause === 'pagehide') env.window.emit('pagehide');
@@ -537,16 +537,16 @@ test('a dragged header stays in place when folding or status text changes the pa
 
 test('panel preferences persist locally in order and normalize invalid values', async () => {
   const env = setup();
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, mode: 'post', hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} });
   env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, collapsed: true, mode: 'page' };
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} }, 'older preferences retain the position and mode and drop the retired compact state');
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} }, 'older preferences retain the position and drop retired settings');
   env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, mode: 'page', minimized: true };
   assert.deepEqual(clone(await env.api.loadPreferences()).minimized, { default: true }, 'legacy boolean minimized state migrates to default workspace');
   const first = env.api.savePreferences({ x: -20, y: 3, collapsed: true, mode: 'page', hideEmpty: true, color: 'invalid', transparency: 110, minimized: { ws1: true, ws2: false, bad: 'ignore' } });
   const last = env.api.savePreferences({ x: .4, y: .2, collapsed: false, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35, minimized: { ws1: false, ws3: true } });
   await Promise.all([first, last]);
-  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, mode: 'page', hideEmpty: true, color: 'bluegray', transparency: 80, minimized: { ws1: true, ws2: false } });
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, mode: 'post', hideEmpty: true, color: 'lavender', transparency: 35, minimized: { ws1: false, ws3: true } });
+  assert.deepEqual(env.writes[0].yomikui_floating_controls_v1, { x: 0, y: 1, hideEmpty: true, color: 'bluegray', transparency: 80, minimized: { ws1: true, ws2: false } });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: .4, y: .2, hideEmpty: true, color: 'lavender', transparency: 35, minimized: { ws1: false, ws3: true } });
   for (const transparency of [-20, NaN, Infinity, '60']) assert.equal(env.api.preferences({ transparency }).transparency, 0);
   for (const color of ['invalid', '__proto__', 'toString', '#123456', null]) assert.equal(env.api.preferences({ color }).color, 'bluegray');
 });
