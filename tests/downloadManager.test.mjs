@@ -497,17 +497,21 @@ test('a direct X photo URL saves the open image at original size and follows the
   assert.equal(observer.target, document);
   const date = new Date(2026, 10, 14, 12).toISOString();
   document.body.innerHTML = `
-    <article><img src="https://pbs.twimg.com/media/background.jpg"></article>
-    <div id="layers"><div role="dialog"><div role="group"><div role="dialog" id="viewer">
-      <div data-testid="swipe-to-dismiss" id="first">
-        <img src="https://pbs.twimg.com/media/first?format=jpg&amp;name=large">
+    <div id="react-root">
+      <article><img src="https://pbs.twimg.com/media/background.jpg"></article>
+      <div id="layers">
+        <div role="dialog"><div role="group"><div role="dialog" id="viewer">
+          <div data-testid="swipe-to-dismiss" id="first">
+            <img src="https://pbs.twimg.com/media/first?format=jpg&amp;name=large">
+          </div>
+          <article><a href="${viewerPost}"><time datetime="${date}"></time></a>
+            <img src="https://pbs.twimg.com/media/thumbnail.jpg">
+          </article>
+        </div></div></div>
       </div>
-      <article><a href="${viewerPost}"><time datetime="${date}"></time></a>
-        <img src="https://pbs.twimg.com/media/thumbnail.jpg">
-      </article>
-    </div></div></div></div>`;
+    </div>`;
   observer.emit([]);
-  assert.equal(observer.target, document.getElementById('layers'));
+  assert.equal(observer.target, document.getElementById('react-root'));
   const button = document.querySelector('#viewer > ' + viewerButton);
   assert.equal(button.getAttribute('aria-label'), 'メディアを保存');
   assert.equal(button.type, 'button');
@@ -546,6 +550,105 @@ test('a direct X photo URL saves the open image at original size and follows the
   assert.equal(document.querySelector(viewerButton), null);
   env.navigate(viewerPost + '/photo/2');
   assert.equal(document.querySelector(viewerButton), button);
+});
+
+test('a narrow column saves the photo in main and moves the button when X switches layouts', async () => {
+  const postPath = '/misonokyoko/status/2118477742111133714';
+  const env = mediaViewerTest({ pathname: postPath + '/photo/1', topLevel: false });
+  const { document, context, manager, downloads } = env;
+  document.body.innerHTML = `
+    <div id="react-root">
+      <div id="layers"></div>
+      <main role="main"></main>
+    </div>`;
+  context.YomikuiMediaViewerDownload.install({ download: media => manager.start(media, 'narrow') });
+  const observer = env.observers[0];
+  const main = document.querySelector('main');
+  main.innerHTML = `
+    <div data-testid="swipe-to-dismiss">
+      <img src="https://pbs.twimg.com/media/narrow?format=jpg&amp;name=large">
+    </div>`;
+  observer.emit([]);
+
+  const button = main.querySelector(viewerButton);
+  assert.ok(button);
+  env.click(button);
+  await settle();
+  assert.equal(downloads[0].url, 'https://pbs.twimg.com/media/narrow?format=jpg&name=orig');
+  assert.match(downloads[0].filename, /\/misonokyoko_2118477742111133714_1\.jpg$/);
+
+  const layers = document.getElementById('layers');
+  layers.innerHTML = '<div role="dialog"></div>';
+  layers.firstElementChild.append(main.querySelector('[data-testid="swipe-to-dismiss"]'));
+  observer.emit([]);
+  assert.equal(button.parentElement, layers.firstElementChild);
+  assert.equal(document.querySelectorAll(viewerButton).length, 1);
+
+  env.navigate(postPath);
+  assert.equal(observer.connected, false);
+  assert.equal(document.querySelector(viewerButton), null);
+});
+
+test('the dashboard viewer saves the selected photo with its original attachment number', async () => {
+  const env = mediaViewerTest({ pathname: '/home', topLevel: false });
+  const { context, document, downloads, manager } = env;
+  const tweetCreatedAt = new Date(2026, 10, 14, 12).getTime();
+  context.Qb = () => ({ tweetCreatedAt });
+  context.Le = () => 'https://x.com';
+  evaluate(context, 'contentIframe.js', source => {
+    const start = source.indexOf('function Tr(url) {');
+    const end = source.indexOf('var dS=', start);
+    assert.ok(start >= 0 && end > start);
+    return source.slice(start, end);
+  });
+  document.body.innerHTML = `
+    <article data-testid="tweet">
+      <a role="link" href="${viewerPost}/photo/1"><div data-testid="tweetPhoto">
+        <img src="https://pbs.twimg.com/media/first?format=jpg&amp;name=small">
+      </div></a>
+      <a role="link" href="${viewerPost}/photo/3"><div id="third" data-testid="tweetPhoto">
+        <img src="https://pbs.twimg.com/media/third?format=jpg&amp;name=small">
+      </div></a>
+    </article>`;
+  const event = { button: 0, preventDefault() {}, stopPropagation() {} };
+  assert.equal(context.uS(event, document.getElementById('third'), {
+    isEnabled: () => true, getColumnId: () => 'home',
+  }), true);
+
+  const handleOpen = deckSection(
+    'if((c||ae.data?.force||mediaPip.isOpen())&&ae.data?.type==="yomikui-open-media"',
+    'if(ae.data?.type==="yomikui-account-switch-selected"',
+  );
+  const receive = vm.runInContext(`(ae, me) => {
+    const c = true, zt = {}, xt = {};
+    const mediaPip = { show: () => false };
+    const je = () => {}, sn = () => {}, rt = () => {};
+    ${handleOpen}
+  }`, context);
+  const { OverlayButton } = context.YomikuiMediaViewerDownload;
+  const jsx = { jsx: (type, props) => ({ type, props }) };
+  receive({ data: env.messages[0] }, (index, gallery) => {
+    assert.equal(index, 1);
+    const renderButton = item => OverlayButton({
+      jsx, item, label: 'メディアを保存',
+      onDownload: media => manager.start(media, 'overlay'),
+    });
+    const button = renderButton(gallery[index]);
+    assert.equal(button.props['aria-label'], 'メディアを保存');
+    button.props.onClick(event);
+    renderButton(gallery[0]).props.onClick(event);
+  });
+  await settle();
+  assert.deepEqual(downloads.map(({ url, filename }) => ({ url, filename })), [
+    {
+      url: 'https://pbs.twimg.com/media/third?format=jpg&name=orig',
+      filename: 'Yomikui-images/2026-11-14/miyakawa_miyabi_2121528516672180724_3.jpg',
+    },
+    {
+      url: 'https://pbs.twimg.com/media/first?format=jpg&name=orig',
+      filename: 'Yomikui-images/2026-11-14/miyakawa_miyabi_2121528516672180724_1.jpg',
+    },
+  ]);
 });
 
 test('the native media viewer in a column uses the cached video and follows column visibility', async () => {

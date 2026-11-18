@@ -199,5 +199,5 @@
     return mediaByPoster.get(posterKey(video.poster))?.src || mp4(video.currentSrc || video.src);
   }
 
-  globalThis.YomikuiMediaPipFrame = { install, rememberVideo, getVideoUrl, isOpen: () => !!session };
+  globalThis.YomikuiMediaPipFrame = { install, rememberVideo, getVideoUrl, mp4Url: mp4, isOpen: () => !!session };
 })();
