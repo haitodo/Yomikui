@@ -15,6 +15,7 @@
   const DESCRIBE = PREFIX + 'describe';
   const CONTEXT = PREFIX + 'context';
   const COOLDOWN = 5000;
+  const COLUMN_INTERVAL_MS = 400;
   const FRAME_TIMEOUT = 12000;
   const REQUEST_TIMEOUT = 11000;
   const RELOAD_TIMEOUT = 20000;
@@ -155,21 +156,8 @@
     if ((path !== '/home' && !reloadKind(currentPath())) ||
         !isNativeColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) || settings?.isTimelineColumn) return 'not-home';
     if (document.hidden) return 'hidden';
-    if (document.querySelector('[role="dialog"]')) return 'dialog';
-    // X also prefixes its label and placeholder wrappers with tweetTextarea_.
-    // Only the editable control contains draft text; its wrapper can contain
-    // "What's happening?" even while the actual editor is empty.
-    for (const editor of document.querySelectorAll(
-      '[data-testid^="tweetTextarea_"][contenteditable="true"], textarea[data-testid^="tweetTextarea_"]',
-    )) {
-      const text = editor.tagName === 'TEXTAREA' ? editor.value : editor.textContent;
-      if (text?.trim()) return 'draft';
-    }
-    for (const attachments of document.querySelectorAll('[data-testid="attachments"]')) {
-      if (!attachments.closest('article') && attachments.querySelector(
-        'img, video, [data-testid="removeMedia"], [data-testid="removeMediaButton"]',
-      )) return 'draft';
-    }
+    const blocked = globalThis.YomikuiHomeScroll.interactionBlockReason();
+    if (blocked) return blocked;
     const kind = readingKind(getSettings);
     if (kind && target && kind !== target) return 'target-changed';
     if (kind && !refreshable(kind)) return 'following';
@@ -215,17 +203,22 @@
       const reason = this.unavailableReason(target);
       if (reason) return reason;
       const path = currentPath();
-      globalThis.YomikuiHomeScroll.scrollToTop(this.getScroller());
+      let scroller = this.getScroller();
+      globalThis.YomikuiHomeScroll.scrollToTop(scroller);
       // Confirm two painted frames at the top as well as X's short settling
       // interval. A stalled/overridden scroll must never turn into a refresh.
       const schedule = window.requestAnimationFrame?.bind(window) ?? (callback => setTimeout(callback, 16));
       const unschedule = window.cancelAnimationFrame?.bind(window) ?? clearTimeout;
       return new Promise((resolve, reject) => {
-        let frame = null, paints = 0, settled = false, finished = false, scroller = this.getScroller();
+        let frame = null, paints = 0, settled = false, finished = false;
         const guard = () => currentPath() !== path ? 'target-changed' : this.unavailableReason(target);
         const atTop = () => {
-          const current = this.getScroller();
-          if (current !== scroller) { paints = 0; scroller = current; }
+          // Sample the known scroll offset during settling. Resolving all
+          // candidate containers is only necessary on replacement or confirmation.
+          if (settled || scroller?.isConnected === false) {
+            const current = this.getScroller();
+            if (current !== scroller) { paints = 0; scroller = current; }
+          }
           return isAtTop(scroller);
         };
         const finish = (reason, error) => {
@@ -693,18 +686,20 @@
         for (const column of columns) {
           checkAbort(job.abort.signal);
           const current = this.getState();
-          let result;
+          let result, nextStart = 0;
           if (!this.getTargets(target).some(item => item.id === column.id && item.refreshKind === column.refreshKind)) {
             result = { status: 'skipped', reason: 'target-changed' };
           } else if (current.columnComposing?.[column.id]) {
             result = { status: 'skipped', reason: 'draft' };
           } else {
             current.markColumnActivity?.(column.id);
+            nextStart = Date.now() + COLUMN_INTERVAL_MS;
             result = await this.requestColumn(column, job.abort.signal, highTweetLoadIds?.has(column.id));
           }
           results.push({ columnId: column.id, title: column.title, kind: column.refreshKind, ...result });
           this.publish({ results: [...results], done: results.length });
-          if (results.length < columns.length) await delay(400, job.abort.signal);
+          const remaining = nextStart - Date.now();
+          if (results.length < columns.length && remaining > 0) await delay(remaining, job.abort.signal);
         }
       } catch (error) {
         if (error.name !== 'AbortError') results.push({ status: 'failed', reason: 'error' });

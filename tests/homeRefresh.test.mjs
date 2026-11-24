@@ -124,6 +124,26 @@ test('an ignored or rebounding top scroll retries once and times out without cli
   }
 });
 
+test('top preparation reuses the scroll container until confirmation and requires fresh paints for a replacement', async () => {
+  const env = setup();
+  env.window.requestAnimationFrame = env.clock.requestAnimationFrame;
+  env.window.cancelAnimationFrame = env.clock.cancelAnimationFrame;
+  let scroller = env.scroller, lookups = 0, finished = false;
+  const refresher = new env.api.NativeRefresher({ ...env.options, getScroller: () => { lookups++; return scroller; } });
+  const pending = refresher.prepare(undefined, 'recommended').then(reason => { finished = true; return reason; });
+  for (let i = 0; i < 10; i++) env.clock.frame(16);
+  assert.equal(lookups, 1);
+  scroller = { scrollTop: 0 };
+  await env.clock.advance(40);
+  assert.equal(finished, false);
+  env.clock.frame(16); await settle();
+  assert.equal(finished, false);
+  env.clock.frame(16);
+  assert.equal(await pending, null);
+  assert.equal(env.clock.frames.size, 0);
+  assert.equal(env.clock.timers.size, 0);
+});
+
 test('a late top arrival needs two stable painted frames and a changed route cancels preparation', async () => {
   const env = setup(home({ banner: 'Show new posts' }));
   env.scroller.scrollTo = () => {};
@@ -1352,6 +1372,30 @@ test('a multiple-group refresh snapshots its scope, visits each visible column o
     await env.clock.advance(1000); await run;
     assert.deepEqual(env.messages.filter(message => message.type === P + 'request').map(message => message.columnId), changeNext ? ['home'] : ['home', 'search']);
     if (changeNext) assert.equal(env.views.at(-1).results.at(-1).reason, 'target-changed');
+    env.batch.dispose();
+  }
+});
+
+test('sequential refresh counts the previous request time toward the interval between column starts', async () => {
+  for (const confirmationTime of [30, 900]) {
+    const env = batchSetup({ quiet: (id, type) => id === 'home1' && type === P + 'request' });
+    const run = env.batch.run();
+    const requests = () => env.messages.filter(message => message.type === P + 'request');
+    await env.clock.advance(confirmationTime);
+    assert.equal(requests().length, 1);
+    env.window.emit('message', {
+      source: env.frames.get('home1'), origin: 'https://x.com',
+      data: { ...requests()[0], type: P + 'result', status: 'updated', method: 'tab' },
+    });
+    await settle();
+    if (confirmationTime < 400) {
+      await env.clock.advance(399 - confirmationTime);
+      assert.equal(requests().length, 1);
+      await env.clock.advance(1);
+    }
+    assert.deepEqual(requests().map(request => request.columnId), ['home1', 'home2']);
+    await env.clock.advance(30);
+    await run;
     env.batch.dispose();
   }
 });

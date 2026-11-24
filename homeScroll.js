@@ -9,6 +9,8 @@
   const FOLLOWING_LABELS = new Set(['following', 'フォロー中', 'フォロー']);
   const VALID_DELTA_MODES = new Set([0, 1, 2]);
   const STATUS_ID_RE = /\/status\/(\d+)/;
+  const wheelScrollers = new WeakMap();
+  const WHEEL_SCROLLER_CACHE_MS = 120;
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
   const READING_TYPES = new Set(['home', 'following', 'notifications', 'explore', 'search', 'bookmarks', 'likes', 'customUrl']);
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
@@ -112,9 +114,9 @@
   function isNewPostsButton(button) {
     if (!button || button.closest('article, [role="dialog"], [role="tab"]') || button.disabled ||
         button.getAttribute('aria-disabled') === 'true' || button.closest('[hidden], [aria-hidden="true"]')) return false;
-    if (button.checkVisibility && !button.checkVisibility({ visibilityProperty: true })) return false;
     return [button.getAttribute('aria-label'), button.textContent].some(value =>
-      value && newPostsPattern.test(value.normalize('NFKC').trim()));
+      value && newPostsPattern.test(value.normalize('NFKC').trim())) &&
+      (!button.checkVisibility || button.checkVisibility({ visibilityProperty: true }));
   }
 
   function isRecommendedHome(settings) {
@@ -151,6 +153,33 @@
     else window.scrollTo(options);
   }
 
+  // Resolving the native scroller measures several possible containers. Reuse
+  // it for a short burst on the same page while continuing to check input guards.
+  function getReadingScroller(column, kind, getScroller) {
+    const path = window.location.pathname + (window.location.search || '');
+    const now = Date.now(), cached = wheelScrollers.get(column);
+    if (cached && cached.path === path && cached.kind === kind && cached.resolve === getScroller &&
+        now < cached.expires && cached.element?.isConnected !== false) return cached.element;
+    const element = getScroller();
+    wheelScrollers.set(column, { path, kind, resolve: getScroller, element, expires: now + WHEEL_SCROLLER_CACHE_MS });
+    return element;
+  }
+
+  function interactionBlockReason() {
+    // X also prefixes non-editable placeholder wrappers with tweetTextarea_.
+    const controls = document.querySelectorAll(
+      '[role="dialog"], [data-testid^="tweetTextarea_"][contenteditable="true"], textarea[data-testid^="tweetTextarea_"], [data-testid="attachments"]',
+    );
+    let draft = false;
+    for (const control of controls) {
+      if (control.getAttribute('role') === 'dialog') return 'dialog';
+      if (control.getAttribute('data-testid') === 'attachments') {
+        if (!control.closest('article') && control.querySelector('img, video, [data-testid="removeMedia"], [data-testid="removeMediaButton"]')) draft = true;
+      } else if ((control.tagName === 'TEXTAREA' ? control.value : control.textContent)?.trim()) draft = true;
+    }
+    return draft ? 'draft' : null;
+  }
+
   function navigate({ getSettings, getScroller, mode, deltaY, deltaMode = 0, group, beforeMove }) {
     if (!isReadingAction({ mode, deltaY, deltaMode })) {
       return { status: 'skipped', reason: 'unavailable' };
@@ -162,18 +191,10 @@
     if (group !== undefined && kind !== group) return { status: 'skipped', reason: 'target-changed' };
     if (!timeline) return { status: 'skipped', reason: 'not-timeline' };
     if (document.hidden) return { status: 'skipped', reason: 'hidden' };
-    if (document.querySelector('[role="dialog"]')) return { status: 'skipped', reason: 'dialog' };
-    for (const editor of document.querySelectorAll(
-      '[data-testid^="tweetTextarea_"][contenteditable="true"], textarea[data-testid^="tweetTextarea_"]',
-    )) {
-      if ((editor.tagName === 'TEXTAREA' ? editor.value : editor.textContent)?.trim()) return { status: 'skipped', reason: 'draft' };
-    }
-    for (const attachment of document.querySelectorAll('[data-testid="attachments"]')) {
-      if (!attachment.closest('article') && attachment.querySelector('img, video, [data-testid="removeMedia"], [data-testid="removeMediaButton"]')) {
-        return { status: 'skipped', reason: 'draft' };
-      }
-    }
-    const scroller = getScroller();
+    const blocked = interactionBlockReason();
+    if (blocked) return { status: 'skipped', reason: blocked };
+    if (!column) return { status: 'skipped', reason: 'unavailable' };
+    const scroller = mode === 'wheel' ? getReadingScroller(column, kind, getScroller) : getScroller();
     const rootScroller = !scroller || scroller === document.scrollingElement ||
       scroller === document.documentElement || scroller === document.body;
     const wheelScroller = rootScroller ? window : scroller;
@@ -372,5 +393,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, isReloadRefreshKind, navigate, scrollToTop, selectedTimelineTab, tweetId, isRecommendedTab: recommended });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, isReloadRefreshKind, navigate, scrollToTop, selectedTimelineTab, tweetId, interactionBlockReason, isRecommendedTab: recommended });
 })();

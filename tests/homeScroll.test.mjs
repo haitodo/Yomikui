@@ -146,6 +146,33 @@ test('relative wheel scrolling converts line and page units and supports the roo
   assert.equal(moves.at(-1).top, 300);
 });
 
+test('wheel bursts reuse the measured scroller while route, replacement, and draft checks stay live', async () => {
+  const env = readingSetup();
+  const moves = [];
+  let lookups = 0, active = { isConnected: true, scrollBy: ({ top }) => moves.push(top) };
+  const getScroller = () => { lookups++; return active; };
+  const wheel = () => env.api.navigate({ getSettings: () => env.settings, getScroller, mode: 'wheel', deltaY: 4 });
+  wheel(); wheel();
+  assert.equal(lookups, 1);
+  const draft = env.document.createElement('textarea');
+  draft.dataset.testid = 'tweetTextarea_0';
+  draft.value = '編集中';
+  env.document.body.appendChild(draft);
+  assert.equal(wheel().reason, 'draft');
+  draft.remove();
+  active.isConnected = false;
+  active = { isConnected: true, scrollBy: ({ top }) => moves.push(top) };
+  wheel();
+  assert.equal(lookups, 2);
+  env.window.location.search = '?q=other';
+  wheel();
+  assert.equal(lookups, 3);
+  await env.clock.advance(150);
+  wheel();
+  assert.equal(lookups, 4);
+  assert.deepEqual(moves, [4, 4, 4, 4, 4]);
+});
+
 test('returning to the top after reading jumps directly without clicking X controls', () => {
   const env = readingSetup();
   env.wheel(120);

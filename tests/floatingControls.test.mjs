@@ -34,8 +34,10 @@ function setup() {
   return { clock, document, dom, window, saved, writes, observers, context, api: context.YomikuiFloatingControls };
 }
 
-function readingSetup({ quiet = false, origins = {} } = {}) {
+function readingSetup({ quiet = false, origins = {}, smoothMotion = false } = {}) {
   const env = setup();
+  const motion = { matches: smoothMotion };
+  env.window.matchMedia = () => motion;
   const columns = [
     { id: 'one', type: 'home', title: 'One' }, { id: 'two', type: 'home', title: 'Two' },
     { id: 'offscreen', type: 'home' }, { id: 'live', type: 'home', liveFeed: true },
@@ -72,7 +74,7 @@ function readingSetup({ quiet = false, origins = {} } = {}) {
     kinds.set(id, kind);
     env.window.emit('message', { source: frames.get(id), origin: origins[id] ?? 'https://x.com', data: { type: PREFIX + 'context', columnId: id, kind } });
   };
-  return { ...env, state, visible, frames, messages, views, activity, controller, kinds, contextRequests, contextViews, report };
+  return { ...env, state, visible, frames, messages, views, activity, controller, kinds, contextRequests, contextViews, report, motion };
 }
 
 test('wheel input starts before the next paint and coalesces only additional input without cooldowns or UI updates', async () => {
@@ -119,6 +121,68 @@ test('one wheel gesture can scroll a same-origin column directly and a cross-ori
   env.clock.frame(16);
   assert.equal(direct.at(-1).deltaY, 24);
   assert.equal(env.messages.at(-1).deltaY, 24);
+  env.controller.dispose();
+});
+
+test('large notches start immediately and distribute the full distance across paints at different refresh rates', () => {
+  for (const frameTime of [8, 16, 32]) {
+    const env = readingSetup({ smoothMotion: true });
+    const wheel = deltaY => env.controller.wheel({ target: 'one', deltaY });
+    wheel(120);
+    assert.equal(env.messages.length, 1);
+    assert.ok(env.messages[0].deltaY > 0 && env.messages[0].deltaY < 120);
+    wheel(120);
+    assert.equal(env.clock.frames.size, 1);
+    for (let elapsed = 0; elapsed < 80; elapsed += frameTime) env.clock.frame(frameTime);
+    const steps = env.messages.map(message => message.deltaY);
+    assert.ok(steps.length > 2 && steps.every(step => step > 0 && Number.isInteger(step)));
+    assert.equal(steps.reduce((sum, step) => sum + step, 0), 240);
+    assert.deepEqual(env.activity, ['one']);
+    assert.equal(env.clock.frames.size, 0);
+    wheel(2.75);
+    assert.equal(env.messages.at(-1).deltaY, 2.75);
+    env.controller.dispose();
+  }
+});
+
+test('wheel motion respects reduced motion, unit changes, and cancellation before the next paint', () => {
+  const env = readingSetup({ smoothMotion: true });
+  const wheel = (deltaY, deltaMode = 0) => env.controller.wheel({ target: 'one', deltaY, deltaMode });
+  wheel(-120);
+  wheel(3, 1);
+  assert.equal(env.messages.filter(message => message.deltaMode === 0).reduce((sum, step) => sum + step.deltaY, 0), -120);
+  assert.equal(env.messages.at(-1).deltaY, 1);
+  env.motion.matches = false;
+  env.clock.frame(8);
+  assert.equal(env.messages.at(-1).deltaY, 2);
+  wheel(120);
+  assert.equal(env.messages.at(-1).deltaY, 120);
+  env.motion.matches = true;
+  wheel(120);
+  const sent = env.messages.length;
+  env.controller.clearWheel();
+  env.clock.frame(80);
+  assert.equal(env.messages.length, sent);
+  assert.equal(env.clock.frames.size, 0);
+  env.controller.dispose();
+});
+
+test('the remainder of a notch stays with its original visible frames', () => {
+  const env = readingSetup({ smoothMotion: true });
+  env.visible.delete('two');
+  const wheel = () => env.controller.wheel({ target: ['recommended'], deltaY: 120 });
+  wheel();
+  assert.deepEqual(env.messages.map(message => message.columnId), ['one']);
+  env.visible.add('two');
+  env.clock.frame(16);
+  assert.deepEqual(env.messages.map(message => message.columnId), ['one', 'one']);
+  const oldFrame = env.frames.get('one');
+  env.frames.set('one', { postMessage: oldFrame.postMessage });
+  env.report('one', 'recommended');
+  env.clock.frame(80);
+  assert.equal(env.messages.length, 2);
+  wheel();
+  assert.deepEqual(env.messages.slice(2).map(message => message.columnId), ['one', 'two']);
   env.controller.dispose();
 });
 
@@ -471,8 +535,10 @@ test('panel dragging clamps to the viewport, shields frames and saves only a com
   assert.equal(env.panel.style.left, '8px');
   assert.equal(env.panel.style.top, '8px');
   env.pointer('pointermove', -995, -995); // Move 5px inwards
-  assert.equal(env.panel.style.left, '13px');
-  assert.equal(env.panel.style.top, '13px');
+  assert.equal(env.clock.frames.size, 1);
+  env.clock.frame(16);
+  assert.equal(env.panel.style.transform, 'translate3d(5px, 5px, 0)');
+  assert.equal(env.panel.style.left, '8px', 'moving the pointer does not relayout the panel');
   env.pointer('pointerup', -995, -995);
   // Double-clicking immediately after dragging is ignored to avoid accidental reset
   env.emit('dblclick', { button: 0 });
@@ -486,16 +552,39 @@ test('panel dragging clamps to the viewport, shields frames and saves only a com
   env.position.dispose();
 });
 
+test('a drag paints the latest pointer once per frame and saves the release position before a pending paint', () => {
+  const env = positionSetup();
+  env.pointer('pointerdown', 710, 520);
+  env.pointer('pointermove', 680, 500);
+  env.pointer('pointermove', 608, 422);
+  assert.equal(env.clock.frames.size, 1);
+  assert.equal(env.panel.style.left, '706px');
+  env.clock.frame(8);
+  assert.equal(env.panel.style.transform, 'translate3d(-102px, -98px, 0)');
+  env.pointer('pointermove', 590, 401);
+  env.pointer('pointerup', 580, 400);
+  assert.equal(env.clock.frames.size, 0);
+  assert.equal(env.panel.style.transform, '');
+  assert.equal(env.panel.style.left, '576px');
+  assert.equal(env.panel.style.top, '392px');
+  assert.equal(env.commits.length, 1);
+  env.position.dispose();
+});
+
 test('Escape, lost capture and disposal cancel dragging without persisting a partial move', () => {
   for (const cause of ['escape', 'capture', 'dispose']) {
     const env = positionSetup();
     const before = env.panel.style.left;
     env.pointer('pointerdown', 710, 520);
     env.pointer('pointermove', 100, 100);
+    env.clock.frame(8);
+    env.pointer('pointermove', 80, 80);
     if (cause === 'escape') env.emit('keydown', { key: 'Escape' });
     if (cause === 'capture') env.pointer('lostpointercapture', 100, 100);
     if (cause === 'dispose') env.position.dispose();
     assert.equal(env.panel.style.left, before);
+    assert.equal(env.panel.style.transform, '');
+    assert.equal(env.clock.frames.size, 0);
     assert.equal(env.commits.length, 0);
     assert.equal(env.document.body.children.length, 1);
     env.position.dispose();
@@ -516,6 +605,22 @@ test('keyboard movement and viewport or panel resizing keep controls reachable',
   env.setHeight(180);
   env.observers[0].callback();
   assert.equal(env.panel.style.top, '212px');
+  env.position.dispose();
+});
+
+test('viewport changes during a drag clamp the next paint and release to the current bounds', () => {
+  const env = positionSetup();
+  env.pointer('pointerdown', 710, 520);
+  env.pointer('pointermove', 690, 500);
+  env.window.innerWidth = 400;
+  env.window.innerHeight = 500;
+  env.window.emit('resize');
+  env.clock.frame(16);
+  env.pointer('pointerup', 682, 490);
+  assert.equal(env.panel.style.left, '98px');
+  assert.equal(env.panel.style.top, '202px');
+  assert.equal(env.commits.length, 1);
+  assert.equal(env.clock.frames.size, 0);
   env.position.dispose();
 });
 

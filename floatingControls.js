@@ -4,6 +4,7 @@
   const PREFIX = 'yomikui-home-refresh-';
   const NAVIGATION_TIMEOUT_MS = 1200;
   const READING_ACTION_INTERVAL_MS = 300;
+  const WHEEL_SMOOTH_MS = 80;
   const STORAGE_KEY = 'yomikui_floating_controls_v1';
   const TARGETS_KEY = 'yomikui_reading_targets_v1';
   const GROUPS = Object.freeze({ recommended: 'おすすめ', following: 'フォロー中', search: '検索結果', explore: '話題を検索' });
@@ -13,7 +14,8 @@
   const VALID_CONTEXT_KINDS = new Set([...ALL_GROUPS, 'other', null]);
   const NAVIGATED_STATUSES = new Set(['moved', 'edge', 'skipped', 'failed']);
   const trusted = origin => origin === 'https://x.com' || origin === 'https://twitter.com';
-  const clamp = value => Math.max(0, Math.min(1, value));
+  const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
+  const wheelTime = () => globalThis.performance?.now() ?? Date.now();
   const readable = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
   const REASONS = {
     hidden: '画面外・非表示', draft: '投稿を入力中', dialog: 'ダイアログを表示中',
@@ -171,6 +173,7 @@
       this.contexts = new Map();
       this.visible = new Set();
       this.wheelActivity = new Map();
+      this.wheelMotion = window.matchMedia?.('(prefers-reduced-motion: no-preference)');
       this.active = null;
       this.receive = this.receive.bind(this);
       this.onVisibility = () => { if (document.hidden) this.cancel(); };
@@ -267,16 +270,28 @@
       if (!state.columns.some(column => this.visible.has(column.id) && readable(column) &&
           matchesReadingTarget(column, target, this.columnKind(column.id)))) return false;
       if (this.active && !this.active.cancelled) { this.active.cancelledByWheel = true; this.cancel(); }
+      // Keep fine trackpad input and page units exact. Split large integral
+      // pixel steps and multi-line notches into whole units to avoid rounding drift.
+      const smooth = this.wheelMotion?.matches === true && Number.isSafeInteger(deltaY) &&
+        ((deltaMode === 0 && Math.abs(deltaY) >= 64) || (deltaMode === 1 && Math.abs(deltaY) > 1));
       const previous = this.wheelBuffer;
       if (previous && (previous.workspaceId !== state.activeWorkspaceId || targetKey(previous.target) !== targetKey(target))) this.clearWheel();
       // Keep reversals and unit changes in order, including at a column's edge.
-      else if (previous && (previous.deltaMode !== deltaMode || previous.direction !== Math.sign(deltaY))) this.flushWheel();
+      else if (previous && (previous.deltaMode !== deltaMode || previous.direction !== Math.sign(deltaY) ||
+          previous.smooth !== smooth || !Number.isFinite(previous.deltaY + deltaY))) {
+        this.clearWheel();
+        this.sendWheel(previous, previous.deltaY);
+      }
       const leading = !this.wheelBuffer;
-      if (leading) this.wheelBuffer = { workspaceId: state.activeWorkspaceId, target: Array.isArray(target) ? [...target] : target, deltaMode, direction: Math.sign(deltaY), deltaY: 0, frame: null };
+      const now = wheelTime();
+      if (leading) this.wheelBuffer = {
+        workspaceId: state.activeWorkspaceId, target: Array.isArray(target) ? [...target] : target,
+        deltaMode, direction: Math.sign(deltaY), deltaY: 0, smooth, lastPaint: now - 16, frame: null,
+      };
       const buffer = this.wheelBuffer;
       buffer.deltaY += deltaY;
-      // Send the first input in this event, without waiting for the dashboard's
-      // next paint. Only additional input in the same frame needs coalescing.
+      buffer.recipients = null;
+      buffer.until = now + WHEEL_SMOOTH_MS;
       if (leading) this.flushWheel(true);
       return true;
     }
@@ -284,30 +299,45 @@
     flushWheel(leading = false) {
       const buffer = this.wheelBuffer;
       if (!buffer) return;
-      const deltaY = buffer.deltaY;
-      if (leading) {
-        buffer.deltaY = 0;
+      const now = wheelTime();
+      let deltaY = buffer.deltaY;
+      if (buffer.smooth && this.wheelMotion.matches && now < buffer.until) {
+        // Sample the same ease-out curve on 60 Hz and high-refresh displays.
+        const remaining = clamp((buffer.until - now) / (buffer.until - buffer.lastPaint));
+        deltaY = Math.sign(deltaY) * Math.ceil(Math.abs(deltaY) * (1 - remaining * remaining));
+      }
+      buffer.deltaY -= deltaY;
+      buffer.lastPaint = now;
+      if (leading || buffer.deltaY !== 0) {
         buffer.frame = requestAnimationFrame(() => this.flushWheel());
       } else this.clearWheel();
+      this.sendWheel(buffer, deltaY);
+    }
+
+    sendWheel(buffer, deltaY) {
       if (deltaY === 0) return;
       const state = this.getState();
       if (this.disposed || document.hidden || state.activeWorkspaceId !== buffer.workspaceId) return;
       const candidates = new Map();
       for (const column of state.columns) {
         if (!readable(column) || state.columnComposing?.[column.id]) continue;
+        // Only fresh wheel input can address a newly visible or replaced frame.
+        const recipient = buffer.recipients?.get(column.id);
+        if (buffer.recipients && !recipient) continue;
         const frame = this.getFrame(column.id);
         if (!frame?.window || !trusted(frame.origin)) continue;
         const kind = this.columnKind(column.id, frame);
-        if (matchesReadingTarget(column, buffer.target, kind)) {
-          candidates.set(column.id, { frame, group: frameGroup(buffer.target, kind) });
-        }
+        const group = frameGroup(buffer.target, kind);
+        if (recipient && (recipient.frame.window !== frame.window || recipient.frame.origin !== frame.origin || recipient.group !== group)) continue;
+        if (matchesReadingTarget(column, buffer.target, kind)) candidates.set(column.id, { frame, group });
       }
+      if (buffer.smooth) buffer.recipients = candidates;
       if (!candidates.size) return;
       // Recheck current bounds because the rack may have moved since the last input.
       const visible = this.getVisibleIds(candidates);
       const now = Date.now();
       for (const [columnId, { frame, group }] of candidates) {
-        if (!visible.has(columnId)) continue;
+        if (!visible.has(columnId)) { candidates.delete(columnId); continue; }
         if (!this.wheelActivity.has(columnId) || now - this.wheelActivity.get(columnId) >= 500) {
           this.wheelActivity.set(columnId, now);
           state.markColumnActivity?.(columnId);
@@ -431,8 +461,8 @@
   // Imperative position updates avoid rerendering React or saving storage on
   // every pointer move. The transparent shield keeps iframe content inert.
   class PanelPosition {
-    constructor({ panel, handle, position, onCommit }) {
-      Object.assign(this, { panel, handle, onCommit });
+    constructor({ panel, handle, position, onCommit, onDragStart }) {
+      Object.assign(this, { panel, handle, onCommit, onDragStart });
       this.position = preferences(position);
       this.listeners = [];
       const listen = (target, type, callback, options) => {
@@ -446,16 +476,19 @@
       listen(handle, 'lostpointercapture', event => this.end(event, true));
       listen(handle, 'dblclick', event => this.resetPosition(event));
       listen(handle, 'keydown', event => this.key(event));
-      listen(window, 'resize', () => this.place());
-      listen(window.visualViewport, 'resize', () => this.place());
-      listen(window.visualViewport, 'scroll', () => this.place());
+      const resize = () => this.resize();
+      listen(window, 'resize', resize);
+      listen(window.visualViewport, 'resize', resize);
+      listen(window.visualViewport, 'scroll', resize);
       listen(window, 'pagehide', () => this.end(null, true));
       listen(document, 'visibilitychange', () => { if (document.hidden) this.end(null, true); });
       if (typeof ResizeObserver !== 'undefined') {
-        this.observer = new ResizeObserver(() => this.place());
+        this.observer = new ResizeObserver(resize);
         this.observer.observe(panel);
       }
-      this.place();
+      this.panel.style.right = 'auto';
+      this.panel.style.bottom = 'auto';
+      this.resize();
     }
 
     bounds() {
@@ -477,42 +510,51 @@
       };
     }
 
-    place(bounds = this.bounds(), dragMoving = false) {
-      if (!dragMoving) {
-        this.panel.style.maxWidth = `${Math.max(0, (window.visualViewport?.width ?? window.innerWidth) - 16)}px`;
-        this.panel.style.maxHeight = `${Math.max(0, (window.visualViewport?.height ?? window.innerHeight) - 16)}px`;
-        this.panel.style.right = 'auto';
-        this.panel.style.bottom = 'auto';
-      }
+    resize() {
+      this.panel.style.maxWidth = `${Math.max(0, (window.visualViewport?.width ?? window.innerWidth) - 16)}px`;
+      this.panel.style.maxHeight = `${Math.max(0, (window.visualViewport?.height ?? window.innerHeight) - 16)}px`;
+      const bounds = this.bounds();
+      if (this.drag) {
+        this.drag.bounds = bounds;
+        this.drag.left = clamp(this.drag.left, bounds.left, bounds.left + bounds.x);
+        this.drag.top = clamp(this.drag.top, bounds.top, bounds.top + bounds.y);
+        this.paintDrag();
+      } else this.place(bounds);
+    }
+
+    place(bounds = this.bounds()) {
       const point = this.coordinates(bounds);
       this.panel.style.left = `${point.left}px`;
       this.panel.style.top = `${point.top}px`;
     }
 
     setPosition(position) {
-      if (!this.drag) { this.position = preferences(position); this.place(); }
+      if (this.drag || (this.position.x === position?.x && this.position.y === position?.y)) return;
+      this.position = preferences(position);
+      this.place();
     }
 
-    placeAt(left, top, bounds = this.bounds(), dragMoving = false) {
+    placeAt(left, top, bounds = this.bounds()) {
       // Coordinates use the viewport, so changing status text or folding the
       // settings does not shift an interior header. A value of 1 anchors an edge.
       if (bounds.x) this.position.x = left >= bounds.left + bounds.x - 1 ? 1 : clamp((left - bounds.left) / bounds.scaleX);
       if (bounds.y) this.position.y = top >= bounds.top + bounds.y - 1 ? 1 : clamp((top - bounds.top) / bounds.scaleY);
-      this.place(bounds, dragMoving);
+      this.place(bounds);
     }
 
     start(event) {
       if (event.button !== 0 || this.drag) return;
       event.preventDefault();
+      this.onDragStart?.();
       this.handle.focus({ preventScroll: true });
       const bounds = this.bounds();
       const point = this.coordinates(bounds);
+      this.place(bounds);
       this.drag = {
         id: event.pointerId, clientX: event.clientX, clientY: event.clientY,
-        left: point.left, top: point.top, bounds,
-        previous: { ...this.position }, moved: false,
+        left: point.left, top: point.top, origin: point, bounds, moved: false, frame: null,
       };
-      this.panel.style.willChange = 'left, top';
+      this.panel.style.willChange = 'transform';
       this.shield = document.createElement('div');
       Object.assign(this.shield.style, { position: 'fixed', inset: '0', zIndex: '799', cursor: 'grabbing', touchAction: 'none' });
       this.shield.setAttribute('aria-hidden', 'true');
@@ -521,35 +563,49 @@
       try { this.handle.setPointerCapture(event.pointerId); } catch { this.end(null, true); }
     }
 
+    track(event) {
+      const drag = this.drag, bounds = drag.bounds;
+      const dx = event.clientX - drag.clientX, dy = event.clientY - drag.clientY;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      drag.moved = true;
+      drag.left = clamp(drag.left + dx, bounds.left, bounds.left + bounds.x);
+      drag.top = clamp(drag.top + dy, bounds.top, bounds.top + bounds.y);
+      drag.clientX = event.clientX;
+      drag.clientY = event.clientY;
+    }
+
+    paintDrag() {
+      const { left, top, origin } = this.drag;
+      this.panel.style.transform = `translate3d(${left - origin.left}px, ${top - origin.top}px, 0)`;
+    }
+
     move(event) {
-      if (!this.drag || this.drag.id !== event.pointerId) return;
-      const dx = event.clientX - this.drag.clientX, dy = event.clientY - this.drag.clientY;
-      if (!this.drag.moved && Math.hypot(dx, dy) < 4) return;
-      this.drag.moved = true;
-      const bounds = this.drag.bounds;
-      const rawLeft = this.drag.left + dx, rawTop = this.drag.top + dy;
-      const targetLeft = Math.max(bounds.left, Math.min(bounds.left + bounds.x, rawLeft));
-      const targetTop = Math.max(bounds.top, Math.min(bounds.top + bounds.y, rawTop));
-      // Re-sync origin when hitting viewport boundary to prevent lag when reversing direction
-      if (rawLeft !== targetLeft) this.drag.clientX = event.clientX - (targetLeft - this.drag.left);
-      if (rawTop !== targetTop) this.drag.clientY = event.clientY - (targetTop - this.drag.top);
-      this.placeAt(targetLeft, targetTop, bounds, true);
+      const drag = this.drag;
+      if (!drag || event.pointerId !== drag.id) return;
+      this.track(event);
+      if (drag.moved && drag.frame === null) drag.frame = requestAnimationFrame(() => {
+        drag.frame = null;
+        this.paintDrag();
+      });
     }
 
     end(event, cancelled = false) {
       if (!this.drag || (event && event.pointerId !== undefined && event.pointerId !== this.drag.id)) return;
       const drag = this.drag;
+      if (!cancelled && event) this.track(event);
+      if (drag.frame !== null) cancelAnimationFrame(drag.frame);
       this.drag = null;
+      this.panel.style.transform = '';
       this.panel.style.willChange = '';
       this.shield?.remove();
       this.shield = null;
       this.handle.style.cursor = 'grab';
-      if (cancelled) { this.position = drag.previous; this.place(); }
       try { this.handle.releasePointerCapture(drag.id); } catch {}
       if (!cancelled && drag.moved) {
+        this.placeAt(drag.left, drag.top, drag.bounds);
         this.lastDragMovedAt = Date.now();
         this.onCommit({ x: this.position.x, y: this.position.y });
-      }
+      } else this.place(drag.bounds);
     }
 
     resetPosition(event) {
@@ -564,8 +620,8 @@
       const delta = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[event.key];
       if (!delta || this.drag) return;
       event.preventDefault();
-      const point = this.coordinates(), step = event.shiftKey ? 40 : 10;
-      this.placeAt(point.left + delta[0] * step, point.top + delta[1] * step);
+      const bounds = this.bounds(), point = this.coordinates(bounds), step = event.shiftKey ? 40 : 10;
+      this.placeAt(point.left + delta[0] * step, point.top + delta[1] * step, bounds);
       this.onCommit({ x: this.position.x, y: this.position.y });
     }
 
@@ -756,11 +812,11 @@
     useLayoutEffect(() => {
       if (!shown || !panelRef.current || !handleRef.current) return;
       installStyles();
-      const position = new PanelPosition({ panel: panelRef.current, handle: handleRef.current, position: prefsRef.current, onCommit: updatePrefs });
+      const position = new PanelPosition({ panel: panelRef.current, handle: handleRef.current, position: prefsRef.current, onCommit: updatePrefs, onDragStart: onCancelWheel });
       const disposeWheel = installWheel(panelRef.current, action => wheelRef.current?.(action) === true);
       positionRef.current = position;
       return () => { disposeWheel(); position.dispose(); positionRef.current = null; };
-    }, [shown, updatePrefs]);
+    }, [shown, updatePrefs, onCancelWheel]);
     useLayoutEffect(() => { positionRef.current?.setPosition(prefs); }, [prefs]);
     React.useEffect(() => {
       let mounted = true;
