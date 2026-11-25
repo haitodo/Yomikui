@@ -516,14 +516,15 @@ function positionSetup() {
 
 test('panel dragging clamps to the viewport, shields frames and saves only a completed drag', async () => {
   const env = positionSetup();
-  assert.equal(env.panel.style.left, '706px');
-  env.pointer('pointerdown', 710, 520);
+  assert.equal(env.panel.style.left, '357px');
+  assert.equal(env.panel.style.top, '260px');
+  env.pointer('pointerdown', 360, 270);
   assert.equal(env.document.body.children.length, 2, 'the drag shield covers underlying frames');
-  env.pointer('pointermove', 712, 521);
-  env.pointer('pointerup', 712, 521);
+  env.pointer('pointermove', 362, 271);
+  env.pointer('pointerup', 362, 271);
   assert.equal(env.commits.length, 0);
   assert.equal(env.document.body.children.length, 1);
-  env.pointer('pointerdown', 710, 520);
+  env.pointer('pointerdown', 360, 270);
   env.pointer('pointermove', -5000, -5000);
   env.pointer('pointerup', -5000, -5000);
   assert.equal(env.panel.style.left, '8px');
@@ -543,12 +544,12 @@ test('panel dragging clamps to the viewport, shields frames and saves only a com
   // Double-clicking immediately after dragging is ignored to avoid accidental reset
   env.emit('dblclick', { button: 0 });
   assert.equal(env.panel.style.left, '13px');
-  // Double-clicking after drag settles resets position to bottom-right
+  // Double-clicking after drag settles resets position to viewport center
   await env.clock.advance(600);
   env.emit('dblclick', { button: 0 });
-  assert.equal(env.panel.style.left, '706px');
-  assert.equal(env.panel.style.top, '512px');
-  assert.deepEqual(env.commits.at(-1), { x: 1, y: 1 });
+  assert.equal(env.panel.style.left, '357px');
+  assert.equal(env.panel.style.top, '260px');
+  assert.deepEqual(env.commits.at(-1), { x: null, y: null });
   env.position.dispose();
 });
 
@@ -558,15 +559,15 @@ test('a drag paints the latest pointer once per frame and saves the release posi
   env.pointer('pointermove', 680, 500);
   env.pointer('pointermove', 608, 422);
   assert.equal(env.clock.frames.size, 1);
-  assert.equal(env.panel.style.left, '706px');
+  assert.equal(env.panel.style.left, '357px');
   env.clock.frame(8);
   assert.equal(env.panel.style.transform, 'translate3d(-102px, -98px, 0)');
   env.pointer('pointermove', 590, 401);
   env.pointer('pointerup', 580, 400);
   assert.equal(env.clock.frames.size, 0);
   assert.equal(env.panel.style.transform, '');
-  assert.equal(env.panel.style.left, '576px');
-  assert.equal(env.panel.style.top, '392px');
+  assert.equal(env.panel.style.left, '227px');
+  assert.equal(env.panel.style.top, '140px');
   assert.equal(env.commits.length, 1);
   env.position.dispose();
 });
@@ -593,9 +594,20 @@ test('Escape, lost capture and disposal cancel dragging without persisting a par
 });
 
 test('keyboard movement and viewport or panel resizing keep controls reachable', () => {
+  const centered = positionSetup();
+  centered.window.innerWidth = 600;
+  centered.window.innerHeight = 500;
+  centered.window.emit('resize');
+  assert.equal(centered.panel.style.left, '157px');
+  assert.equal(centered.panel.style.top, '110px');
+  centered.setHeight(180);
+  centered.observers[0].callback();
+  assert.equal(centered.panel.style.top, '160px', 'an unmoved panel stays centered when its height changes');
+  centered.position.dispose();
+
   const env = positionSetup();
   env.emit('keydown', { key: 'ArrowLeft', shiftKey: false });
-  assert.equal(env.panel.style.left, '696px');
+  assert.equal(env.panel.style.left, '347px');
   assert.equal(env.commits.length, 1);
   env.window.innerWidth = 320;
   env.window.innerHeight = 400;
@@ -604,19 +616,19 @@ test('keyboard movement and viewport or panel resizing keep controls reachable',
   assert.ok(parseFloat(env.panel.style.top) + env.panel.offsetHeight <= 392);
   env.setHeight(180);
   env.observers[0].callback();
-  assert.equal(env.panel.style.top, '212px');
+  assert.ok(parseFloat(env.panel.style.top) + env.panel.offsetHeight <= 392);
   env.position.dispose();
 });
 
 test('viewport changes during a drag clamp the next paint and release to the current bounds', () => {
   const env = positionSetup();
-  env.pointer('pointerdown', 710, 520);
-  env.pointer('pointermove', 690, 500);
+  env.pointer('pointerdown', 360, 270);
+  env.pointer('pointermove', 340, 250);
   env.window.innerWidth = 400;
   env.window.innerHeight = 500;
   env.window.emit('resize');
   env.clock.frame(16);
-  env.pointer('pointerup', 682, 490);
+  env.pointer('pointerup', 332, 240);
   assert.equal(env.panel.style.left, '98px');
   assert.equal(env.panel.style.top, '202px');
   assert.equal(env.commits.length, 1);
@@ -626,9 +638,9 @@ test('viewport changes during a drag clamp the next paint and release to the cur
 
 test('a dragged header stays in place when folding or status text changes the panel height', () => {
   const env = positionSetup();
-  env.pointer('pointerdown', 710, 520);
-  env.pointer('pointermove', 400, 300);
-  env.pointer('pointerup', 400, 300);
+  env.pointer('pointerdown', 360, 270);
+  env.pointer('pointermove', 200, 150);
+  env.pointer('pointerup', 200, 150);
   const original = { left: env.panel.style.left, top: env.panel.style.top };
   env.setHeight(180);
   env.observers[0].callback();
@@ -642,7 +654,7 @@ test('a dragged header stays in place when folding or status text changes the pa
 
 test('panel preferences persist locally in order and normalize invalid values', async () => {
   const env = setup();
-  assert.deepEqual(clone(await env.api.loadPreferences()), { x: 1, y: 1, hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} });
+  assert.deepEqual(clone(await env.api.loadPreferences()), { x: null, y: null, hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} });
   env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, collapsed: true, mode: 'page' };
   assert.deepEqual(clone(await env.api.loadPreferences()), { x: .3, y: .6, hideEmpty: true, color: 'bluegray', transparency: 0, minimized: {} }, 'older preferences retain the position and drop retired settings');
   env.saved.yomikui_floating_controls_v1 = { x: .3, y: .6, mode: 'page', minimized: true };
@@ -701,4 +713,29 @@ test('panel CSS survives the shipped dashboard stylesheet cleanup without duplic
     maintenance.headObserver.disconnect();
     maintenance.titleObserver?.disconnect();
   }
+});
+
+test('frame lifecycle events only measure the reporting column instead of scanning the entire rack', () => {
+  const env = readingSetup();
+  const rack = env.document.createElement('div');
+  rack.className = 'rd-rack';
+  rack.getBoundingClientRect = () => ({ left: 0, right: 900, top: 0, bottom: 600 });
+  const measured = [];
+  for (const [index, column] of env.state.columns.entries()) {
+    const element = env.document.createElement('div');
+    element.setAttribute('data-column-id', column.id);
+    element.getBoundingClientRect = () => {
+      measured.push(column.id);
+      return { left: index * 300, right: (index + 1) * 300, top: 0, bottom: 600 };
+    };
+    rack.appendChild(element);
+  }
+  env.document.body.appendChild(rack);
+  env.controller.getVisibleIds = env.api.visibleColumnIds;
+  env.window.emit('message', {
+    source: env.frames.get('two'), origin: 'https://x.com',
+    data: { type: 'yomikui-path-change', columnId: 'two' },
+  });
+  assert.deepEqual(measured, ['two']);
+  env.controller.dispose();
 });

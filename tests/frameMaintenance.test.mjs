@@ -140,11 +140,18 @@ test('reset clears stale suggestions and counts without restarting hidden work',
 
 test('duplicate cleanup retains the original per-tweet limits', () => {
   const env = setup();
-  const item = env.document.body.appendChild(tweet('1'));
-  for (let i = 0; i < 20; i++) item.appendChild(new Element('span', { class: 'yomikui-label-badge' }));
+  const first = env.document.body.appendChild(tweet('1'));
+  const second = env.document.body.appendChild(tweet('2'));
+  for (let i = 0; i < 20; i++) first.appendChild(new Element('span', { class: 'yomikui-label-badge' }));
+  for (let i = 0; i < 18; i++) second.appendChild(new Element('span', { class: 'yomikui-label-badge' }));
+  for (let i = 0; i < 2; i++) first.appendChild(new Element('div', { class: 'yomikui-screenshot-wrapper' }));
+  second.appendChild(new Element('div', { class: 'yomikui-screenshot-wrapper' }));
   for (let i = 0; i < 3; i++) env.document.body.appendChild(new Element('style', { id: 'yomikui-account-label-styles' }));
   env.maintenance.start();
-  assert.equal(item.querySelectorAll('.yomikui-label-badge').length, 16);
+  assert.equal(first.querySelectorAll('.yomikui-label-badge').length, 16);
+  assert.equal(second.querySelectorAll('.yomikui-label-badge').length, 16);
+  assert.equal(first.querySelectorAll('.yomikui-screenshot-wrapper').length, 1);
+  assert.equal(second.querySelectorAll('.yomikui-screenshot-wrapper').length, 1);
   assert.equal(env.document.querySelectorAll('#yomikui-account-label-styles').length, 1);
 });
 

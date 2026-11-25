@@ -18,6 +18,7 @@
   const REVIEW_LIST_RE = /\/status\/\d+\/(quotes|retweets)$/i;
   const PROFILE_SECTION_PATH_RE = /^\/([A-Za-z0-9_]+)(?:\/(?:all|with_replies|highlights|media|articles))?$/i;
   const PROFILE_ALL_PATH_RE = /^\/([A-Za-z0-9_]+)\/all\/?$/i;
+  const STATUS_ID_IN_PATH_RE = /\/status\/(\d+)/;
   const PRIMARY_COLUMN = '[data-testid="primaryColumn"]';
   const TWEET = 'article[data-testid="tweet"]';
   const USER_CELL = '[data-testid="UserCell"]';
@@ -26,6 +27,7 @@
   const USER_DESCRIPTION = '[data-testid="UserDescription"]';
   const QUOTED_TWEET = '[data-testid="quoteTweet"], [data-testid="tweetQuote"]';
   const LAST_PROFILE_VIEWED = "data-yomikui-last-profile-viewed";
+  const ARRIVAL_NODES_SELECTOR = `${TWEET}, ${USER_CELL}, [data-testid="UserName"], [data-testid="emptyState"], [data-testid="error-detail"]`;
 
   const RESERVED_ROOT_PATHS = new Set([
     "home",
@@ -435,11 +437,14 @@
       pendingPaths.set(target.id, { path, at: Date.now() });
     }
 
-    let container = el.parentElement;
-    while (container && container !== document.body) {
-      const style = window.getComputedStyle ? window.getComputedStyle(container) : null;
-      if (style && (style.overflowX === "auto" || style.overflowX === "scroll")) break;
-      container = container.parentElement;
+    let container = el.closest?.(".rd-rack") ?? null;
+    if (!container) {
+      container = el.parentElement;
+      while (container && container !== document.body) {
+        const style = window.getComputedStyle ? window.getComputedStyle(container) : null;
+        if (style && (style.overflowX === "auto" || style.overflowX === "scroll")) break;
+        container = container.parentElement;
+      }
     }
     const viewport = container && container.getBoundingClientRect
       ? container.getBoundingClientRect()
@@ -528,7 +533,9 @@
           for (const row of primary.querySelectorAll(view.selector)) rows.add(row);
         } else if (primary.contains(node)) {
           if (node.matches(view.selector)) rows.add(node);
-          for (const row of node.querySelectorAll(view.selector)) rows.add(row);
+          if (node.childElementCount !== 0) {
+            for (const row of node.querySelectorAll(view.selector)) rows.add(row);
+          }
         }
       }
     }
@@ -951,14 +958,6 @@
       return;
     }
 
-    const ARRIVAL_NODES_SELECTOR = [
-      'article[data-testid="tweet"]',
-      '[data-testid="UserCell"]',
-      '[data-testid="UserName"]',
-      '[data-testid="emptyState"]',
-      '[data-testid="error-detail"]',
-    ].join(", ");
-
     const initialScope = document.querySelector?.('[data-testid="primaryColumn"]') || document;
     const priorNodes = new WeakSet(
       typeof initialScope.querySelectorAll === "function"
@@ -978,7 +977,7 @@
     if (listKind) keepInitialListScrollAtTop(listSuffix);
     else scheduleScrollToTop();
 
-    const idMatch = cleanPath.match(/\/status\/(\d+)/);
+    const idMatch = cleanPath.match(STATUS_ID_IN_PATH_RE);
     const tweetId = idMatch ? idMatch[1] : null;
     const profileMatch =
       !tweetId &&
@@ -1117,11 +1116,10 @@
 
   function replacePlaceholders(template, args) {
     if (typeof template !== "string") return "";
-    let out = template;
-    for (let i = 0; i < args.length; i++) {
-      out = out.replace(new RegExp(`\\$${i + 1}\\$?`, "g"), String(args[i]));
-    }
-    return out;
+    return template.replace(/\$(\d+)\$?/g, (match, index) => {
+      const idx = Number(index) - 1;
+      return idx >= 0 && idx < args.length ? String(args[idx]) : match;
+    });
   }
 
   function LinkIcon({ jsx }) {
@@ -1357,7 +1355,10 @@
     }
   }
 
-  if (typeof document !== "undefined") {
+  const isDeckTopPage = typeof window !== "undefined" &&
+    window.parent === window &&
+    (window.location?.pathname?.startsWith?.("/yomikui") ?? false);
+  if (typeof document !== "undefined" && !isDeckTopPage) {
     document.addEventListener("click", onLinkInteraction, true);
     document.addEventListener("auxclick", onLinkInteraction, true);
     document.addEventListener("contextmenu", onLinkInteraction, true);

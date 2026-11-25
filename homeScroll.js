@@ -16,14 +16,34 @@
   const isReadableColumn = column => !!column && !column.liveFeed && READING_TYPES.has(column.type);
   const isReadingAction = ({ mode, deltaY, deltaMode = 0 }) => mode === 'top' ||
     (mode === 'wheel' && Number.isFinite(deltaY) && deltaY !== 0 && VALID_DELTA_MODES.has(deltaMode));
-  const READING_GROUPS = ['recommended', 'following', 'search', 'explore'];
-  const REFRESH_KINDS = ['recommended', 'following', 'search', 'explore'];
+  const READING_GROUPS = Object.freeze(['recommended', 'following', 'search', 'explore']);
+  const REFRESH_KINDS = READING_GROUPS;
   const REFRESH_KINDS_SET = new Set(REFRESH_KINDS);
   const isRefreshableKind = kind => REFRESH_KINDS_SET.has(kind);
   const isReloadRefreshKind = (kind, highTweetLoad = false) => kind === 'search' || kind === 'explore' ||
     (highTweetLoad && (kind === 'recommended' || kind === 'following'));
-  const selectedTimelineTab = (column = primary()) => [...column?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? []]
-    .find(tab => !tab.closest('article, [role="dialog"]'));
+  const TAB_OR_COLUMN_SELECTOR = '[role="tab"], [role="tablist"], [data-testid="primaryColumn"]';
+  const EXPLORE_ITEM_SELECTOR = '[data-testid="cellInnerDiv"] a[href], [data-testid="trend"], article[data-testid="tweet"]';
+  function selectedTimelineTab(column = primary()) {
+    if (!column) return undefined;
+    for (const tab of column.querySelectorAll('[role="tab"][aria-selected="true"]')) {
+      if (!tab.closest('article, [role="dialog"]')) return tab;
+    }
+    return undefined;
+  }
+  function hasRelevantNode(nodes) {
+    for (const node of nodes) {
+      if (node.nodeType !== 1 || node.matches('article, [data-testid="cellInnerDiv"]')) continue;
+      if (node.matches(TAB_OR_COLUMN_SELECTOR) ||
+          (node.childElementCount !== 0 && node.querySelector(TAB_OR_COLUMN_SELECTOR))) return true;
+    }
+    return false;
+  }
+  const viewportHeight = (scroller, rootScroller) => {
+    if (rootScroller) return window.innerHeight;
+    const rect = scroller.getBoundingClientRect();
+    return Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
+  };
   const isReadingTimeline = (settings, path) => isReadableColumn({ type: settings?.columnType, liveFeed: settings?.isLiveFeedColumn }) &&
     !settings?.isTimelineColumn && !/\/status\/\d+|^\/(?:compose|messages)(?:\/|$)|^\/i\/(?:chat|grok)(?:\/|$)/.test(path);
   function kindAtPath(path, column) {
@@ -49,17 +69,13 @@
       this.path = null;
       this.observer = new MutationObserver(records => {
         if (window.location.pathname !== this.path || records.some(record => {
+          const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
           if (record.type === 'characterData') {
-            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
             return !!target?.closest('[role="tab"], [role="tablist"]');
           }
-          const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
           if (target?.closest('[role="tab"], [role="tablist"]')) return true;
           if (record.type !== 'childList' || target?.closest('article')) return false;
-          return [...record.addedNodes, ...record.removedNodes].some(node =>
-            node.nodeType === 1 && !node.matches('article, [data-testid="cellInnerDiv"]') &&
-            (node.matches('[role="tab"], [role="tablist"], [data-testid="primaryColumn"]') ||
-              node.querySelector('[role="tab"], [role="tablist"], [data-testid="primaryColumn"]')));
+          return hasRelevantNode(record.addedNodes) || hasRelevantNode(record.removedNodes);
         })) this.schedule();
       });
       const listen = (target, type, callback) => {
@@ -108,7 +124,18 @@
   const articles = (column = primary()) => [...column?.querySelectorAll('article[data-testid="tweet"]') ?? []];
   const tweetId = article => (article.querySelector('time')?.closest('a[href*="/status/"]') ??
     article.querySelector('a[href*="/status/"]'))?.getAttribute('href')?.match(STATUS_ID_RE)?.[1];
-  const signature = () => articles().slice(0, 4).map(tweetId).filter(Boolean).join(',');
+  function tweetSignature(column = primary()) {
+    if (!column) return '';
+    const ids = [];
+    let checked = 0;
+    for (const article of column.querySelectorAll('article[data-testid="tweet"]')) {
+      const id = tweetId(article);
+      if (id) ids.push(id);
+      if (++checked >= 4) break;
+    }
+    return ids.join(',');
+  }
+  const signature = tweetSignature;
   const newPostsPattern = /^(?:show\s+(?:[\d,.]+\s+)?(?:new\s+)?(?:posts?|tweets?)|[\d,]+\s*件の(?:新しい)?(?:ポスト|ツイート)(?:を)?表示|(?:新しい|新着の?)(?:ポスト|ツイート)(?:を)?表示)$/i;
 
   function isNewPostsButton(button) {
@@ -198,17 +225,12 @@
     const rootScroller = !scroller || scroller === document.scrollingElement ||
       scroller === document.documentElement || scroller === document.body;
     const wheelScroller = rootScroller ? window : scroller;
+    const itemSelector = kind === 'explore' ? EXPLORE_ITEM_SELECTOR : 'article[data-testid="tweet"]';
     if (mode === 'wheel' && wheelScroller.scrollBy) {
-      const itemSelector = kind === 'explore'
-        ? '[data-testid="cellInnerDiv"] a[href], [data-testid="trend"], article[data-testid="tweet"]'
-        : 'article[data-testid="tweet"]';
-      if (!column?.querySelector(itemSelector)) return { status: 'skipped', reason: 'unavailable' };
+      if (!column.querySelector(itemSelector)) return { status: 'skipped', reason: 'unavailable' };
       let unit = 1;
       if (deltaMode === 1) unit = parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16;
-      if (deltaMode === 2) {
-        const rect = rootScroller ? null : scroller.getBoundingClientRect();
-        unit = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
-      }
+      if (deltaMode === 2) unit = viewportHeight(scroller, rootScroller);
       const amount = deltaY * unit;
       if (!Number.isFinite(amount) || !Number.isFinite(unit) || unit <= 0) return { status: 'skipped', reason: 'unavailable' };
       beforeMove?.();
@@ -217,22 +239,23 @@
       wheelScroller.scrollBy({ top: amount, behavior: 'instant' });
       return { status: 'moved' };
     }
-    const rect = rootScroller ? null : scroller.getBoundingClientRect();
-    const height = rootScroller ? window.innerHeight : Math.min(rect.bottom, window.innerHeight) - Math.max(0, rect.top);
-    let posts = articles(column);
-    if (kind === 'explore') {
-      const cells = [...column?.querySelectorAll('[data-testid="cellInnerDiv"]') ?? []]
-        .filter(cell => cell.querySelector('a[href], [data-testid="trend"], article[data-testid="tweet"]'));
-      posts = cells.length ? cells : [...column?.querySelectorAll('[data-testid="trend"]') ?? []];
-    }
-    if (!posts.length || !Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
-    const top = scroller?.scrollTop ?? window.scrollY ?? 0;
+    const height = viewportHeight(scroller, rootScroller);
+    if (!Number.isFinite(height) || height <= 0) return { status: 'skipped', reason: 'unavailable' };
     if (mode === 'top') {
+      if (!column.querySelector(itemSelector)) return { status: 'skipped', reason: 'unavailable' };
+      const top = scroller?.scrollTop ?? window.scrollY ?? 0;
       beforeMove?.();
       scrollToTop(scroller);
       return { status: Math.abs(top) < 1 ? 'edge' : 'moved' };
     }
-    if (!posts.some(post => post.getBoundingClientRect().height > 0)) return { status: 'skipped', reason: 'unavailable' };
+    let posts = articles(column);
+    if (kind === 'explore') {
+      const cells = [...column.querySelectorAll('[data-testid="cellInnerDiv"]')]
+        .filter(cell => cell.querySelector('a[href], [data-testid="trend"], article[data-testid="tweet"]'));
+      posts = cells.length ? cells : [...column.querySelectorAll('[data-testid="trend"]')];
+    }
+    if (!posts.length || !posts.some(post => post.getBoundingClientRect().height > 0)) return { status: 'skipped', reason: 'unavailable' };
+    const top = scroller?.scrollTop ?? window.scrollY ?? 0;
     const lineHeight = deltaMode === 1 ? parseFloat(window.getComputedStyle?.(scroller ?? document.documentElement).lineHeight) || 16 : 1;
     const extent = scroller?.scrollHeight ?? document.documentElement.scrollHeight;
     const limit = Math.max(0, extent - (rootScroller ? window.innerHeight : scroller.clientHeight));
@@ -324,9 +347,17 @@
       const current = scroller?.scrollTop ?? window.scrollY ?? 0;
       let top = 0;
       if (job.mode === 'preserve') {
-        const present = new Map(articles().map(article => [tweetId(article), article]));
-        const anchor = job.anchors.find(item => present.has(item.id));
-        top = anchor ? current + present.get(anchor.id).getBoundingClientRect().top - anchor.top : job.top;
+        const anchorMap = new Map(job.anchors.map((item, index) => [item.id, { top: item.top, index }]));
+        let bestIndex = Infinity, bestMatch = null;
+        for (const article of primary()?.querySelectorAll('article[data-testid="tweet"]') ?? []) {
+          const match = anchorMap.get(tweetId(article));
+          if (match && match.index < bestIndex) {
+            bestIndex = match.index;
+            bestMatch = { article, top: match.top };
+            if (bestIndex === 0) break;
+          }
+        }
+        top = bestMatch ? current + bestMatch.article.getBoundingClientRect().top - bestMatch.top : job.top;
       }
       if (Math.abs(current - top) < 1) return;
       job.applying = true;
@@ -393,5 +424,5 @@
     ] });
   }
 
-  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, isReloadRefreshKind, navigate, scrollToTop, selectedTimelineTab, tweetId, interactionBlockReason, isRecommendedTab: recommended });
+  globalThis.YomikuiHomeScroll = Object.freeze({ getMode, isNewPostsButton, Tracker, clickWithHeaderLayout, SettingsControl, isReadableColumn, isReadingAction, readingKind, ReadingContext, READING_GROUPS, REFRESH_KINDS, isRefreshableKind, isReloadRefreshKind, navigate, scrollToTop, selectedTimelineTab, tweetId, tweetSignature, interactionBlockReason, isRecommendedTab: recommended });
 })();

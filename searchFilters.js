@@ -329,6 +329,9 @@
     };
   }
 
+  const EMPTY_FILTERS = Object.freeze(normalizeFilters());
+  const EMPTY_QUERY = Object.freeze({ baseText: "", filters: EMPTY_FILTERS });
+
   function resolveFilterPeriod(filters, now = Date.now()) {
     const f = normalizeFilters(filters);
     if (!f.relativePeriod) return f;
@@ -413,7 +416,6 @@
     const tokens = tokenizeQuery(q);
     const baseTokens = [];
     const filters = normalizeFilters();
-    const recencyDates = new Map(RECENCY_DAYS.map(days => [formatDaysAgo(days, now), days]));
     let rawSince = null;
 
     for (const token of tokens) {
@@ -456,9 +458,15 @@
     }
 
     if (rawSince) {
-      const matchedDays = rawSince.isDateOnly && !filters.untilDate
-        ? (recencyDates.get(rawSince.ymd) ?? null)
-        : null;
+      let matchedDays = null;
+      if (rawSince.isDateOnly && !filters.untilDate) {
+        for (const days of RECENCY_DAYS) {
+          if (formatDaysAgo(days, now) === rawSince.ymd) {
+            matchedDays = days;
+            break;
+          }
+        }
+      }
       if (matchedDays) {
         filters.sinceDays = matchedDays;
         filters.sinceDate = null;
@@ -775,6 +783,7 @@
 
   const presetListeners = new Set();
   let savingPresets = Promise.resolve();
+  let pendingPresetLoad = null;
   let mirrorBackend = null;
 
   function registerMirrorBackend(backend) {
@@ -984,6 +993,7 @@
   }
 
   function mutatePresets(updater) {
+    pendingPresetLoad = null;
     savingPresets = savingPresets.then(async () => {
       const current = await readPresetsFromStorage();
       const next = await updater(current);
@@ -992,12 +1002,20 @@
     return savingPresets;
   }
 
-  async function loadPresets() {
-    await savingPresets;
-    return readPresetsFromStorage();
+  function loadPresets() {
+    if (!pendingPresetLoad) {
+      const load = savingPresets
+        .then(() => readPresetsFromStorage())
+        .finally(() => {
+          if (pendingPresetLoad === load) pendingPresetLoad = null;
+        });
+      pendingPresetLoad = load;
+    }
+    return pendingPresetLoad;
   }
 
   function savePresets(presets) {
+    pendingPresetLoad = null;
     savingPresets = savingPresets.then(() => writePresetsToStorage(presets));
     return savingPresets;
   }
@@ -1059,13 +1077,14 @@
       return savePresets(imported);
     }
     return mutatePresets(current => {
-      const byId = new Map(current.map(p => [p.id, p]));
       const merged = [...current];
+      const indexById = new Map(merged.map((p, idx) => [p.id, idx]));
       for (const item of imported) {
-        if (byId.has(item.id)) {
-          const idx = merged.findIndex(x => x.id === item.id);
-          if (idx >= 0) merged[idx] = item;
+        const idx = indexById.get(item.id);
+        if (idx !== undefined) {
+          merged[idx] = item;
         } else {
+          indexById.set(item.id, merged.length);
           merged.push(item);
         }
       }
@@ -1216,24 +1235,29 @@
     return null;
   }
 
-  async function writeColumnPresetState(columnId, state) {
-    if (!columnId) return;
-    try {
-      if (typeof chrome !== "undefined" && chrome?.storage?.local?.get && chrome?.storage?.local?.set) {
-        const res = await chrome.storage.local.get(COL_STATE_STORAGE_KEY);
-        const prev = res?.[COL_STATE_STORAGE_KEY];
-        const map = prev && typeof prev === "object" ? { ...prev } : {};
-        if (!state || !state.activePresetId) {
-          delete map[columnId];
-        } else {
-          map[columnId] = {
-            activePresetId: state.activePresetId,
-            isTempToday: state.isTempToday === true,
-          };
+  let savingColumnPresetState = Promise.resolve();
+
+  function writeColumnPresetState(columnId, state) {
+    if (!columnId) return Promise.resolve();
+    savingColumnPresetState = savingColumnPresetState.then(async () => {
+      try {
+        if (typeof chrome !== "undefined" && chrome?.storage?.local?.get && chrome?.storage?.local?.set) {
+          const res = await chrome.storage.local.get(COL_STATE_STORAGE_KEY);
+          const prev = res?.[COL_STATE_STORAGE_KEY];
+          const map = prev && typeof prev === "object" ? { ...prev } : {};
+          if (!state || !state.activePresetId) {
+            delete map[columnId];
+          } else {
+            map[columnId] = {
+              activePresetId: state.activePresetId,
+              isTempToday: state.isTempToday === true,
+            };
+          }
+          await chrome.storage.local.set({ [COL_STATE_STORAGE_KEY]: map });
         }
-        await chrome.storage.local.set({ [COL_STATE_STORAGE_KEY]: map });
-      }
-    } catch {}
+      } catch {}
+    });
+    return savingColumnPresetState;
   }
 
   function useColumnSearch({ column, iframeRef, useState, useEffect, useRef }) {
@@ -1346,8 +1370,8 @@
     const parsedSearch = parseSearchUrl(currentUrl);
     const isLiveFeed = column?.liveFeed === true;
     const isSearchPage = !isLiveFeed && parsedSearch !== null;
-    const parsedQuery = parsedSearch ? parseSearchQuery(parsedSearch.q) : { baseText: "", filters: normalizeFilters() };
-    const activeCount = countActiveFilters(parsedQuery.filters);
+    const parsedQuery = isSearchPage ? parseSearchQuery(parsedSearch.q) : EMPTY_QUERY;
+    const activeCount = isSearchPage ? countActiveFilters(parsedQuery.filters) : 0;
 
     useEffect(() => {
       if (!isSearchPage && panelMode !== null) setPanelMode(null);
@@ -1649,15 +1673,15 @@
     useEffect(() => {
       if (searchState?.panelMode === "presets") {
         setFocusedIdx(0);
-        setTimeout?.(() => {
+        const timer = typeof setTimeout === "function" ? setTimeout(() => {
           searchInputRef.current?.focus?.();
-        }, 0);
-      } else {
-        setEditorOpen(false);
-        setEditingPresetId(null);
-        setBackupOpen(false);
-        setBackupStatus("");
+        }, 0) : null;
+        return () => { if (timer !== null) clearTimeout(timer); };
       }
+      setEditorOpen(false);
+      setEditingPresetId(null);
+      setBackupOpen(false);
+      setBackupStatus("");
     }, [searchState?.panelMode]);
 
     useEffect(() => {
@@ -1695,20 +1719,6 @@
     if (!isOpen && !hasCustomPeriod && !activePreset) return null;
 
     const activeBaseText = isOpen ? keywordDraft : baseText;
-    const detectedPeriodUnit = detectPeriodUnit(filters.sinceDate, filters.untilDate);
-    const detectedPeriodMeta = detectedPeriodUnit
-      ? PERIOD_UNITS.find(u => u.value === detectedPeriodUnit) ?? null
-      : null;
-    const isCurrentPeriod = isMatchingCurrentPeriod(detectedPeriodUnit, filters.sinceDate, filters.untilDate);
-    const filtersForSave = saveAsRelativePeriod && detectedPeriodUnit
-      ? normalizeFilters({
-          ...filters,
-          sinceDays: null,
-          sinceDate: null,
-          untilDate: null,
-          relativePeriod: detectedPeriodUnit,
-        })
-      : normalizeFilters(filters);
 
     const updateFilters = (patch, nextTab = tab, nextBase = activeBaseText) => {
       const nextFilters = normalizeFilters({ ...filters, ...patch });
@@ -1733,6 +1743,154 @@
       applyPeriodBounds(shiftPeriodRange(effectiveUnit, filters.sinceDate, filters.untilDate, delta));
     };
 
+    const clearCustomDateRange = () => {
+      setStartDateDraft("");
+      setEndDateDraft("");
+      if (activePreset && typeof searchState.clearActivePreset === "function") {
+        searchState.clearActivePreset();
+      }
+      updateFilters({ sinceDate: null, untilDate: null });
+    };
+
+    const miniBar = hasCustomPeriod || activePreset
+      ? jsx.jsxs("div", {
+          className: "rd-search-period-minibar flex h-7 min-h-7 flex-nowrap items-center justify-between gap-1 overflow-x-auto border-b border-border bg-card/90 px-2 text-[11px] text-foreground select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          onClick: (ev) => ev?.stopPropagation?.(),
+          children: [
+            jsx.jsxs("div", {
+              className: "flex min-w-0 shrink-0 items-center gap-1",
+              children: [
+                typeof searchState.toggleMode === "function"
+                  ? jsx.jsx("button", {
+                      type: "button",
+                      className: `h-5 max-w-[7.5rem] truncate rounded border px-1.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                        activePreset
+                          ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
+                          : "border-border bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                      }`,
+                      title: activePreset ? `${activePreset.name} — プリセット切替` : "プリセットを選択",
+                      onClick: () => searchState.toggleMode("presets"),
+                      children: activePreset ? `${activePreset.pinned ? "📌 " : ""}${activePreset.name} ▾` : "プリセット ▾",
+                    })
+                  : null,
+                hasCustomPeriod
+                  ? jsx.jsxs("div", {
+                      className: "flex shrink-0 items-center gap-0.5",
+                      children: [
+                        jsx.jsx("button", {
+                          type: "button",
+                          className: "flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-background text-[10px] hover:bg-muted/60 cursor-pointer",
+                          "aria-label": "前の期間",
+                          title: activePreset?.periodMode === "cursor" && !isTempToday
+                            ? "前の期間へ（進捗を自動保存）"
+                            : "前の期間",
+                          onClick: () => stepPeriod(-1),
+                          children: "◀",
+                        }),
+                        jsx.jsx("button", {
+                          type: "button",
+                          className: "h-5 max-w-[8.5rem] truncate rounded px-1.5 font-medium text-primary hover:bg-primary/10 cursor-pointer",
+                          title: "詳細・日付指定を開く",
+                          onClick: () => {
+                            setPeriodOpen(true);
+                            if (typeof searchState.setPanelMode === "function") {
+                              searchState.setPanelMode("filters");
+                            } else {
+                              searchState.setOpen(true);
+                            }
+                          },
+                          children: isTempToday ? `今日 (${periodLabel})` : periodLabel,
+                        }),
+                        jsx.jsx("button", {
+                          type: "button",
+                          className: "flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-background text-[10px] hover:bg-muted/60 cursor-pointer",
+                          "aria-label": "次の期間",
+                          title: activePreset?.periodMode === "cursor" && !isTempToday
+                            ? "次の期間へ（進捗を自動保存）"
+                            : "次の期間",
+                          onClick: () => stepPeriod(1),
+                          children: "▶",
+                        }),
+                      ],
+                    })
+                  : null,
+              ],
+            }),
+            jsx.jsxs("div", {
+              className: "flex shrink-0 items-center gap-1",
+              children: [
+                isTempToday && activePreset?.periodMode === "cursor"
+                  ? jsx.jsx("button", {
+                      type: "button",
+                      className: "h-5 shrink-0 rounded border border-primary/40 bg-primary/10 px-1.5 text-[10px] font-medium text-primary hover:bg-primary/20 cursor-pointer",
+                      title: `進捗 (${formatPresetCursorLabel(activePreset)}) に戻る`,
+                      onClick: () => searchState.returnToPresetCursor?.(),
+                      children: "↩ 続き",
+                    })
+                  : null,
+                jsx.jsx("div", {
+                  role: "group",
+                  "aria-label": tr(t, "search_filter_period_unit", "期間単位"),
+                  className: "flex shrink-0 overflow-hidden rounded border border-border bg-background",
+                  children: PERIOD_UNITS.map(u => jsx.jsx("button", {
+                    type: "button",
+                    "aria-pressed": effectiveUnit === u.value,
+                    className: `px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors cursor-pointer ${
+                      effectiveUnit === u.value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted/50"
+                    }`,
+                    onClick: () => {
+                      setPeriodUnit(u.value);
+                      if (activePreset?.periodMode === "cursor" && !isTempToday && typeof searchState.updatePreset === "function") {
+                        searchState.updatePreset(activePreset.id, { cursorUnit: u.value });
+                      }
+                    },
+                    children: tr(t, u.labelKey, u.fallback),
+                  }, `mini-${u.value}`)),
+                }),
+                jsx.jsx("button", {
+                  type: "button",
+                  className: "h-5 shrink-0 rounded border border-border bg-background px-1.5 text-[10px] font-medium hover:bg-muted/60 cursor-pointer",
+                  title: activePreset?.periodMode === "cursor"
+                    ? "進捗を壊さず今日を一時表示"
+                    : undefined,
+                  onClick: () => stepPeriod(0),
+                  children: activePreset?.periodMode === "cursor"
+                    ? "今日"
+                    : tr(t, currentUnitMeta.currentKey, currentUnitMeta.currentFallback),
+                }),
+                jsx.jsx("button", {
+                  type: "button",
+                  className: "flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground cursor-pointer",
+                  "aria-label": "期間を解除",
+                  title: "期間を解除",
+                  onClick: clearCustomDateRange,
+                  children: "×",
+                }),
+              ],
+            }),
+          ],
+        })
+      : null;
+
+    if (!isOpen) {
+      return miniBar;
+    }
+
+    const detectedPeriodUnit = detectPeriodUnit(filters.sinceDate, filters.untilDate);
+    const detectedPeriodMeta = detectedPeriodUnit
+      ? PERIOD_UNITS.find(u => u.value === detectedPeriodUnit) ?? null
+      : null;
+    const isCurrentPeriod = isMatchingCurrentPeriod(detectedPeriodUnit, filters.sinceDate, filters.untilDate);
+    const filtersForSave = saveAsRelativePeriod && detectedPeriodUnit
+      ? normalizeFilters({
+          ...filters,
+          sinceDays: null,
+          sinceDate: null,
+          untilDate: null,
+          relativePeriod: detectedPeriodUnit,
+        })
+      : normalizeFilters(filters);
+
     const applyCustomDateRange = () => {
       let start = parseYmd(startDateDraft) ? startDateDraft : null;
       let end = parseYmd(endDateDraft) ? endDateDraft : null;
@@ -1751,15 +1909,6 @@
         sinceDate: nextSince,
         untilDate: nextUntil,
       });
-    };
-
-    const clearCustomDateRange = () => {
-      setStartDateDraft("");
-      setEndDateDraft("");
-      if (activePreset && typeof searchState.clearActivePreset === "function") {
-        searchState.clearActivePreset();
-      }
-      updateFilters({ sinceDate: null, untilDate: null });
     };
 
     const submitKeyword = () => {
@@ -1966,21 +2115,6 @@
       setEditorDraft(null);
     };
 
-    // Organized / filtered presets for Switcher & FilterPanel
-    const allTags = (() => {
-      const seen = new Set();
-      const out = [];
-      for (const p of presets) {
-        for (const tag of p.tags || []) {
-          if (!seen.has(tag)) {
-            seen.add(tag);
-            out.push(tag);
-          }
-        }
-      }
-      return out;
-    })();
-
     const sortedPresets = [...presets].sort((a, b) => {
       if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
       const luDiff = (b.lastUsedAt || 0) - (a.lastUsedAt || 0);
@@ -1999,130 +2133,6 @@
     const chipIdle = "border-border bg-background text-foreground hover:bg-muted/60";
     const miniBtnBase = "rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer";
     const FragmentComp = jsx.Fragment ?? "div";
-
-    const miniBar = hasCustomPeriod || activePreset
-      ? jsx.jsxs("div", {
-          className: "rd-search-period-minibar flex h-7 min-h-7 flex-nowrap items-center justify-between gap-1 overflow-x-auto border-b border-border bg-card/90 px-2 text-[11px] text-foreground select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          onClick: (ev) => ev?.stopPropagation?.(),
-          children: [
-            jsx.jsxs("div", {
-              className: "flex min-w-0 shrink-0 items-center gap-1",
-              children: [
-                typeof searchState.toggleMode === "function"
-                  ? jsx.jsx("button", {
-                      type: "button",
-                      className: `h-5 max-w-[7.5rem] truncate rounded border px-1.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                        activePreset
-                          ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
-                          : "border-border bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                      }`,
-                      title: activePreset ? `${activePreset.name} — プリセット切替` : "プリセットを選択",
-                      onClick: () => searchState.toggleMode("presets"),
-                      children: activePreset ? `${activePreset.pinned ? "📌 " : ""}${activePreset.name} ▾` : "プリセット ▾",
-                    })
-                  : null,
-                hasCustomPeriod
-                  ? jsx.jsxs("div", {
-                      className: "flex shrink-0 items-center gap-0.5",
-                      children: [
-                        jsx.jsx("button", {
-                          type: "button",
-                          className: "flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-background text-[10px] hover:bg-muted/60 cursor-pointer",
-                          "aria-label": "前の期間",
-                          title: activePreset?.periodMode === "cursor" && !isTempToday
-                            ? "前の期間へ（進捗を自動保存）"
-                            : "前の期間",
-                          onClick: () => stepPeriod(-1),
-                          children: "◀",
-                        }),
-                        jsx.jsx("button", {
-                          type: "button",
-                          className: "h-5 max-w-[8.5rem] truncate rounded px-1.5 font-medium text-primary hover:bg-primary/10 cursor-pointer",
-                          title: "詳細・日付指定を開く",
-                          onClick: () => {
-                            setPeriodOpen(true);
-                            if (typeof searchState.setPanelMode === "function") {
-                              searchState.setPanelMode("filters");
-                            } else {
-                              searchState.setOpen(true);
-                            }
-                          },
-                          children: isTempToday ? `今日 (${periodLabel})` : periodLabel,
-                        }),
-                        jsx.jsx("button", {
-                          type: "button",
-                          className: "flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-background text-[10px] hover:bg-muted/60 cursor-pointer",
-                          "aria-label": "次の期間",
-                          title: activePreset?.periodMode === "cursor" && !isTempToday
-                            ? "次の期間へ（進捗を自動保存）"
-                            : "次の期間",
-                          onClick: () => stepPeriod(1),
-                          children: "▶",
-                        }),
-                      ],
-                    })
-                  : null,
-              ],
-            }),
-            jsx.jsxs("div", {
-              className: "flex shrink-0 items-center gap-1",
-              children: [
-                isTempToday && activePreset?.periodMode === "cursor"
-                  ? jsx.jsx("button", {
-                      type: "button",
-                      className: "h-5 shrink-0 rounded border border-primary/40 bg-primary/10 px-1.5 text-[10px] font-medium text-primary hover:bg-primary/20 cursor-pointer",
-                      title: `進捗 (${formatPresetCursorLabel(activePreset)}) に戻る`,
-                      onClick: () => searchState.returnToPresetCursor?.(),
-                      children: "↩ 続き",
-                    })
-                  : null,
-                jsx.jsx("div", {
-                  role: "group",
-                  "aria-label": tr(t, "search_filter_period_unit", "期間単位"),
-                  className: "flex shrink-0 overflow-hidden rounded border border-border bg-background",
-                  children: PERIOD_UNITS.map(u => jsx.jsx("button", {
-                    type: "button",
-                    "aria-pressed": effectiveUnit === u.value,
-                    className: `px-1.5 py-0.5 text-[10px] font-medium leading-none transition-colors cursor-pointer ${
-                      effectiveUnit === u.value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted/50"
-                    }`,
-                    onClick: () => {
-                      setPeriodUnit(u.value);
-                      if (activePreset?.periodMode === "cursor" && !isTempToday && typeof searchState.updatePreset === "function") {
-                        searchState.updatePreset(activePreset.id, { cursorUnit: u.value });
-                      }
-                    },
-                    children: tr(t, u.labelKey, u.fallback),
-                  }, `mini-${u.value}`)),
-                }),
-                jsx.jsx("button", {
-                  type: "button",
-                  className: "h-5 shrink-0 rounded border border-border bg-background px-1.5 text-[10px] font-medium hover:bg-muted/60 cursor-pointer",
-                  title: activePreset?.periodMode === "cursor"
-                    ? "進捗を壊さず今日を一時表示"
-                    : undefined,
-                  onClick: () => stepPeriod(0),
-                  children: activePreset?.periodMode === "cursor"
-                    ? "今日"
-                    : tr(t, currentUnitMeta.currentKey, currentUnitMeta.currentFallback),
-                }),
-                jsx.jsx("button", {
-                  type: "button",
-                  className: "flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground cursor-pointer",
-                  "aria-label": "期間を解除",
-                  title: "期間を解除",
-                  onClick: clearCustomDateRange,
-                  children: "×",
-                }),
-              ],
-            }),
-          ],
-        })
-      : null;
-
-    if (!isOpen) {
-      return miniBar;
-    }
 
     const handleDownloadJson = () => {
       try {
@@ -2155,7 +2165,21 @@
       }
     };
 
-    const presetsSwitcherContent = [
+    const renderPresetsSwitcher = () => {
+      const allTags = [];
+      const seenTags = new Set();
+      let hasPinned = false;
+      for (const p of presets) {
+        if (p.pinned) hasPinned = true;
+        for (const tag of p.tags || []) {
+          if (!seenTags.has(tag)) {
+            seenTags.add(tag);
+            allTags.push(tag);
+          }
+        }
+      }
+      const now = Date.now();
+      return [
       // Header bar
       jsx.jsxs("div", {
         className: "flex items-center justify-between gap-2",
@@ -2555,7 +2579,7 @@
       }),
 
       // Tag & Pin filter pills
-      allTags.length > 0 || presets.some(p => p.pinned)
+      allTags.length > 0 || hasPinned
         ? jsx.jsxs("div", {
             className: "flex flex-wrap items-center gap-1",
             children: [
@@ -2565,7 +2589,7 @@
                 onClick: () => { setSelectedTag("all"); setFocusedIdx(0); },
                 children: "すべて",
               }),
-              presets.some(p => p.pinned)
+              hasPinned
                 ? jsx.jsx("button", {
                     type: "button",
                     className: `${chipBase} ${selectedTag === "pinned" ? chipActive : chipIdle}`,
@@ -2591,7 +2615,7 @@
               const isActive = activePreset?.id === preset.id;
               const periodBadge = formatPresetPeriodBadge(preset);
               const summary = formatPresetSummary(preset);
-              const checkedToday = preset.periodMode === "cursor" && isSameLocalDay(preset.lastCheckedAt);
+              const checkedToday = preset.periodMode === "cursor" && isSameLocalDay(preset.lastCheckedAt, now);
               return jsx.jsxs("div", {
                 className: "yk-sf-row",
                 "data-active": isActive ? "true" : "false",
@@ -2709,9 +2733,12 @@
               ? tr(t, "search_filter_no_presets", "保存済みのプリセットはありません")
               : "一致するプリセットがありません",
           }),
-    ];
+      ];
+    };
 
-    const filtersPanelContent = [
+    const renderFiltersPanel = () => {
+      const now = Date.now();
+      return [
         // 1. Presets header + list
         jsx.jsxs("div", {
           className: "flex flex-col gap-1.5",
@@ -2783,7 +2810,7 @@
               ? jsx.jsx("div", {
                   className: "flex flex-wrap items-center gap-1",
                   children: filteredPresets.map(preset => {
-                    const effectiveFilters = getEffectivePresetFilters(preset);
+                    const effectiveFilters = getEffectivePresetFilters(preset, now);
                     const isMatched =
                       (activePreset?.id === preset.id) ||
                       (filtersEqual(effectiveFilters, filters) &&
@@ -3198,7 +3225,8 @@
             }),
           ],
         }),
-    ];
+      ];
+    };
 
     const popover = jsx.jsxs(FragmentComp, {
       children: [
@@ -3212,7 +3240,7 @@
           children: jsx.jsxs("div", {
             className: `${panelMode === "presets" ? "rd-search-preset-switcher" : "rd-search-filter-panel"} absolute left-1.5 right-1.5 top-1 flex max-h-[min(32rem,calc(100vh-7rem))] flex-col gap-2 overflow-y-auto overscroll-y-contain rounded-xl border border-border bg-popover px-2.5 py-2 text-xs text-foreground shadow-xl select-none`,
             onClick: (ev) => ev?.stopPropagation?.(),
-            children: panelMode === "presets" ? presetsSwitcherContent : filtersPanelContent,
+            children: panelMode === "presets" ? renderPresetsSwitcher() : renderFiltersPanel(),
           }),
         }),
       ],

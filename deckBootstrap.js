@@ -1,8 +1,21 @@
 (() => {
-  if (window !== window.top || !/^\/yomikui\/status\/0\/?$/.test(window.location.pathname)) return;
+  const deckPath = /^\/yomikui\/status\/0\/?$/;
+  if (window === window.top) {
+    if (!deckPath.test(window.location.pathname)) return;
+  } else {
+    // The history list is rendered by the content script on a reserved search URL.
+    // Opening a saved post loads a new document, where X handles the detail page.
+    const { pathname, search, hash } = window.location;
+    if (window.parent !== window.top || !/^\/search\/?$/.test(pathname) ||
+        new URLSearchParams(search).get('q') !== 'yomikui-timeline' ||
+        !hash.startsWith('#yomikui-cid') || !hash.split('-').includes('tl1')) return;
+    try {
+      if (!deckPath.test(window.parent.location.pathname)) return;
+    } catch { return; }
+    globalThis.YomikuiHistorySurface = true;
+  }
 
-  // X's service worker can serve cached HTML without the header in deckRules.json.
-  // Apply the same policy before the page runs scripts in the dashboard document.
+  // This runs before page scripts, including when X serves cached HTML.
   function blockPageScripts() {
     const root = document.documentElement;
     if (!root) return false;

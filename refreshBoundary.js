@@ -10,6 +10,10 @@
   const primary = () => document.querySelector('[data-testid="primaryColumn"]');
   const path = () => window.location.pathname + (window.location.search || '');
   const tweetId = tweet => globalThis.YomikuiHomeScroll.tweetId(tweet);
+  const isOnlyMarkerNodes = nodes => {
+    for (const node of nodes) if (node.nodeType !== 1 || !node.classList.contains(MARKER)) return false;
+    return true;
+  };
 
   function installStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -85,9 +89,8 @@
           if (record.attributeName === 'href') this.pending.add(target?.closest(TWEET));
         } else {
           if (record.addedNodes.length === 0 && record.removedNodes.length === 0) continue;
-          const nodes = [...record.addedNodes, ...record.removedNodes];
           // Our own landmark must not keep scheduling new work.
-          if (nodes.length && nodes.every(node => node.nodeType === 1 && node.classList.contains(MARKER))) continue;
+          if (isOnlyMarkerNodes(record.addedNodes) && isOnlyMarkerNodes(record.removedNodes)) continue;
           const tweet = target?.closest(TWEET);
           if (tweet) this.pending.add(tweet);
           else for (const node of record.addedNodes) {

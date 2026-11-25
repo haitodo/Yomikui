@@ -5,55 +5,9 @@
   if (window.__yomikuiMediaInterceptorInstalled) return;
   window.__yomikuiMediaInterceptorInstalled = true;
 
-  /** Live Feed カラムは React でツイートを描画するため、X 本体の SPA が大量の DOM を生成する前に除去する */
-  const isLiveFeedFeedSurface = () => false;
-
-  const suppressXSpaForLiveFeed = () => {
-    if (window.__yomikuiLiveFeedSpaSuppress) return;
-    window.__yomikuiLiveFeedSpaSuppress = true;
-    const strip = () => {
-      const root = document.getElementById('react-root');
-      if (root && root.childElementCount > 0) root.replaceChildren();
-    };
-    strip();
-    const rootObserver = new MutationObserver(strip);
-    const attach = () => {
-      const root = document.getElementById('react-root');
-      if (!root) return false;
-      rootObserver.observe(root, { childList: true });
-      strip();
-      return true;
-    };
-    if (!attach()) {
-      const wait = new MutationObserver(() => {
-        if (attach()) wait.disconnect();
-      });
-      wait.observe(document.documentElement, { childList: true, subtree: true });
-    }
-    document.addEventListener('DOMContentLoaded', strip, { once: true });
-  };
-
-  if (isLiveFeedFeedSurface()) {
-    window.__yomikuiLiveFeedMode = true;
-    suppressXSpaForLiveFeed();
-  }
-
-  const ENDPOINTS = [
-    'TweetDetail',
-    'TweetResultByRestId',
-    'UserTweets',
-    'UserMedia',
-    'HomeTimeline',
-    'HomeLatestTimeline',
-    'ListLatestTweetsTimeline',
-    'SearchTimeline',
-    'Bookmarks',
-    'Likes',
-    'NotificationsTimeline',
-  ];
-
+  const ENDPOINT_RE = /(?:TweetDetail|TweetResultByRestId|UserTweets|UserMedia|HomeTimeline|HomeLatestTimeline|ListLatestTweetsTimeline|SearchTimeline|Bookmarks|Likes|NotificationsTimeline)/;
   const GRAPHQL_PATH_RE = /graphql\/([^/?]+)\/([^/?]+)/;
-  const shouldIntercept = (url) => ENDPOINTS.some(ep => url.includes(ep));
+  const shouldIntercept = (url) => ENDPOINT_RE.test(url);
 
   const dispatchResponse = (url, body) => {
     const match = url.match(GRAPHQL_PATH_RE);

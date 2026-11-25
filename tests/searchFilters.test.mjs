@@ -1010,3 +1010,33 @@ test('contentDeck integrates PresetButton, excludes search filters from local st
   assert.ok(deckSource.includes('importBackupData'));
   assert.ok(jaMessages.search_preset_button?.message);
 });
+
+test('concurrent loadPresets calls share a single storage read while later loads reflect external storage changes', async () => {
+  const clock = new Clock();
+  const saved = {
+    yomikui_search_filter_presets_v1: [{ id: 'p1', name: 'テスト', filters: { langJa: true } }],
+    yk_search_presets_backup_v1: { version: 2, initialized: true, updatedAt: 1, presets: [{ id: 'p1', name: 'テスト', filters: { langJa: true } }] },
+  };
+  let localReads = 0;
+  const chrome = {
+    storage: {
+      local: {
+        async get(key) { localReads++; return { [key]: clone(saved[key]) }; },
+        async set(patch) { Object.assign(saved, clone(patch)); },
+      },
+    },
+  };
+  const context = vm.createContext({ ...clock.globals(), URL, URLSearchParams, crypto: { randomUUID }, chrome });
+  vm.runInContext(bridgeSource, context);
+  vm.runInContext(source, context);
+  const api = context.YomikuiSearchFilters;
+
+  const batch = await Promise.all([api.loadPresets(), api.loadPresets(), api.loadPresets(), api.loadPresets()]);
+  assert.equal(batch.length, 4);
+  assert.equal(batch[0][0].name, 'テスト');
+  assert.equal(localReads, 2, 'four concurrent column loads trigger only one primary + backup check');
+
+  saved.yomikui_search_filter_presets_v1 = [{ id: 'p2', name: '更新後', filters: { langJa: true } }];
+  const refreshed = await api.loadPresets();
+  assert.equal(refreshed[0].name, '更新後');
+});

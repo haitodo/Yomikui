@@ -1775,3 +1775,40 @@ test('the helper is loaded before each bundle and is safe to load twice in the t
     { status: 'skipped', reason: 'draft' }, { status: 'skipped', reason: 'draft' },
   ] }), 'スキップ 2列（投稿を入力中）');
 });
+
+test('FloatingControl does not recreate controllers when unused callbacks change', () => {
+  const env = batchSetup({ columns: [{ id: 'home1', type: 'home' }], currentKinds: { home1: 'recommended' } });
+  const api = env.context.YomikuiFloatingControls;
+  let instances = 0;
+  env.context.YomikuiFloatingControls = { ...api, ReadingController: class extends api.ReadingController {
+    constructor(options) { instances++; super({ ...options, getVisibleIds: () => env.visible }); }
+  } };
+  const refs = [], effects = [];
+  let refIdx, effectIdx;
+  const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const React = {
+    useState: v => [typeof v === 'function' ? v() : v, () => {}],
+    useRef: current => { const s = refIdx++; return refs[s] ??= { current }; },
+    useCallback: fn => fn,
+    useEffect(fn, deps) {
+      const s = effectIdx++;
+      const prev = effects[s];
+      if (!prev || !deps || !sameDeps(prev.deps, deps)) { prev?.cleanup?.(); effects[s] = { deps, cleanup: fn() }; }
+    },
+  };
+  const store = { getState: () => env.state, subscribe: () => () => {} };
+  const frames = { current: env.frames }, origins = { current: new Map() };
+  const element = (type, props) => ({ type, props });
+  const render = onMountChange => {
+    refIdx = 0; effectIdx = 0;
+    return env.api.FloatingControl({
+      React, jsx: { jsx: element }, store, columns: env.state.columns, frames, origins,
+      highTweetLoadIds: new Set(), onMountChange, hidden: false,
+    });
+  };
+  render(() => {});
+  render(() => {});
+  assert.equal(instances, 1);
+  for (const entry of effects) entry.cleanup?.();
+  env.batch.dispose();
+});

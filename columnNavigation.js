@@ -4,6 +4,7 @@
 (() => {
   const ALLOWED_PAGE_HOSTS = new Set(["x.com", "twitter.com"]);
   const HOST_ORIGIN_RE = /^https?:\/\/(?:[a-zA-Z0-9-]+\.)*(?:x|twitter)\.com$/i;
+  const RESERVED_PROFILE_SEGMENTS = new Set(["home", "explore", "notifications", "messages", "search", "i", "settings", "compose", "login", "logout"]);
 
   function pageKey(value) {
     if (typeof value !== "string" || !value) return null;
@@ -193,8 +194,9 @@
     if (!targetDoc) return false;
     try {
       const active = targetDoc.activeElement;
-      if (!active) return false;
+      if (!active || active === targetDoc.body || active === targetDoc.documentElement) return false;
       const tag = active.tagName?.toUpperCase?.();
+      if (tag === "IFRAME") return false;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
       if (active.isContentEditable) return true;
       const role = active.getAttribute?.("role");
@@ -369,8 +371,7 @@
         const match = href.match(/^\/([A-Za-z0-9_]{1,15})(?:\/|$)/);
         if (match) {
           const candidate = match[1].toLowerCase();
-          const reserved = ["home", "explore", "notifications", "messages", "search", "i", "settings", "compose", "login", "logout"];
-          if (!reserved.includes(candidate)) {
+          if (!RESERVED_PROFILE_SEGMENTS.has(candidate)) {
             screenName = match[1];
           }
         }
@@ -404,10 +405,43 @@
     frameDoc.__yomikuiAccountReporterInstalled = true;
 
     let lastSent = null;
+    let columnVisible = true;
+    let pageHidden = false;
+    let observedBanner = null;
+    let timer = null;
+    const active = () => columnVisible && !pageHidden && !frameDoc.hidden;
+    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => {
+      if (active() && timer === null) timer = setTimeout(reportIfChanged, 120);
+    }) : null;
 
-    const reportIfChanged = () => {
+    function stopWatching() {
+      observer?.disconnect();
+      observedBanner = null;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    }
+
+    function reportIfChanged() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      if (!active()) return;
       try {
-        const info = extractAccountInfo(frameDoc);
+        const banner = observedBanner?.isConnected ? observedBanner : frameDoc.querySelector('header[role="banner"]');
+        const inBanner = banner && extractAccountInfo(banner);
+        observedBanner = inBanner?.screenName && inBanner.avatarUrl ? banner : null;
+        const info = observedBanner ? inBanner : extractAccountInfo(frameDoc);
+        if (observer) {
+          observer.disconnect();
+          // A complete account menu can be watched independently of the timeline.
+          // Direct child changes up its ancestor chain also catch React replacing it.
+          observer.observe(observedBanner ?? frameDoc, {
+            childList: true, subtree: true, characterData: true,
+            attributes: true, attributeFilter: ["href", "src", "alt", "aria-label", "data-testid", "role"],
+          });
+          for (let parent = observedBanner?.parentNode; parent; parent = parent.parentNode) {
+            observer.observe(parent, { childList: true });
+          }
+        }
         if (!info) return;
         if (
           !lastSent ||
@@ -422,35 +456,31 @@
           }, "*");
         }
       } catch {}
-    };
-
-    reportIfChanged();
-    if (frameDoc.readyState === "loading") {
-      frameDoc.addEventListener?.("DOMContentLoaded", reportIfChanged, { once: true });
     }
-    frameWin.addEventListener?.("load", reportIfChanged, { once: true });
 
     const handleMessage = (event) => {
       if (event?.data?.type === "yomikui-request-account-info") {
         reportIfChanged();
       }
     };
-    frameWin.addEventListener?.("message", handleMessage);
-
-    let observer = null;
-    try {
-      const target = frameDoc.body || frameDoc.documentElement;
-      if (target && typeof MutationObserver !== "undefined") {
-        observer = new MutationObserver(() => {
-          reportIfChanged();
-        });
-        observer.observe(target, { childList: true, subtree: true });
-      }
-    } catch {}
+    const sync = () => active() ? reportIfChanged() : stopWatching();
+    const onColumnVisibility = event => { columnVisible = event.detail?.visible !== false; sync(); };
+    const onPageHide = () => { pageHidden = true; stopWatching(); };
+    const onPageShow = () => { pageHidden = false; sync(); };
+    frameDoc.addEventListener("visibilitychange", sync);
+    frameWin.addEventListener("yomikui-frame-column-visibility", onColumnVisibility);
+    frameWin.addEventListener("pagehide", onPageHide);
+    frameWin.addEventListener("pageshow", onPageShow);
+    frameWin.addEventListener("message", handleMessage);
+    reportIfChanged();
 
     return () => {
-      frameWin.removeEventListener?.("message", handleMessage);
-      if (observer) observer.disconnect();
+      stopWatching();
+      frameDoc.removeEventListener("visibilitychange", sync);
+      frameWin.removeEventListener("yomikui-frame-column-visibility", onColumnVisibility);
+      frameWin.removeEventListener("pagehide", onPageHide);
+      frameWin.removeEventListener("pageshow", onPageShow);
+      frameWin.removeEventListener("message", handleMessage);
       delete frameDoc.__yomikuiAccountReporterInstalled;
     };
   }
@@ -504,7 +534,7 @@
       installDeckHoverFocus(document);
     } else {
       installFrameHoverFocus(document, window);
-      installAccountReporter(document, window);
+      if (!globalThis.YomikuiHistorySurface) installAccountReporter(document, window);
     }
   }
 

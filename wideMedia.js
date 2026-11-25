@@ -437,7 +437,7 @@
   }
 
   function upgradeImageUrl(urlString) {
-    if (typeof urlString !== "string" || !urlString) return null;
+    if (typeof urlString !== "string" || !urlString.includes(TWIMG_HOST)) return null;
     try {
       const url = new URL(urlString);
       if (url.hostname !== TWIMG_HOST) return null;
@@ -451,41 +451,40 @@
     }
   }
 
+  function upgradeImageElement(img) {
+    const currentSrc = img.getAttribute("src") || img.src;
+    const nextSrc = upgradeImageUrl(currentSrc);
+    if (!nextSrc || nextSrc === currentSrc) return 0;
+    if (!img.dataset.yomikuiOrigSrc) img.dataset.yomikuiOrigSrc = currentSrc;
+    img.src = nextSrc;
+    return 1;
+  }
+
+  function upgradeBackgroundElement(div) {
+    const bgStyle = div.style.backgroundImage || "";
+    const match = bgStyle.match(/url\(["']?([^"')]+)["']?\)/);
+    if (!match || !match[1]) return 0;
+    const nextUrl = upgradeImageUrl(match[1]);
+    if (!nextUrl || nextUrl === match[1]) return 0;
+    div.style.backgroundImage = `url("${nextUrl}")`;
+    return 1;
+  }
+
   function upgradeMediaInRoot(root) {
     if (!root) return 0;
     let upgradedCount = 0;
-    const searchDescendants = root.nodeType !== 1 || root.childElementCount > 0;
+    const searchDescendants = (root.nodeType !== 1 || root.childElementCount > 0) && Boolean(root.querySelectorAll);
 
     // 1. Image elements (Tweet photos, Live Feed tiles, Saved Timeline cards)
-    const images = [];
-    if (root.nodeType === 1 && root.matches(THUMBNAIL_IMAGE)) images.push(root);
-    if (searchDescendants && root.querySelectorAll) images.push(...root.querySelectorAll(THUMBNAIL_IMAGE));
-
-    for (const img of images) {
-      const currentSrc = img.getAttribute("src") || img.src;
-      const nextSrc = upgradeImageUrl(currentSrc);
-      if (nextSrc && nextSrc !== currentSrc) {
-        if (!img.dataset.yomikuiOrigSrc) img.dataset.yomikuiOrigSrc = currentSrc;
-        img.src = nextSrc;
-        upgradedCount++;
-      }
+    if (root.nodeType === 1 && root.matches(THUMBNAIL_IMAGE)) upgradedCount += upgradeImageElement(root);
+    if (searchDescendants) {
+      for (const img of root.querySelectorAll(THUMBNAIL_IMAGE)) upgradedCount += upgradeImageElement(img);
     }
 
     // 2. Visual background-image elements used by X for tweet photos
-    const bgDivs = [];
-    if (root.nodeType === 1 && root.matches(THUMBNAIL_BACKGROUND)) bgDivs.push(root);
-    if (searchDescendants && root.querySelectorAll) bgDivs.push(...root.querySelectorAll(THUMBNAIL_BACKGROUND));
-
-    for (const div of bgDivs) {
-      const bgStyle = div.style.backgroundImage || "";
-      const match = bgStyle.match(/url\(["']?([^"')]+)["']?\)/);
-      if (match && match[1]) {
-        const nextUrl = upgradeImageUrl(match[1]);
-        if (nextUrl && nextUrl !== match[1]) {
-          div.style.backgroundImage = `url("${nextUrl}")`;
-          upgradedCount++;
-        }
-      }
+    if (root.nodeType === 1 && root.matches(THUMBNAIL_BACKGROUND)) upgradedCount += upgradeBackgroundElement(root);
+    if (searchDescendants) {
+      for (const div of root.querySelectorAll(THUMBNAIL_BACKGROUND)) upgradedCount += upgradeBackgroundElement(div);
     }
 
     return upgradedCount;

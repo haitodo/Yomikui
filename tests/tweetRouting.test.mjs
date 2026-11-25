@@ -677,7 +677,7 @@ test("extension bundle and manifests integrate per-column link routing in Genera
 
   // Check manifest ordering
   const deckScripts = manifest.content_scripts.find(cs => cs.matches.some(m => m.includes("/yomikui*"))).js;
-  const iframeScripts = manifest.content_scripts.find(cs => cs.all_frames === true && cs.run_at === "document_start" && !cs.world).js;
+  const iframeScripts = manifest.content_scripts.find(cs => cs.all_frames && cs.run_at === "document_start" && !cs.world && cs.js.includes("contentIframe.js")).js;
   assert.ok(deckScripts.indexOf("tweetRouting.js") > deckScripts.indexOf("tweetActions.js"));
   assert.ok(iframeScripts.indexOf("tweetRouting.js") > iframeScripts.indexOf("tweetActions.js"));
 
@@ -939,4 +939,16 @@ test("retweet progress waits for the latest routed profile to display in the des
   await deck.clock.advance(15_000);
   assert.equal(deck.window.listeners.get("message").length, deckMessageListeners);
   assert.equal(list.document.querySelector(`[${LAST_VIEWED}]`).id, "bob-row");
+});
+
+test("dashboard top-level route skips installing frame link interception listeners", () => {
+  const { document } = parseHTML("<html><body></body></html>");
+  const registered = [];
+  document.addEventListener = (type) => registered.push(type);
+  const win = new Events();
+  win.parent = win;
+  win.location = { href: "https://x.com/yomikui/status/0", pathname: "/yomikui/status/0", origin: "https://x.com" };
+  const context = vm.createContext({ URL, URLSearchParams, window: win, document });
+  vm.runInContext(routingSource, context);
+  assert.deepEqual(registered, []);
 });

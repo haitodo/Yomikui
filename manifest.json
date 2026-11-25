@@ -52,6 +52,15 @@
     },
     {
       "matches": [
+        "https://*.twitter.com/search*",
+        "https://*.x.com/search*"
+      ],
+      "js": ["deckBootstrap.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
         "https://twitter.com/yomikui*",
         "https://*.twitter.com/yomikui*",
         "https://x.com/yomikui*",

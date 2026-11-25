@@ -76,10 +76,17 @@
           tweetCounts.set(id, next);
         }
       }
-      for (const [key, value] of Object.entries(node)) {
-        if (!value || typeof value !== 'object') continue;
-        if (IGNORED_RESPONSE_KEYS.has(key)) continue;
-        stack.push(value);
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          const value = node[i];
+          if (value && typeof value === 'object') stack.push(value);
+        }
+      } else {
+        for (const key in node) {
+          if (!Object.hasOwn(node, key) || IGNORED_RESPONSE_KEYS.has(key)) continue;
+          const value = node[key];
+          if (value && typeof value === 'object') stack.push(value);
+        }
       }
     }
     while (tweetCounts.size > MAX_CACHED_TWEETS) tweetCounts.delete(tweetCounts.keys().next().value);

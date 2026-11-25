@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { parseHTML } from 'linkedom';
-import { Clock } from './helpers.mjs';
+import { Clock, Events } from './helpers.mjs';
 
 const source = readFileSync(new URL('../columnNavigation.js', import.meta.url), 'utf8');
 const deck = readFileSync(new URL('../contentDeck.js', import.meta.url), 'utf8');
@@ -621,4 +621,55 @@ test('extractAccountInfo extracts account details from SideNav button and falls 
     const { document } = parseHTML(`<!DOCTYPE html><html><body><div>No user</div></body></html>`);
     assert.equal(api.extractAccountInfo(document), null);
   }
+});
+
+test('account reporting ignores timeline churn and follows replaced banners and column visibility', async () => {
+  const { api, clock, context } = setup();
+  const { document } = parseHTML('<html><body><main></main></body></html>');
+  const window = new Events();
+  const reports = [];
+  window.parent = { postMessage: message => reports.push(message.account.screenName) };
+  const observed = new Map();
+  let notify;
+  context.MutationObserver = class {
+    constructor(callback) { notify = callback; }
+    observe(node, options) { observed.set(node, options); }
+    disconnect() { observed.clear(); }
+  };
+  const banner = name => `<header role="banner"><button data-testid="SideNav_AccountSwitcher_Button">
+    <img src="/profile_images/avatar.jpg" alt="Reader">@${name}</button></header>`;
+  const dispose = api.installAccountReporter(document, window);
+  assert.equal(observed.get(document).subtree, true);
+  document.body.insertAdjacentHTML('afterbegin', banner('first'));
+  notify();
+  await clock.advance(120);
+  assert.deepEqual(reports, ['first']);
+  const main = document.querySelector('main');
+  function watchesSubtree(target) {
+    return [...observed].some(([node, options]) => node === target || (options.subtree && node.contains(target)));
+  }
+  assert.equal(watchesSubtree(main), false);
+  assert.equal(watchesSubtree(document.querySelector('button')), true);
+  for (let i = 0; i < 120; i++) main.appendChild(document.createElement('article'));
+  assert.equal(clock.timers.size, 0);
+  assert.equal(observed.get(document.body).childList, true);
+  document.querySelector('header').outerHTML = banner('second');
+  for (let i = 0; i < 20; i++) notify();
+  assert.equal(clock.timers.size, 1);
+  await clock.advance(120);
+  assert.deepEqual(reports, ['first', 'second']);
+  notify();
+  window.emit('yomikui-frame-column-visibility', { detail: { visible: false } });
+  assert.equal(observed.size, 0);
+  assert.equal(clock.timers.size, 0);
+  document.querySelector('header').outerHTML = banner('third');
+  window.emit('yomikui-frame-column-visibility', { detail: { visible: true } });
+  assert.deepEqual(reports, ['first', 'second', 'third']);
+  window.emit('pagehide');
+  assert.equal(observed.size, 0);
+  window.emit('pageshow');
+  assert.equal(watchesSubtree(document.querySelector('button')), true);
+  dispose();
+  window.emit('pageshow');
+  assert.equal(observed.size, 0);
 });

@@ -378,3 +378,83 @@ test('minimizing is tracked independently per workspace and switching workspaces
   const saved = await env.api.loadPreferences();
   assert.deepEqual(clone(saved.minimized), { ws1: false, ws2: true });
 });
+
+test('panel visibility observer stays attached across column updates and dock effect declares dependencies', () => {
+  const env = setup();
+  const { document } = parseHTML('<html><body><div class="rd-rack"></div></body></html>');
+  let observerCount = 0, scrollListeners = 0, visibleReports = 0;
+  const rack = document.querySelector('.rd-rack');
+  rack.getBoundingClientRect = () => ({ left: 0, right: 900, top: 0, bottom: 700 });
+  const origAdd = rack.addEventListener.bind(rack);
+  rack.addEventListener = (type, fn, opts) => { if (type === 'scroll') scrollListeners++; return origAdd(type, fn, opts); };
+  class ResizeObserver { constructor() { observerCount++; } observe() {} disconnect() {} }
+  const clock = new Clock(), window = new Events();
+  Object.assign(window, { innerWidth: 1000, innerHeight: 800 });
+  const chrome = { storage: { local: { async get() { return {}; }, async set() {} } } };
+  const context = vm.createContext({ ...clock.globals(), document, window, chrome, ResizeObserver });
+  vm.runInContext(scroll, context);
+  vm.runInContext(source, context);
+  const api = context.YomikuiFloatingControls;
+  const states = [
+    api.preferences({}),
+    { workspaceId: 'ws', value: api.selectionPreferences({}), ready: true },
+    new Set(), 'selection', false, true,
+  ];
+  const refs = [], hookEffects = [];
+  let stateIndex, refIndex, effectIndex;
+  const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const React = {
+    useState() { const s = stateIndex++; return [states[s], v => { states[s] = typeof v === 'function' ? v(states[s]) : v; }]; },
+    useRef(initial) { const s = refIndex++; return refs[s] ??= { current: initial }; },
+    useCallback: fn => fn,
+    useLayoutEffect() {},
+    useEffect(fn, deps) {
+      const s = effectIndex++;
+      const prev = hookEffects[s];
+      if (!prev || !deps || !sameDeps(prev.deps, deps)) {
+        prev?.cleanup?.();
+        hookEffects[s] = { deps, cleanup: fn() };
+      }
+    },
+  };
+  const element = (type, props) => ({ type, props });
+  const onVisibleChange = () => { visibleReports++; };
+  const renderWith = columns => {
+    stateIndex = 0; refIndex = 0; effectIndex = 0;
+    return api.Panel({
+      React, jsx: { jsx: element, jsxs: element }, columns, kinds: { one: 'recommended' }, workspaceId: 'ws',
+      view: { phase: 'idle', results: [], done: 0, total: 0 }, reading: { busy: false, results: [], message: '' },
+      canRefresh: true, refreshText: '', refreshDetails: '', onRefresh() {}, onNavigate() {}, onVisibleChange,
+    });
+  };
+  renderWith([{ id: 'one', type: 'home' }]);
+  assert.equal(observerCount, 1);
+  assert.equal(scrollListeners, 1);
+  assert.equal(visibleReports, 1);
+  assert.ok(hookEffects.every(entry => Array.isArray(entry.deps)), 'every Panel effect declares explicit dependencies');
+  renderWith([{ id: 'one', type: 'home' }, { id: 'two', type: 'search' }]);
+  assert.equal(observerCount, 1, 'updating columns reuses the existing ResizeObserver');
+  assert.equal(scrollListeners, 1, 'updating columns reuses the existing rack scroll listener');
+  assert.equal(visibleReports, 2, 'column changes still trigger a visibility refresh');
+  for (const entry of hookEffects) entry.cleanup?.();
+});
+
+test('panel styles keep compact spacing, light-theme elevation, and active settings feedback', () => {
+  const env = setup();
+  const { document } = parseHTML('<html><head><style id="yomikui-styles"></style></head><body></body></html>');
+  const context = vm.createContext({ document, window: new Events() });
+  vm.runInContext(scroll, context);
+  vm.runInContext(source, context);
+  assert.equal(context.YomikuiFloatingControls.installStyles(), true);
+  const css = document.getElementById('yomikui-styles').textContent;
+  assert.match(css, /#yomikui-root \.yomikui-floating-panel\{position:fixed;[^}]*width:246px/);
+  assert.match(css, /\.yf-actions button\{min-height:29px/);
+  assert.match(css, /\.yf-target\{[^}]*min-height:26px/);
+  assert.match(css, /#yomikui-root\[data-theme="light"\] \.yomikui-floating-panel\{/);
+  assert.doesNotMatch(css, /#yomikui-root\[data-theme="light"\] #yomikui-root/);
+  const ui = panel(env);
+  const targetChildren = ui.target('recommended').props.children;
+  assert.equal(targetChildren[0].props.className, 'yf-mark');
+  assert.equal(targetChildren[1].props.className, 'yf-target-label');
+  assert.equal(targetChildren[2].props.className, 'yf-count');
+});

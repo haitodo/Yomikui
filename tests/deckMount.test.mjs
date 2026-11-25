@@ -3,12 +3,18 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { parseHTML } from 'linkedom';
-import { Events } from './helpers.mjs';
+import { Clock, Events } from './helpers.mjs';
 
 test('Dve sets initial isIntersecting to false and mounts only when visible or keepMounted', () => {
   const deck = readFileSync('contentDeck.js', 'utf8');
   assert.match(deck, /\[Le,Ue\]=\(0,nt\.useState\)\(!1\),\[gt,\$\]=\(0,nt\.useState\)\(!1\)/);
   assert.match(deck, /Ge=Le\|\|a/);
+});
+
+test('mounted column viewports let Chromium skip distant iframe rendering', () => {
+  const deck = readFileSync('contentDeck.js', 'utf8');
+  assert.match(deck, /className:"rd-column-viewport relative min-h-0 flex-1",children:\[rf&&[^\n]+?"iframe",\{ref:Pt/);
+  assert.match(deck, /#yomikui-root \.rd-column-viewport\s*\{\s*content-visibility:\s*auto;/);
 });
 
 test('Dve autoReload timer stops when offscreen or document is hidden', () => {
@@ -160,6 +166,149 @@ test('the manifest runs the dashboard policy in the isolated world at document s
   for (const host of ['x.com', '*.x.com', 'twitter.com', '*.twitter.com']) {
     assert.ok(entry.matches.includes(`https://${host}/yomikui/status/0*`));
   }
+});
+
+test('only the reserved history list in a deck column suppresses native startup', () => {
+  const deck = { location: { pathname: '/yomikui/status/0' } };
+  const historyUrl = 'https://x.com/search?q=yomikui-timeline&yomikui=abc#yomikui-cidabc-hb0-tl1-cttimeline';
+  const other = { location: { pathname: '/home' } };
+  for (const [href, parent, top, expected] of [
+    [historyUrl, deck, deck, true],
+    [historyUrl.replace('/search?', '/search/?'), deck, deck, true],
+    [historyUrl.replace('timeline&', 'timeline-more&'), deck, deck, false],
+    [historyUrl.replace('tl1-', 'tl0-'), deck, deck, false],
+    [historyUrl.replace('/search?', '/reader/status/123?'), deck, deck, false],
+    [historyUrl.split('#')[0], deck, deck, false],
+    [historyUrl, other, other, false],
+    [historyUrl, other, deck, false],
+    [historyUrl, null, null, false],
+  ]) {
+    const { document } = parseHTML('<html><head></head><body></body></html>');
+    const window = { location: new URL(href), parent, top };
+    window.top ??= window;
+    vm.runInNewContext(deckBootstrap, { document, window, URLSearchParams });
+    assert.equal(!!document.querySelector(deckPagePolicy), expected, href);
+  }
+  const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url)));
+  const bootstrap = manifest.content_scripts.find(entry => entry.all_frames && entry.js.includes('deckBootstrap.js'));
+  assert.equal(bootstrap.run_at, 'document_start');
+  assert.deepEqual(bootstrap.matches, ['https://*.twitter.com/search*', 'https://*.x.com/search*']);
+  assert.ok(manifest.content_scripts.indexOf(bootstrap) < manifest.content_scripts.findIndex(entry => entry.js.includes('contentIframe.js')));
+
+  const bundle = readFileSync('contentIframe.js', 'utf8');
+  const route = bundle.slice(bundle.indexOf('function tJ()'), bundle.indexOf('function nJ()'));
+  for (const [href, expected] of [
+    [historyUrl, true], [historyUrl.split('#')[0], true],
+    [historyUrl.replace('timeline&', 'timeline-other&'), false],
+    [historyUrl.replace('/search?', '/reader/status/123?'), false],
+  ]) {
+    assert.equal(vm.runInNewContext(route + 'tJ()', { window: { location: new URL(href) }, URLSearchParams }), expected);
+  }
+});
+
+test('screenshot buttons and verified covers wait offscreen and decorate only intersecting posts', async () => {
+  const code = readFileSync(new URL('../contentIframe.js', import.meta.url), 'utf8');
+  const clock = new Clock();
+  const { document } = parseHTML('<html><body></body></html>');
+  const articles = Array.from({ length: 80 }, (_, id) => {
+    const tweet = document.createElement('article');
+    tweet.dataset.testid = 'tweet';
+    tweet.innerHTML = `<span class="handle">@reader${id}</span><div><div><div><button></button></div></div></div>`;
+    tweet.getBoundingClientRect = () => assert.fail('post layout read');
+    document.body.appendChild(tweet);
+    return tweet;
+  });
+  const observers = [];
+  class IntersectionObserver {
+    targets = new Set();
+    constructor(callback, options) { this.callback = callback; this.options = options; observers.push(this); }
+    observe(tweet) { this.targets.add(tweet); }
+    unobserve(tweet) { this.targets.delete(tweet); }
+    disconnect() { this.targets.clear(); }
+    emit(tweets, isIntersecting) {
+      this.callback(tweets.filter(tweet => this.targets.has(tweet)).map(target => ({ target, isIntersecting })), this);
+    }
+  }
+  const covers = [];
+  const context = vm.createContext({
+    ...clock.globals(), window: {}, document, IntersectionObserver, performance: { now: () => clock.now },
+    le: 'article[data-testid="tweet"]', C8: 120, Xe: () => true, hf: 'data-cover',
+    je: { coverBlueVerified: true, tweetScreenshot: true, coverBlueVerifiedShowLabel: 'Show' },
+    NT() {}, BU() {}, OU: () => true, UU: (tweet, verified, label) => covers.push([tweet, verified, label]),
+    Z1: '.handle', q1: 'button', gr: 'screenshot', ws: 'icon', mO() {}, UJ() {},
+  });
+  const functions = (start, end) => code.slice(code.indexOf(start), code.indexOf(end, code.indexOf(start)));
+  vm.runInContext(functions('function createTweetDecorationQueue(', 'function jT()') +
+    functions('const screenshotButtons =', 'function vO()'), context);
+  context.tu(context.je, null, { force: true });
+  context.$h(context.je, null, { force: true });
+  assert.equal(observers.length, 2);
+  for (const observer of observers) {
+    assert.equal(observer.targets.size, 80);
+    assert.equal(observer.options.rootMargin, '120px');
+    observer.emit(articles, false);
+  }
+  await clock.advance(30000);
+  assert.equal(clock.timers.size, 0);
+  assert.deepEqual(covers, []);
+  assert.equal(document.querySelector('.screenshot'), null);
+  for (const observer of observers) {
+    observer.emit(articles.slice(1, 4), true);
+    observer.emit([articles[2]], false);
+  }
+  articles[3].remove();
+  await clock.advance(0);
+  assert.deepEqual(covers, [[articles[1], true, 'Show']]);
+  assert.equal(articles[1].querySelector('.screenshot').dataset.yomikuiScreenName, 'reader1');
+  assert.equal(document.querySelectorAll('.screenshot').length, 1);
+  assert.equal(observers[0].targets.has(articles[2]), true);
+  // A recycled article is rechecked even if it already has our generation marker.
+  articles[1].querySelector('.handle').textContent = '@next';
+  context.$h(context.je, { mutationAddedRoots: [articles[1]] });
+  observers[1].emit([articles[1]], true);
+  await clock.advance(0);
+  assert.equal(articles[1].querySelector('.screenshot').dataset.yomikuiScreenName, 'next');
+  for (const observer of observers) observer.emit([articles[2]], true);
+  vm.runInContext('verifiedCovers.pause(); screenshotButtons.pause()', context);
+  for (const observer of observers) assert.equal(observer.targets.size, 0);
+  await clock.advance(1000);
+  assert.equal(covers.length, 1);
+});
+
+test('the tweet mutation observer suspends in a retained hidden column and restarts only for enabled features', () => {
+  const code = readFileSync('contentIframe.js', 'utf8');
+  const document = new Events(), window = new Events();
+  document.body = {};
+  document.readyState = 'complete';
+  let columnVisible = true;
+  const observers = [];
+  const context = vm.createContext({
+    document, window, Xe: () => columnVisible, pv: null, GT: false, zr: null, Sl: null,
+    hv() {}, aB() {}, WT() {}, Ns() {},
+    MutationObserver: class {
+      constructor() { observers.push(this); }
+      observe() { this.connected = true; }
+      disconnect() { this.connected = false; }
+    },
+  });
+  vm.runInContext(code.slice(code.indexOf('function dB()'), code.indexOf('function YT(e,t)')), context);
+  context.nS({});
+  assert.equal(observers[0].connected, true);
+  columnVisible = false;
+  window.emit('yomikui-frame-column-visibility');
+  assert.equal(observers[0].connected, false);
+  document.emit('visibilitychange');
+  assert.equal(observers.length, 1);
+  columnVisible = true;
+  window.emit('yomikui-frame-column-visibility');
+  assert.equal(observers[1].connected, true);
+  document.hidden = true;
+  document.emit('visibilitychange');
+  assert.equal(observers[1].connected, false);
+  context.mB();
+  document.hidden = false;
+  document.emit('visibilitychange');
+  assert.equal(observers.length, 2);
 });
 
 test('tweetActions restricts characterData observation to retweet targets and prunes irrelevant response subtrees', () => {
@@ -434,6 +583,40 @@ test('sidebar renders dedicated account button and shows current account preview
 
   // CSS rule for account button hover exists
   assert.match(deck, /#yomikui-root \.rd-sidebar-account-btn:hover\s*\{/);
+});
+
+test('the account menu uses a native frame when only history is on screen', () => {
+  const deck = readFileSync('contentDeck.js', 'utf8');
+  const source = deck.replaceAll('\r\n', '\n');
+  const callbackStart = source.indexOf('Oi=(0,Ke.useCallback)(()=>{\n  const nativeColumns');
+  assert.ok(callbackStart >= 0);
+  const end = source.indexOf(',Hr=', callbackStart);
+  const arrived = source.indexOf('if (ae.data?.type === "yomikui-current-account-info"');
+  const handle = source.slice(arrived, source.indexOf('if(ae.data?.type==="yomikui-account-switch-selected"', arrived));
+  const menus = [], scrolled = [];
+  const frame = { postMessage: message => menus.push(message.type) };
+  const history = { postMessage: () => assert.fail('history has no native account menu') };
+  const context = vm.createContext({
+    Ke: { useCallback: fn => fn }, t: [{ id: 'feed', type: 'home' }, { id: 'saved', type: 'timeline' }],
+    Pe: { current: { feed: false, saved: true } }, _e: { current: new Map([['saved', history]]) },
+    pY: type => type === 'home', pendingAccountMenu: { current: null }, CSS: { escape: id => id },
+    document: { querySelector: selector => ({ scrollIntoView: () => scrolled.push(selector) }) },
+  });
+  vm.runInContext('var ' + source.slice(callbackStart, end), context);
+  context.Oi();
+  assert.deepEqual(scrolled, ['[data-column-id="feed"]']);
+  assert.equal(context.pendingAccountMenu.current.id, 'feed');
+  context.ae = { source: history, data: { type: 'yomikui-current-account-info' }, origin: 'https://x.com' };
+  vm.runInContext(handle, context);
+  assert.equal(menus.length, 0);
+  context._e.current.set('feed', frame);
+  context.Pe.current.feed = true;
+  context.ae.source = frame;
+  vm.runInContext(handle, context);
+  vm.runInContext(handle, context);
+  assert.deepEqual(menus, ['yomikui-open-account-switcher']);
+  context.Oi();
+  assert.equal(menus.length, 2);
 });
 
 

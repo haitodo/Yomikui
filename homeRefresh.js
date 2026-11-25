@@ -56,8 +56,8 @@
   const SEARCH_PATH_RE = /^\/search\/?(?:\?|$)/;
   const EXPLORE_PATH_RE = /^\/explore(?:\/tabs\/[\w-]+)?\/?(?:\?|$)/;
   const HOME_PATH_RE = /^\/home\/?(?:\?|$)/;
-  const STATUS_ID_RE = /\/status\/(\d+)/;
-  const STATUS_KEYS = Object.freeze(['updated', 'reloaded', 'requested', 'skipped', 'failed']);
+  const STATUS_KEYS_SET = new Set(['updated', 'reloaded', 'requested', 'skipped', 'failed']);
+  const DELIVERED_STATUSES = new Set(['updated', 'reloaded', 'requested']);
   const isNativeColumn = column => globalThis.YomikuiHomeScroll.isReadableColumn(column);
   const refreshable = kind => globalThis.YomikuiHomeScroll.isRefreshableKind(kind);
   const readingKind = getSettings => globalThis.YomikuiHomeScroll.readingKind(getSettings);
@@ -165,8 +165,12 @@
   }
 
   function newPostsButton() {
-    return [...primaryColumn()?.querySelectorAll('button, [role="button"]') ?? []]
-      .find(globalThis.YomikuiHomeScroll.isNewPostsButton);
+    const column = primaryColumn();
+    if (!column) return undefined;
+    for (const button of column.querySelectorAll('button, [role="button"]')) {
+      if (globalThis.YomikuiHomeScroll.isNewPostsButton(button)) return button;
+    }
+    return undefined;
   }
 
   function isAtTop(scroller) {
@@ -174,14 +178,7 @@
     return Number.isFinite(top) && Math.abs(top) <= 1;
   }
 
-  function tweetSignature() {
-    return [...primaryColumn()?.querySelectorAll('article[data-testid="tweet"]') ?? []]
-      .slice(0, 4).map(tweet => {
-        const time = tweet.querySelector('time');
-        const link = time?.closest('a[href*="/status/"]') ?? tweet.querySelector('a[href*="/status/"]');
-        return link?.getAttribute('href')?.match(STATUS_ID_RE)?.[1] ?? '';
-      }).filter(Boolean).join(',');
-  }
+  const tweetSignature = () => globalThis.YomikuiHomeScroll.tweetSignature();
 
   class NativeRefresher {
     constructor({ getSettings, getScroller, isTabRestoring = () => false, isVisible = () => true, boundary = null }) {
@@ -435,7 +432,7 @@
       return { status: 'reloaded', method: 'reload' };
     };
     const validReading = data => globalThis.YomikuiHomeScroll.isReadingAction(data) &&
-      (data.group === undefined || globalThis.YomikuiHomeScroll.READING_GROUPS.includes(data.group));
+      (data.group === undefined || refreshable(data.group));
     const beforeReadingMove = () => refresher.positions.cancel();
     const applyReading = ({ mode, deltaY, deltaMode, group }) => {
       if (active) return { status: 'skipped', reason: 'busy' };
@@ -613,9 +610,9 @@
         pending.reloading = true;
         clearTimeout(pending.deadline);
         pending.deadline = setTimeout(() => this.cancelPending('timeout'), RELOAD_TIMEOUT + 1000);
-      } else if (data.type === RESULT && pending.sent && ['updated', 'reloaded', 'requested', 'skipped', 'failed'].includes(data.status)) {
+      } else if (data.type === RESULT && pending.sent && STATUS_KEYS_SET.has(data.status)) {
         if (data.status === 'reloaded' && !pending.reloading) return;
-        if (['updated', 'reloaded', 'requested'].includes(data.status) && !this.pendingIsCurrent()) {
+        if (DELIVERED_STATUSES.has(data.status) && !this.pendingIsCurrent()) {
           pending.finish({ status: 'skipped', reason: 'target-changed' });
           return;
         }
@@ -729,24 +726,39 @@
     if (view.phase === 'running') return `選択中の列を更新中 ${view.done}/${view.total}列`;
     if (view.phase === 'cancelled') return '一括更新を中止しました';
     if (!view.results.length) return '';
-    const counts = Object.fromEntries(STATUS_KEYS.map(status => [
-      status, view.results.filter(result => result.status === status).length,
-    ]));
-    const unconfirmedReloads = view.results.filter(result => result.status === 'requested' && result.method === 'reload').length;
-    const unconfirmedUpdates = counts.requested - unconfirmedReloads;
-    const skippedReasons = [...new Set(view.results.filter(result => result.status === 'skipped')
-      .map(result => REASONS[result.reason]).filter(Boolean))];
+    let updated = 0, reloaded = 0, unconfirmedReloads = 0, unconfirmedUpdates = 0, skipped = 0, failed = 0;
+    const skippedReasons = new Set();
+    for (const result of view.results) {
+      if (result.status === 'updated') updated++;
+      else if (result.status === 'reloaded') reloaded++;
+      else if (result.status === 'requested') {
+        if (result.method === 'reload') unconfirmedReloads++;
+        else unconfirmedUpdates++;
+      } else if (result.status === 'skipped') {
+        skipped++;
+        if (REASONS[result.reason]) skippedReasons.add(REASONS[result.reason]);
+      } else if (result.status === 'failed') failed++;
+    }
+    const onlySkippedReason = skippedReasons.size === 1 ? skippedReasons.values().next().value : null;
     return [
-      counts.updated && `表示更新 ${counts.updated}列`,
-      counts.reloaded && `再読み込み ${counts.reloaded}列`,
+      updated && `表示更新 ${updated}列`,
+      reloaded && `再読み込み ${reloaded}列`,
       unconfirmedReloads && `再読み込み操作済み・表示未確認 ${unconfirmedReloads}列`,
       unconfirmedUpdates && `操作済み・表示変化未確認 ${unconfirmedUpdates}列`,
-      counts.skipped && `スキップ ${counts.skipped}列${skippedReasons.length === 1 ? `（${skippedReasons[0]}）` : ''}`,
-      counts.failed && `応答未確認 ${counts.failed}列`,
+      skipped && `スキップ ${skipped}列${onlySkippedReason ? `（${onlySkippedReason}）` : ''}`,
+      failed && `応答未確認 ${failed}列`,
     ].filter(Boolean).join(' ／ ');
   }
 
-  function FloatingControl({ React, jsx, store, columns, frames, origins, highTweetLoadIds, onMountChange, hidden }) {
+  function formatRefreshDetails(results) {
+    if (!results.length) return '';
+    return results.map(result => `${result.title || '列'}: ${
+      result.status === 'updated' ? '投稿一覧の更新を確認' : result.status === 'reloaded' ? '現在のページの再読み込みと一覧表示を確認' :
+        result.status === 'requested' ? result.method === 'reload' ? '再読み込み操作済み・一覧表示未確認' : '更新操作済み・表示変化未確認' : REASONS[result.reason] || '応答未確認'
+    }`).join('\n');
+  }
+
+  function FloatingControl({ React, jsx, store, columns, frames, origins, highTweetLoadIds, hidden }) {
     const [view, setView] = React.useState({ phase: 'idle', results: [], total: 0, done: 0 });
     const [reading, setReading] = React.useState({ busy: false, results: [], message: '' });
     const [kinds, setKinds] = React.useState({});
@@ -769,7 +781,7 @@
         getFrame,
         getTargets: target => {
           const kinds = navigation.kinds();
-          return navigation.selectedColumns(target).map(column => ({ ...column, refreshKind: kinds[column.id] }));
+          return navigation.selectedColumns(target, undefined, kinds).map(column => ({ ...column, refreshKind: kinds[column.id] }));
         },
         onChange: setView,
       });
@@ -787,20 +799,18 @@
             prevSyncState.columnComposing === columnComposing) {
           return;
         }
+        const workspaceChanged = !prevSyncState || prevSyncState.activeWorkspaceId !== activeWorkspaceId;
         prevSyncState = { activeWorkspaceId, columns, columnComposing };
         navigation.syncState();
         batch.syncState();
-        setWorkspaceId(activeWorkspaceId);
+        if (workspaceChanged) setWorkspaceId(activeWorkspaceId);
       };
       const unsubscribe = store.subscribe(sync);
       sync();
       return () => { unsubscribe(); batch.dispose(); navigation.dispose(); controller.current = null; reader.current = null; };
-    }, [store, frames, origins, onMountChange]);
+    }, [store, frames, origins]);
     React.useEffect(() => { if (hidden) { controller.current?.cancel(); reader.current?.cancel(); } }, [hidden]);
-    const details = view.results.map(result => `${result.title || '列'}: ${
-      result.status === 'updated' ? '投稿一覧の更新を確認' : result.status === 'reloaded' ? '現在のページの再読み込みと一覧表示を確認' :
-        result.status === 'requested' ? result.method === 'reload' ? '再読み込み操作済み・一覧表示未確認' : '更新操作済み・表示変化未確認' : REASONS[result.reason] || '応答未確認'
-    }`).join('\n');
+    const details = formatRefreshDetails(view.results);
     return jsx.jsx(globalThis.YomikuiFloatingControls.Panel, {
       React, jsx, columns, view, reading, hidden, kinds, workspaceId, highTweetLoadIds, onVisibleChange, onCancelWheel, canRefresh: columns.some(isNativeColumn), refreshText: summary(view), refreshDetails: details,
       onRefresh: action => {

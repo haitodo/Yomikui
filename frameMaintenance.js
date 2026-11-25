@@ -28,6 +28,7 @@
     ['.yomikui-label-badge', 16],
     ['.yomikui-account-location-badge', 8],
   ];
+  const STYLE_SELECTOR = STYLE_IDS.map(id => `#${id}`).join(', ');
   const DUPLICATE_SELECTOR = DUPLICATES.map(([selector]) => selector).join(', ');
   const STATUS_ID_RE = /\/status\/(\d+)/;
   const TIMER_KEYS = Object.freeze(['countTimer', 'cleanupTimer', 'performanceTimer']);
@@ -158,14 +159,24 @@
     }
 
     cleanup() {
-      const removeAfter = (root, selector, keep) => {
-        const nodes = root.querySelectorAll(selector);
-        for (let i = keep; i < nodes.length; i++) nodes[i].remove();
-      };
-      for (const id of STYLE_IDS) removeAfter(document, `#${id}`, 1);
+      const seenStyles = new Set();
+      for (const node of document.querySelectorAll(STYLE_SELECTOR)) {
+        const id = node.id;
+        if (seenStyles.has(id)) node.remove();
+        else seenStyles.add(id);
+      }
       if (!document.querySelector(DUPLICATE_SELECTOR)) return;
-      for (const tweet of document.querySelectorAll(TWEET)) {
-        for (const [selector, keep] of DUPLICATES) removeAfter(tweet, selector, keep);
+      for (const [selector, keep] of DUPLICATES) {
+        const nodes = document.querySelectorAll(selector);
+        if (nodes.length <= keep) continue;
+        const counts = new Map();
+        for (const node of nodes) {
+          const tweet = node.closest(TWEET);
+          if (!tweet) continue;
+          const next = (counts.get(tweet) ?? 0) + 1;
+          counts.set(tweet, next);
+          if (next > keep) node.remove();
+        }
       }
     }
 
